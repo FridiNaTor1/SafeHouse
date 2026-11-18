@@ -182,13 +182,13 @@ void CEditor::DrawScripts()
             if (!g.scriptsPart.empty() && ImGui::Selectable(g.name.c_str(), g.index == m_igroupScript)) LoadScriptText(g.index);
         ImGui::EndCombo();
     }
-    if (m_igroupScript < 0) { ImGui::TextDisabled("Each group's objects run the modules of its scripts (by number)."); return; }
-    const bool fCheck = ImGui::Button("Check");
+    if (m_igroupScript < 0) { ImGui::TextDisabled("%s", T("Each group's objects run the modules of its scripts (by number).")); return; }
+    const bool fCheck = ImGui::Button(T("Check"));
     ImGui::SameLine();
     ImGui::BeginDisabled(!m_fScriptDirty);
-    const bool fApply = ImGui::Button("Apply");
+    const bool fApply = ImGui::Button(T("Apply"));
     ImGui::SameLine();
-    if (ImGui::Button("Revert")) LoadScriptText(m_igroupScript);
+    if (ImGui::Button(T("Revert"))) LoadScriptText(m_igroupScript);
     ImGui::EndDisabled();
     std::string textCheck = m_scriptEdit;
 #if EDGAME_SLY2
@@ -251,7 +251,7 @@ void CEditor::DrawScripts()
 #endif
             if (!textApply.empty() && FApplyScript(m_igroupScript, textApply, error))
             {
-                Status("scripts of " + m_index.groups[m_igroupScript].name + " applied");
+                Status(Fmt(T("scripts of %s applied"), m_index.groups[m_igroupScript].name.c_str()));
                 const int ig = m_igroupScript;
                 Reload(m_plSel ? m_plSel->oid : 0);
                 LoadScriptText(ig);

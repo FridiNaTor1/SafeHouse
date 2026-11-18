@@ -1,4 +1,5 @@
 #include "transition.h"
+#include "modguests.h"
 #include "pcloader.h"
 #include "rumble.h"
 #include "region.h"
@@ -435,6 +436,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // orig 0x20E890: the HUD timer's seconds left, kept unless the request has a flag of 0xCD
     const float dtTimerResume = DtHudTimerResume(req.flags);
     UnloadWorld(psw, true);
+    RequestModGuestWorlds(req.abChk);   // (mod packages' guests: their own levels loaded aside with this transition, modguests.h)
     PumpPcKeptWorlds(nullptr);   // (PC addition, debug menu only: a kept world still being read loaded now, no world running: pcloader.h)
     ResetClock(&g_clock);
     LockJoy(8);                 // 0x187078(8): the pad locked while the world loads (0x1D9648 unlocks it)

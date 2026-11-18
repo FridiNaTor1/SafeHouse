@@ -76,13 +76,13 @@ bool CEditor::FSetOption(int ifield, const void* pv, int cb, const std::string& 
     std::string rel;
     std::size_t ib = 0;
     const std::vector<uint8_t>* pab = nullptr;
-    if (!FFieldBytes(ifield, cb, rel, ib, pab)) { Status("this option is not in a binary part"); return false; }
+    if (!FFieldBytes(ifield, cb, rel, ib, pab)) { Status(T("this option is not in a binary part")); return false; }
     if (OptType(m_rec.afield[ifield].k).cf)
         for (int i = 0; i < cb / 4; ++i)
         {
             float g;
             std::memcpy(&g, static_cast<const uint8_t*>(pv) + 4 * i, 4);
-            if (!std::isfinite(g)) { Status("rejected: not a number"); return false; }
+            if (!std::isfinite(g)) { Status(T("rejected: not a number")); return false; }
         }
     m_proj.begin(label);
     const bool fOk = m_proj.patch(rel, ib, pv, std::size_t(cb));
@@ -112,15 +112,15 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
     // the (task, state) pairs of uses and triggers, ...); they are read at the load, so they show after a reload
     auto lists = [&]() {
         if (!po || po->aiarr.empty()) return;
-        if (!ImGui::TreeNodeEx("List options", po->aiopt.empty() ? ImGuiTreeNodeFlags_DefaultOpen : 0)) return;
-        EdTip("Lists of values the object reads at the load (patrol commands, task and state pairs, ...): Enter applies a value; it shows after Reload world.");
+        if (!ImGui::TreeNodeEx(T("List options"), po->aiopt.empty() ? ImGuiTreeNodeFlags_DefaultOpen : 0)) return;
+        EdTip(T("Lists of values the object reads at the load (patrol commands, task and state pairs, ...): Enter applies a value; it shows after Reload world."));
         for (int ifield : po->aiarr)
         {
             const EDITFIELD& f = m_rec.afield[ifield];
             std::string rel;
             std::vector<LISTEL> ael;
             ImGui::TextColored(st::vec(st::muted), "%s:", StrOption(f.eopid).c_str());
-            if (!FListElements(ifield, rel, ael)) { ImGui::SameLine(); ImGui::TextDisabled("(not decoded)"); continue; }
+            if (!FListElements(ifield, rel, ael)) { ImGui::SameLine(); ImGui::TextDisabled("%s", T("(not decoded)")); continue; }
             const std::vector<uint8_t>* pab = m_proj.partRef(rel);
             ImGui::PushID(ifield);
             for (std::size_t i = 0; i < ael.size() && pab; ++i)
@@ -143,7 +143,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
                 if (fEnter)
                 {
                     std::string error;
-                    if (!FSetListElement(ifield, int(i), v, error)) Status("list option: " + error);
+                    if (!FSetListElement(ifield, int(i), v, error)) Status(std::string(T("list option")) + ": " + error);
                 }
                 ImGui::PopID();
             }
@@ -151,7 +151,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
         }
         ImGui::TreePop();
     };
-    if (!po || po->aiopt.empty()) { if (!po || po->aiarr.empty()) ImGui::TextDisabled("(no options loaded with it)"); lists(); return; }
+    if (!po || po->aiopt.empty()) { if (!po || po->aiarr.empty()) ImGui::TextDisabled("%s", T("(no options loaded with it)")); lists(); return; }
     const GAMEAREA ga = AreaOfCid(plo->Cid());
     const std::vector<int>& akey = KeyOptionsOfArea(ga);
     auto row = [&](int ifield) {
@@ -164,7 +164,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
         ImGui::TableNextColumn();
         if (szName) ImGui::TextWrapped("%s", szName);
         else ImGui::TextColored(st::vec(st::muted), "%s", t.name);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("option %d, kind %d (%s)", f.eopid, f.k, t.name);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(T("option %d, kind %d (%s)"), f.eopid, f.k, t.name);
         ImGui::TableNextColumn();
         std::string rel;
         std::size_t ib = 0;
@@ -237,7 +237,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
     for (int ifield : po->aiopt) ++ac[kindOf(ifield)];
     if (ac[K_Key])
     {
-        ImGui::TextColored(st::vec(st::text2), "%s", SzArea(ga));
+        ImGui::TextColored(st::vec(st::text2), "%s", T(SzArea(ga)));
         table("keyopts", K_Key, 0);
     }
     if (ac[K_Named])
@@ -256,7 +256,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
         ImGui::TreePop();
     }
     DrawOptionTools(plo, po);   // (editor_everything.inc: add / remove any option)
-    if (!m_note.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted)); ImGui::TextWrapped("Last option edit: %s.", m_note.c_str()); ImGui::PopStyleColor(); }
+    if (!m_note.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted)); ImGui::TextWrapped(T("Last option edit: %s."), m_note.c_str()); ImGui::PopStyleColor(); }
 }
 
 // ---- gameplay areas of placed objects, links
@@ -288,13 +288,13 @@ bool CEditor::FAddOption(LO* plo, int eopid, const std::vector<uint8_t>& abValue
 {
     // before the object's first option (its list ends with S16 -1 after the last): S16 eopid, then the value
     const auto it = m_mpobj.find(plo);
-    if (!plo || it == m_mpobj.end() || eopid < 0) { Status("add option: no object"); return false; }
+    if (!plo || it == m_mpobj.end() || eopid < 0) { Status(T("add option: no object")); return false; }
     std::size_t ibFirst = SIZE_MAX;
     for (int i : it->second.aiopt) ibFirst = std::min(ibFirst, m_rec.afield[std::size_t(i)].ib);
     for (int i : it->second.aiarr) ibFirst = std::min(ibFirst, m_rec.afield[std::size_t(i)].ib);
     std::string rel;
     std::size_t ib = 0;
-    if (ibFirst == SIZE_MAX || ibFirst < 2 || !FLocate(ibFirst - 2, 2, rel, ib)) { Status("add option: the object has no options stored in a binary part to add one to"); return false; }
+    if (ibFirst == SIZE_MAX || ibFirst < 2 || !FLocate(ibFirst - 2, 2, rel, ib)) { Status(T("add option: the object has no options stored in a binary part to add one to")); return false; }
     std::vector<uint8_t> ab(2);
     const int16_t e = int16_t(eopid);
     std::memcpy(ab.data(), &e, 2);
@@ -302,7 +302,7 @@ bool CEditor::FAddOption(LO* plo, int eopid, const std::vector<uint8_t>& abValue
     m_proj.begin(label, true);
     const bool fOk = m_proj.spliceBytes(rel, ib, 0, ab, EnclosingSizeFields(rel, ib));
     m_proj.end();
-    if (!fOk) { Status("add option: could not write"); return false; }
+    if (!fOk) { Status(T("add option: could not write")); return false; }
     Status(label);
     Reload(plo->oid);
     return true;
@@ -316,14 +316,14 @@ bool CEditor::FRemoveOption(int ifield, const std::string& label)
     std::size_t ib = 0;
     if ((f.fk != EDITFK_Option && f.fk != EDITFK_OptionArray) || f.ibEnd <= f.ib || f.ib < 2 || !FLocate(f.ib - 2, (f.ibEnd - f.ib) + 2, rel, ib))
     {
-        Status("remove option: not stored in a binary part");
+        Status(T("remove option: not stored in a binary part"));
         return false;
     }
     const int oid = f.plo ? f.plo->oid : 0;
     m_proj.begin(label, true);
     const bool fOk = m_proj.spliceBytes(rel, ib, (f.ibEnd - f.ib) + 2, {}, EnclosingSizeFields(rel, ib));
     m_proj.end();
-    if (!fOk) { Status("remove option: could not write"); return false; }
+    if (!fOk) { Status(T("remove option: could not write")); return false; }
     Status(label);
     Reload(oid);
     return true;
@@ -393,8 +393,8 @@ void CEditor::DrawLinks(LO* plo, const EDOBJ* po)
             if (m_rec.afield[std::size_t(i)].eopid == eTask || m_rec.afield[std::size_t(i)].eopid == eSm) aiArr.push_back(i);
     }
     if (aiRef.empty() && aiArr.empty() && !fUse) return;
-    ImGui::SeparatorText("Links");
-    EdTip("What this object names and what it does to others when it acts (a use: when it is used).");
+    ImGui::SeparatorText(T("Links"));
+    EdTip(T("What this object names and what it does to others when it acts (a use: when it is used)."));
     for (int i : aiRef)
     {
         const EDITFIELD& f = m_rec.afield[std::size_t(i)];
@@ -406,7 +406,7 @@ void CEditor::DrawLinks(LO* plo, const EDOBJ* po)
         ImGui::TextColored(st::vec(st::muted), "%s", sz ? sz : StrOption(f.eopid).c_str());
         ImGui::SameLine();
         if (pt) { if (ImGui::SmallButton(("-> " + StrLo(pt)).c_str())) { Select(pt); FrameSelected(); } }
-        else ImGui::TextColored(st::vec(st::danger), "-> %d (not in this world)", n);
+        else ImGui::TextColored(st::vec(st::danger), T("-> %d (not in this world)"), n);
         ImGui::PopID();
     }
     for (int i : aiArr)
@@ -431,17 +431,17 @@ void CEditor::DrawLinks(LO* plo, const EDOBJ* po)
         const int cv = fTask ? 2 : 3;
         if (int(ael.size()) < cv) { ImGui::PopID(); continue; }
         LO* pt = PloOid(val(0));
-        if (fTask) ImGui::Text("Sets task");
-        else ImGui::Text("Runs the state machine of");
+        if (fTask) ImGui::Text("%s", T("Sets task"));
+        else ImGui::Text("%s", T("Runs the state machine of"));
         ImGui::SameLine();
         if (pt) { if (ImGui::SmallButton(StrLo(pt).c_str())) { Select(pt); FrameSelected(); } }
-        else ImGui::TextColored(st::vec(st::danger), "%d (missing)", val(0));
+        else ImGui::TextColored(st::vec(st::danger), T("%d (missing)"), val(0));
         ImGui::SameLine();
         if (fTask) ImGui::TextColored(st::vec(st::muted), "to %s", SzTaskState(val(1)));
-        else ImGui::TextColored(st::vec(st::muted), "to state %d", val(2));
+        else ImGui::TextColored(st::vec(st::muted), T("to state %d"), val(2));
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, st::vec(st::danger, 0.6f));
-        const bool fRemove = ImGui::SmallButton("Remove");
+        const bool fRemove = ImGui::SmallButton(T("Remove"));
         ImGui::PopStyleColor();
         // the numbers, editable (Enter applies; shows after Reload world)
         for (int k = 0; k < cv; ++k)
@@ -465,34 +465,38 @@ void CEditor::DrawLinks(LO* plo, const EDOBJ* po)
     // a new link
     static int s_kind = 0;
     static int s_an[3] = {0, 4, -1};
-    ImGui::TextColored(st::vec(st::muted), "New link:");
+    ImGui::TextColored(st::vec(st::muted), "%s", T("New link:"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    ImGui::Combo("##linkkind", &s_kind, "Set a task's state\0Start a script\0Run a state machine\0");
+    const char* const aszKind[] = {T("Set a task's state"), T("Start a script"), T("Run a state machine")};
+    ImGui::Combo("##linkkind", &s_kind, aszKind, 3);
     ImGui::SetNextItemWidth(90);
-    ImGui::InputInt(s_kind == 1 ? "script##l0" : s_kind == 0 ? "task##l0" : "object##l0", &s_an[0], 0, 0);
+    ImGui::InputInt(s_kind == 1 ? TL("script", "l0").c_str() : s_kind == 0 ? TL("task", "l0").c_str() : TL("object", "l0").c_str(), &s_an[0], 0, 0);
     if (s_kind != 1)
     {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70);
         ImGui::SetNextItemWidth(130);
-        if (s_kind == 0) ImGui::Combo("state##lstate", &s_an[1], "locked\0available\0done\0done, closed\0activate\0deactivate\0");
+        if (s_kind == 0) {
+            const char* const aszState[] = {T("locked"), T("available"), T("done"), T("done, closed"), T("activate"), T("deactivate")};
+            ImGui::Combo(TL("state", "lstate").c_str(), &s_an[1], aszState, 6);
+        }
         else
         {
             ImGui::SetNextItemWidth(70);
-            ImGui::InputInt("machine##l1", &s_an[1], 0, 0);
+            ImGui::InputInt(TL("machine", "l1").c_str(), &s_an[1], 0, 0);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(70);
-            ImGui::InputInt("state##l2", &s_an[2], 0, 0);
+            ImGui::InputInt(TL("state", "l2").c_str(), &s_an[2], 0, 0);
         }
     }
     if (LO* pt = PloOid(s_an[0])) ImGui::TextColored(st::vec(st::muted), "-> %s", StrLo(pt).c_str());
-    if (ImGui::Button("Add link"))
+    if (ImGui::Button(T("Add link")))
     {
         std::string error;
         if (!FAddLink(plo, s_kind, s_an, error)) Status("link: " + error);
     }
-    EdTip("Adds the link to this use (a structural edit: the world reloads). A use placed by a proxy is its shared group's: every copy gets it.");
+    EdTip(T("Adds the link to this use (a structural edit: the world reloads). A use placed by a proxy is its shared group's: every copy gets it."));
 }
 
 // ---- oids, records
@@ -667,7 +671,7 @@ void CEditor::DrawProblems()
     if (m_fProblemsOpen) { ImGui::OpenPopup("Check before saving"); m_fProblemsOpen = false; }
     ImGui::SetNextWindowSize(ImVec2(620, 0), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("Check before saving", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
-    ImGui::TextColored(st::vec(st::danger), "%zu missing references or problems:", m_aproblem.size());
+    ImGui::TextColored(st::vec(st::danger), T("%zu missing references or problems:"), m_aproblem.size());
     ImGui::BeginChild("pb", ImVec2(0, 260), true);
     for (const PROBLEM& p : m_aproblem)
     {
@@ -675,10 +679,10 @@ void CEditor::DrawProblems()
             if (LO* plo = PloOid(p.oid)) { Select(plo); FrameSelected(); }
     }
     ImGui::EndChild();
-    ImGui::TextColored(st::vec(st::muted), "The game may stop or misbehave where a reference is missing.");
-    if (ImGui::Button("Save anyway")) { m_fSaveAnyway = true; ImGui::CloseCurrentPopup(); FSave(); }
+    ImGui::TextColored(st::vec(st::muted), "%s", T("The game may stop or misbehave where a reference is missing."));
+    if (ImGui::Button(T("Save anyway"))) { m_fSaveAnyway = true; ImGui::CloseCurrentPopup(); FSave(); }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+    if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 

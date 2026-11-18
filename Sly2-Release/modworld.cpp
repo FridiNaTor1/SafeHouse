@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -36,6 +37,26 @@ struct ARMED
 std::vector<ARMED> s_aarmed;   // this world's sphere entries
 }  // namespace
 
+int IwrecOfWorldArg(const std::string& arg)
+{
+    const auto& awrec = AwrecWorlds();
+    std::string name = arg;
+    // "@id" or a package's world id: that new world's name
+    const std::string id = !arg.empty() && arg[0] == '@' ? arg.substr(1) : arg;
+    for (const CDisc::MODWORLD& m : g_disc.AmodWorld())
+        if (m.w.id == id || (m.package + "/" + m.w.id) == id) name = m.w.name;
+    int iwrec = IwrecOfWorldName(awrec, name);
+    if (iwrec < 0)   // (any case: "paris")
+        for (std::size_t i = 0; i < awrec.size() && iwrec < 0; ++i)
+        {
+            std::string n = g_disc.SzWorldName(awrec[i].fk.isector), a = name;
+            for (char& c : n) c = char(std::tolower(static_cast<unsigned char>(c)));
+            for (char& c : a) c = char(std::tolower(static_cast<unsigned char>(c)));
+            if (!n.empty() && n == a && awrec[i].fk.cb) iwrec = int(i);
+        }
+    return iwrec;
+}
+
 int IwrecOfWorldName(const std::vector<WREC>& awrec, const std::string& name)
 {
     const uint32_t isector = g_disc.IsectorOfWorldName(name);
@@ -60,7 +81,7 @@ void AppendModWorldRecords(std::vector<WREC>& awrec)
         WREC w;
         w.fk.isector = m.isector;
         w.fk.cb = 1;
-        w.fk.id = uint32_t(0x7F00 + i);
+        w.fk.id = 0x7F000000u + (m.isector - CDisc::ISECTOR_MODWORLD);   // (stable: the sector's slot)
         // (the key as FkFromRecord decodes it: sector = (w0 ^ w34) + 0xCA0, cb = w4 ^ w3C, id = w8 ^ w38)
         PutLe32(w.abRecord + 0x00, m.isector - 0xCA0u);
         PutLe32(w.abRecord + 0x04, w.fk.cb);

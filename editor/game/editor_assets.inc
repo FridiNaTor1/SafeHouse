@@ -209,7 +209,7 @@ void CEditor::PlaceAsset(const ASSET& a)
     if (a.aoidProxy.empty()) { Status(T("this asset has no placed instance to copy (made at run time)")); return; }
     const auto it = m_mpoidProxy.find(a.aoidProxy[0]);
     if (it == m_mpoidProxy.end()) return;
-    glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+    glm::vec3 p = m_cam.pos + DirPlace() * 600.0f, hit;
     if (FSnapDown(p, hit)) p = hit;
     p.x = SnapMove(p.x);
     p.y = SnapMove(p.y);
@@ -242,7 +242,7 @@ void CEditor::StartOtherLevelEditor(int record, const std::string& steps)
     std::vector<std::string> args{"--data-dir", ce::utf8(m_inst.dir), "--user-dir", cane::utf8(cane::userDirectory()), "--editor", std::to_string(record),
                                   "--editor-project", proj, "--editor-hidden", "--editor-size", "512x512", "--editor-do", steps};
     if (m_fPlayDry) { std::printf("editor: other level: %s\n", steps.c_str()); return; }
-    if (!ce::spawnDetached(exe, args)) Status("could not start " + ce::utf8(exe));
+    if (!ce::spawnDetached(exe, args)) Status(std::string(T("could not start")) + " " + ce::utf8(exe));
 }
 
 void CEditor::LoadOtherLevel(int record)
@@ -267,6 +267,7 @@ void CEditor::LoadOtherLevel(int record)
                 m_aother.push_back(o);
             }
         m_fOtherPending = false;
+        MarkOtherCharacters();
         return;
     }
     // no thumbnails yet: the shared groups from the level's index (names only) until they are made
@@ -283,6 +284,25 @@ void CEditor::LoadOtherLevel(int record)
                 o.types = std::to_string(g.objects.size()) + " " + T("objects");
                 m_aother.push_back(o);
             }
+    MarkOtherCharacters();
+}
+
+// which of the other level's assets hold a character (a guard, boss, NPC, Sly / Bentley / Murray): brought in with
+// their behaviour (editor_guests.inc)
+void CEditor::MarkOtherCharacters()
+{
+#if EDGAME_SLY2
+    const ce::WorldEntry* pe = m_inst.world(m_otherRecord);
+    ce::WorldIndex wi;
+    std::string error;
+    if (!pe || m_otherRecord >= 44 || !wi.load(m_inst, *pe, error)) return;
+    std::set<std::string> set;
+    for (const ce::GroupInfo& g : wi.groups)
+        if (!g.level)
+            for (const ce::ObjRecord& r : g.objects)
+                if (r.cid > 0 && r.cid < CID_Max && (FCidDerivedFrom(r.cid, 0x38) || FCidDerivedFrom(r.cid, 0x34) || FCidDerivedFrom(r.cid, 0x33))) { set.insert(g.name); break; }
+    for (OTHERASSET& o : m_aother) o.fCharacter = set.count(o.group) > 0;
+#endif
 }
 
 void CEditor::PollOtherLevel()
@@ -332,9 +352,10 @@ unsigned CEditor::TexOfFile(const std::string& path)
 void CEditor::DrawAssets()
 {
     if (m_aasset.empty() && !m_fAssetsBuilt) { BuildAssets(); m_fAssetsBuilt = true; }
+    DrawGuestsPanel();
     ImGui::SetNextItemWidth(200);
-    const char* asrc[] = {T("This level"), T("Another level")};
-    ImGui::Combo("##assetsrc", &m_assetSrc, asrc, 2);
+    const char* asrc[] = {T("This level"), T("Another level"), T("Prefabs")};
+    ImGui::Combo("##assetsrc", &m_assetSrc, asrc, 3);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(220);
     ImGui::InputTextWithHint("##assetfilter", T("Search assets"), m_assetFilter, sizeof(m_assetFilter));
@@ -346,6 +367,7 @@ void CEditor::DrawAssets()
     };
     const float tile = 112.0f;
     const int ccol = std::max(1, int(ImGui::GetContentRegionAvail().x / (tile + 12.0f)));
+    if (m_assetSrc == 2) { DrawPrefabs(tile, ccol, match); return; }
     if (m_assetSrc == 0)
     {
         ImGui::SameLine();
@@ -439,10 +461,41 @@ void CEditor::DrawAssets()
                 ImGui::Dummy(ImVec2(tile, tile));
                 ImGui::GetWindowDrawList()->AddRectFilled(p0, ImVec2(p0.x + tile, p0.y + tile), st::u32(st::raised), 4.0f);
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s\n%s", o.name.c_str(), o.types.c_str(), T("Double-click: import its model as a new object here"));
-#if EDFEAT_MODELS
-            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && m_importPending.empty()) ImportFromOtherLevel(o.group);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\n%s\n%s", o.name.c_str(), o.types.c_str(),
+                                  o.fCharacter ? T("Double-click: bring it in with its behaviour (right-click: or as a model)") : T("Double-click: import its model as a new object here"));
+            if (ImGui::BeginPopupContextItem("otherctx"))
+            {
+#if EDGAME_SLY2
+                if (o.fCharacter && ImGui::MenuItem(T("Bring in with its behaviour")))
+                {
+                    std::string error;
+                    if (!FAddGuest(m_otherRecord, o.group, error)) Status(error);
+                }
 #endif
+#if EDFEAT_MODELS
+                if (ImGui::MenuItem(T("Import its model as a new object"), nullptr, false, m_importPending.empty())) ImportFromOtherLevel(o.group);
+#endif
+                ImGui::EndPopup();
+            }
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+#if EDGAME_SLY2
+                std::string error;
+                if (o.fCharacter) { if (!FAddGuest(m_otherRecord, o.group, error)) Status(error); }
+                else
+#endif
+                {
+#if EDFEAT_MODELS
+                    if (m_importPending.empty()) ImportFromOtherLevel(o.group);
+#endif
+                }
+            }
+            if (o.fCharacter)
+            {
+                const ImVec2 r = ImGui::GetItemRectMin();
+                ImGui::GetWindowDrawList()->AddText(ImVec2(r.x + 4, r.y + 2), IM_COL32(240, 80, 110, 255), T("AI"));
+            }
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile);
             ImGui::TextUnformatted(o.name.c_str());
             ImGui::PopTextWrapPos();

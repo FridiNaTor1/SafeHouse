@@ -255,6 +255,170 @@ void CEditor::DrawScriptDiagPanel()
     }
 }
 
+// ---- the splice that starts a cutscene (the cutscene editor's starter, Sly 2)
+//
+// "Start the cutscene when task T becomes state S": the task's own script module (its group's scripts, readable) gets
+// (if (<=> (<geto> self .state) S) ((<geto> (<find-object> $cutscene-OID #obj:0) .trigger) #obj:0)) in its
+// on-task-start (made when it has none), as the game's own tasks start their scenes (Paris 1888 -> 1907); the object's
+// name tied to its oid by a ";=" line; the text checked by the diagnostics first (errors: nothing written) and kept
+// readable (FSpliceNormalize), as the Scripts tab's Apply with Names.
+namespace
+{
+// the index past the form that opens at i (a "(": strings and ; comments skipped); npos: unbalanced
+std::size_t IbFormEnd(const std::string& t, std::size_t i)
+{
+    int d = 0;
+    for (; i < t.size(); ++i)
+    {
+        const char c = t[i];
+        if (c == ';') { while (i < t.size() && t[i] != '\n') ++i; continue; }
+        if (c == '"') { for (++i; i < t.size() && t[i] != '"'; ++i) if (t[i] == '\\') ++i; continue; }
+        if (c == '(') ++d;
+        else if (c == ')' && --d == 0) return i + 1;
+    }
+    return std::string::npos;
+}
+}  // namespace
+
+bool CEditor::FWriteSceneStarter(int oidScene, LO* ptask, int state, std::vector<std::string>& adiag, std::string& error)
+{
+    if (!ptask) { error = T("the task has no script of its own to start it from"); return false; }
+    const std::string name = "$cutscene-" + std::to_string(oidScene);
+    const std::string form = "(if (<=> (<geto> %self .state) " + std::to_string(state) + ") ((<geto> (<find-object> " + name + " #obj:0) .trigger) #obj:0))";
+    return FWriteObjectHandler(ptask, "on-task-start", {"self"}, form, {{name, oidScene}}, adiag, error, false);
+}
+
+// An object's handler (on-task-start, on-activate, on-event ...) given a form (%self / %1: its parameters as the
+// handler names them): appended to the handler's body, else a new handler in the module's begin; the object's module
+// made when it has none (fMakeModule: a new module in its record's group, the record's module number set to it); the
+// names tied to their oids by ";=" lines; checked by the diagnostics first (errors: nothing written), written readable.
+bool CEditor::FWriteObjectHandler(LO* pobj, const std::string& handler, const std::vector<std::string>& aparam, const std::string& form0,
+                                  const std::vector<std::pair<std::string, int>>& anames, std::vector<std::string>& adiag, std::string& error, bool fMakeModule)
+{
+    adiag.clear();
+    if (!pobj) { error = T("no object to start it from"); return false; }
+    int igroup = -1, imodule = -1;
+    const std::string label = "Script of " + std::to_string(pobj->oid) + ": " + handler;
+    m_proj.begin(label, true);   // (one undo step: the module made, its number, the text)
+    auto fail = [&](const std::string& why) {
+        error = why;
+        m_proj.end();
+        if (m_proj.canUndo() && m_proj.history().back().label == label) m_proj.undo();
+        return false;
+    };
+    if (pobj->pframe)
+    {
+        EnsureExistCache();
+        const auto it = m_pexist ? m_pexist->mpframe.find(pobj->pframe.get()) : decltype(m_pexist->mpframe.end()){};
+        if (!m_pexist || it == m_pexist->mpframe.end()) return fail(T("the object's script module was not found"));
+        igroup = it->second.first, imodule = it->second.second;
+    }
+    else
+    {
+        if (!fMakeModule) return fail(T("the task has no script of its own to start it from"));
+        // (a module of its own: in the group whose Objects part holds its record)
+        int iobj = -1;
+        for (std::size_t i = 0; i < m_rec.aobj.size(); ++i)
+            if (m_rec.aobj[i].plo == pobj) { iobj = int(i); break; }
+        std::string rel;
+        std::size_t ib = 0, cb = 0;
+        if (iobj < 0 || !FRecordRange(iobj, rel, ib, cb)) return fail(T("the object's record was not found"));
+        for (const ce::GroupInfo& g : m_index.groups)
+            if (g.objectsPart == rel) igroup = g.index;
+        if (igroup < 0) return fail(T("the object's record was not found"));
+        imodule = AppendScriptModule(igroup, "(begin)", error);
+        if (imodule < 0) return fail(error);
+        const std::vector<uint8_t>* pab = m_proj.partRef(rel);
+        if (!pab || ib + 16 > pab->size()) return fail(T("could not write"));
+        const int16_t n = int16_t(imodule);
+        if (!m_proj.patch(rel, ib + IbOidOfRecord(pab->data() + ib) + 4, &n, 2)) return fail(T("could not write"));
+        adiag.push_back(std::string(T("a script module of its own made:")) + " " + std::to_string(imodule));
+    }
+    const bool fReadableWas = m_fScriptReadable;
+    m_fScriptReadable = true;
+    LoadScriptText(igroup);
+    m_fScriptReadable = fReadableWas;
+    std::string text = m_scriptEdit;
+    // the module's form
+    const std::string head = "(module " + std::to_string(imodule);
+    std::size_t im = std::string::npos;
+    for (std::size_t p = text.find(head); p != std::string::npos; p = text.find(head, p + 1))
+        if ((p == 0 || text[p - 1] == '\n') && p + head.size() < text.size() && (text[p + head.size()] == '\n' || text[p + head.size()] == ' ' || text[p + head.size()] == ')'))
+        {
+            im = p;
+            break;
+        }
+    if (im == std::string::npos) return fail(T("the object's script module was not found in its group's text"));
+    const std::size_t imEnd = IbFormEnd(text, im);
+    if (imEnd == std::string::npos) return fail(T("its scripts do not read"));
+    auto withParams = [&](const std::vector<std::string>& an) {
+        std::string f = form0;
+        for (std::size_t k = 0; k < an.size(); ++k)
+        {
+            const std::string key = k == 0 ? "%self" : "%" + std::to_string(k);
+            for (std::size_t q = f.find(key); q != std::string::npos; q = f.find(key, q + an[k].size())) f.replace(q, key.size(), an[k]);
+        }
+        return f;
+    };
+    // (its handler: the form added at the end of its body; else a new handler in the module's begin)
+    const std::string def = "(define " + handler;
+    std::size_t idef = std::string::npos;
+    for (std::size_t q = text.find(def, im); q != std::string::npos && q < imEnd; q = text.find(def, q + 1))
+        if (q + def.size() < text.size() && (text[q + def.size()] == ' ' || text[q + def.size()] == '\n')) { idef = q; break; }
+    if (idef != std::string::npos)
+    {
+        const std::size_t il = text.find("(lambda", idef);
+        const std::size_t ilEnd = il == std::string::npos ? std::string::npos : IbFormEnd(text, il);
+        if (ilEnd == std::string::npos || ilEnd > imEnd) return fail(std::string(T("its handler does not read:")) + " " + handler);
+        // (the handler's parameters as it names them)
+        std::vector<std::string> an;
+        const std::size_t ip0 = text.find('(', il + 1), ip1 = ip0 == std::string::npos ? std::string::npos : text.find(')', ip0);
+        if (ip0 != std::string::npos && ip1 != std::string::npos)
+        {
+            std::stringstream ss(text.substr(ip0 + 1, ip1 - ip0 - 1));
+            for (std::string w; ss >> w;) an.push_back(w);
+        }
+        for (std::size_t k = an.size(); k < aparam.size(); ++k) an.push_back(aparam[k]);
+        text.insert(ilEnd - 1, "\n        " + withParams(an));
+    }
+    else
+    {
+        const std::size_t ib = text.find("(begin", im);
+        if (ib == std::string::npos || ib > imEnd) return fail(T("the object's module has no begin"));
+        std::string ps;
+        for (const std::string& a : aparam) ps += (ps.empty() ? "" : " ") + a;
+        text.insert(ib + 6, "\n    (define " + handler + " (lambda (" + ps + ") " + withParams(aparam) + "))");
+    }
+    // (the new object names tied to their oids)
+    while (!text.empty() && text.back() == '\n') text.pop_back();
+    for (const auto& [name, oid] : anames)
+        if (text.find(";= " + name + "=") == std::string::npos) text += "\n;= " + name + "=" + std::to_string(oid);
+    text += "\n";
+    // checked first
+    m_scriptEdit = text;
+    RunScriptDiagnostics();
+    int cerr = 0;
+    if (m_pscriptdiag)
+        for (const SPLICEISSUE& d : m_pscriptdiag->a)
+        {
+            // (the written lines' own notes only: the group's other modules have the game's own warnings)
+            if (d.sev == SPLICESEV_Error) ++cerr;
+            bool fOurs = d.sev == SPLICESEV_Error;
+            for (const auto& [name, oid] : anames) fOurs = fOurs || d.message.find(name) != std::string::npos;
+            if (fOurs) adiag.push_back(StrSpliceDiag(d));
+        }
+    if (cerr) { LoadScriptText(igroup); return fail(T("the starter's script has errors (nothing written)")); }
+    std::string raw;
+    std::vector<std::string> anew;
+    if (!FSpliceNormalize(text, raw, error, &anew) || !FApplyScript(igroup, raw, error)) { LoadScriptText(igroup); return fail(error); }
+    for (const std::string& n : anew) adiag.push_back(std::string(T("new name")) + " " + n);
+    std::printf("editor: handler %s of %d written: group %d module %d, %zu notes\n", handler.c_str(), pobj->oid, igroup, imodule, adiag.size());
+    m_proj.end();
+    Reload(m_plSel ? m_plSel->oid : 0);
+    LoadScriptText(igroup);
+    return true;
+}
+
 }  // namespace edimpl
 
 #endif

@@ -56,6 +56,85 @@ inline const char* SzClassName2(int cid)
     }
 }
 
+// The classes' names in words (translated where they are drawn: T(); null: none, the class's code name is shown)
+inline const char* SzClassFriendly(int cid)
+{
+    switch (cid)
+    {
+    case 0x01: return "World";
+    case 0x02: return "Plain object";
+    case 0x03: return "Placed object";
+    case 0x04: return "Light";
+    case 0x05: return "Volume";
+    case 0x06: return "Group instance";
+    case 0x07: return "Clue bottle instance";
+    case 0x08: return "Point set";
+    case 0x09: return "Jump target";
+    case 0x0A: return "Path";
+    case 0x0B: return "Pipe";
+    case 0x0C: return "Ledge";
+    case 0x0D: return "Rail";
+    case 0x0E: return "Navigation polygons";
+    case 0x0F: return "Camera zone";
+    case 0x10: return "Detector";
+    case 0x11: return "Mesh zone";
+    case 0x13: return "Grab target";
+    case 0x16: return "Shape";
+    case 0x18: return "Trigger volume";
+    case 0x1A: return "Exit";
+    case 0x1B: return "Crawl space";
+    case 0x1C: return "Effect emitter";
+    case 0x1D: return "Emitter";
+    case 0x1E: return "Breakable (base)";
+    case 0x1F: return "Grouper";
+    case 0x20: return "Explosion";
+    case 0x23: return "Use spot";
+    case 0x24: return "Use spot (2)";
+    case 0x25: return "Loot";
+    case 0x28: return "Jump point";
+    case 0x29: return "Warp point";
+    case 0x2A: return "Checkpoint";
+    case 0x2B: return "Sound";
+    case 0x2C: return "Camera";
+    case 0x30: return "Animated object";
+    case 0x31: return "Level mesh";
+    case 0x32: return "Solid object";
+    case 0x33: return "Physical object";
+    case 0x34: return "Player";
+    case 0x35: return "Sly";
+    case 0x36: return "Murray";
+    case 0x37: return "Bentley";
+    case 0x38: return "Guard";
+    case 0x45: return "Turret";
+    case 0x4E: return "Vault";
+    case 0x4F: return "Projectile";
+    case 0x53: return "Pressure pad";
+    case 0x55: return "Laser";
+    case 0x56: return "Barrier";
+    case 0x58: return "Hiding spot";
+    case 0x59: return "Water";
+    case 0x5A: return "Pickup";
+    case 0x5B: return "Coin";
+    case 0x5C: return "Prize";
+    case 0x60: return "Bird";
+    case 0x61: return "Sky";
+    case 0x62: return "Breakable";
+    case 0x6A: return "Rope";
+    case 0x6B: return "Job marker";
+    case 0x6D: return "Animation";
+    case 0x6E: return "Blended animation";
+    case 0x6F: return "State machine";
+    case 0x71: return "Command list";
+    case 0x72: return "Scene script";
+    case 0x73: return "Space warp";
+    case 0x77: return "Spawner";
+    case 0x84: return "Job";
+    case 0x85: return "Task";
+    case 0x87: return "Camera manager";
+    default: return nullptr;
+    }
+}
+
 inline const char* SzOptionName2(int eopid)
 {
     switch (eopid)

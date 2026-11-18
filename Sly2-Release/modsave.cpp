@@ -85,6 +85,17 @@ bool FSetModTaskState(int oid, int n)
     return true;
 }
 
+// (kept as {package: {world: {"scene-OID": 1}}}: the side file's shape)
+bool FModSceneSeen(const std::string& idPackage, const std::string& world, int oid)
+{
+    const std::string key = "scene-" + std::to_string(oid);
+    if (const auto ip = s_jCur.find(idPackage); ip != s_jCur.end())
+        if (const auto iw = ip->find(world); iw != ip->end())
+            if (const auto it = iw->find(key); it != iw->end() && it->is_number_integer()) return it->get<int>() != 0;
+    return false;
+}
+void SetModSceneSeen(const std::string& idPackage, const std::string& world, int oid) { s_jCur[idPackage][world]["scene-" + std::to_string(oid)] = 1; }
+
 void ReadModSave(const std::string& pathSlot) { s_jCur = JRead(pathSlot); }
 
 bool WriteModSave(const std::string& pathSlot)

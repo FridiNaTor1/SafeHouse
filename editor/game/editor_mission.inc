@@ -72,12 +72,12 @@ std::vector<uint8_t> BytesOfLinks(const std::vector<int>& aPre, const std::vecto
 bool CEditor::FSetTaskLinks(LO* ploTask, const std::vector<int>& aoidPre, const std::vector<int>& aoidPost, const std::string& label)
 {
     TASKLINKS tl;
-    if (!FTaskLinks(ploTask, tl)) { Status("this task's links are not in a binary part"); return false; }
-    if (aoidPre.size() > 255 || aoidPost.size() > 255) { Status("rejected: at most 255 links each"); return false; }
+    if (!FTaskLinks(ploTask, tl)) { Status(T("this task's links are not in a binary part")); return false; }
+    if (aoidPre.size() > 255 || aoidPost.size() > 255) { Status(T("rejected: at most 255 links each")); return false; }
     m_proj.begin(label, true);
     const bool fOk = m_proj.spliceBytes(tl.rel, tl.ib, tl.cb, BytesOfLinks(aoidPre, aoidPost), EnclosingSizeFields(tl.rel, tl.ib));
     m_proj.end();
-    if (!fOk) { Status("could not change the links"); return false; }
+    if (!fOk) { Status(T("could not change the links")); return false; }
     Status(label);
     Reload(ploTask->oid);
     return true;
@@ -559,7 +559,7 @@ int CEditor::CopyIntoJob(int oidSrc, int oidJob, std::string& error)
     }
     m_proj.end();
     if (!fOk) return 0;
-    Status("copied " + std::to_string(oidSrc) + " into job " + std::to_string(oidJob) + " as " + std::to_string(oidNew));
+    Status(Fmt(T("copied %d into job %d as %d"), oidSrc, oidJob, oidNew));
     Reload(oidNew);
     if (!m_plSel)
         for (const auto& up : m_psw->aploAll)
@@ -576,7 +576,7 @@ void CEditor::DrawMissions()
         if (up->Cid() == EDCID(0x84)) ajob.push_back(up.get());
     std::sort(ajob.begin(), ajob.end(), [](LO* a, LO* b) { return a->oid < b->oid; });
     ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted));
-    ImGui::TextWrapped("%zu jobs. Click a task or marker to select it; Edit links changes a task's chain.", ajob.size());
+    ImGui::TextWrapped(T("%zu jobs. Click a task or marker to select it; Edit links changes a task's chain."), ajob.size());
     ImGui::PopStyleColor();
     ImGui::BeginChild("jobs", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2.2f));
     for (LO* pjob : ajob)
@@ -586,9 +586,9 @@ void CEditor::DrawMissions()
         FOptionInt(pjob, EDEOPID(1243), oidFirst);
         FOptionInt(pjob, EDEOPID(1244), oidLast);
         std::string name = idName ? StrText(idName) : std::string();
-        if (name.empty()) name = "job";
+        if (name.empty()) name = T("job");
         char label[200];
-        std::snprintf(label, sizeof(label), "%s  %d%s##j%d", name.c_str(), pjob->oid, m_mpjobRemap.count(pjob->oid) ? "  (new)" : "", pjob->oid);
+        std::snprintf(label, sizeof(label), "%s  %d%s##j%d", name.c_str(), pjob->oid, m_mpjobRemap.count(pjob->oid) ? (std::string("  (") + T("new") + ")").c_str() : "", pjob->oid);
         const bool fActive = pjob->oid == m_ojobActive;
         if (fActive) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
         ImGui::PushStyleColor(ImGuiCol_Text, st::vec(fActive ? st::cta : st::text));
@@ -606,7 +606,7 @@ void CEditor::DrawMissions()
             if (!oid || seen.count(oid)) continue;
             seen.insert(oid);
             LO* ptask = PloOid(oid, EDCID(0x85));
-            if (!ptask) { ImGui::TextColored(st::vec(st::danger), "task %d is missing", oid); continue; }
+            if (!ptask) { ImGui::TextColored(st::vec(st::danger), T("task %d is missing"), oid); continue; }
             int oidJobOfTask = 0, oidMarker = 0, idPrompt = 0, player = 0;
             FOptionInt(ptask, EDEOPID(1264), oidJobOfTask);
             FOptionInt(ptask, EDEOPID(1279), oidMarker);
@@ -617,13 +617,13 @@ void CEditor::DrawMissions()
             ImGui::PushID(oid);
             const char* szPlayer = player == 7 ? "Sly" : player == 8 ? "Bentley" : player == 9 ? "Murray" : "";
             char tlabel[160];
-            std::snprintf(tlabel, sizeof(tlabel), "task %d  %s%s", oid, szPlayer, oid == oidLast ? "  (last)" : "");
+            std::snprintf(tlabel, sizeof(tlabel), "%s %d  %s%s", T("task"), oid, szPlayer, oid == oidLast ? (std::string("  (") + T("last") + ")").c_str() : "");
             if (ImGui::Selectable(tlabel, ptask == m_plSel)) Select(ptask);
             ImGui::Indent();
-            if (oidJobOfTask != pjob->oid) ImGui::TextColored(st::vec(st::danger), "belongs to job %d", oidJobOfTask);
+            if (oidJobOfTask != pjob->oid) ImGui::TextColored(st::vec(st::danger), T("belongs to job %d"), oidJobOfTask);
             if (oidMarker)
             {
-                ImGui::TextColored(st::vec(st::muted), "marker %d", oidMarker);
+                ImGui::TextColored(st::vec(st::muted), T("marker %d"), oidMarker);
                 if (ImGui::IsItemClicked())
                     for (const auto& up : m_psw->aploAll)
                         if (!up->paloParent && up->oidInstance == oidMarker) { Select(up.get()); FrameSelected(); break; }
@@ -633,9 +633,9 @@ void CEditor::DrawMissions()
                 std::string pre, post;
                 for (int o : tl.aoidPre) pre += (pre.empty() ? "" : ", ") + std::to_string(o);
                 for (int o : tl.aoidPost) post += (post.empty() ? "" : ", ") + std::to_string(o);
-                ImGui::TextColored(st::vec(st::muted), "after: %s   next: %s", pre.empty() ? "-" : pre.c_str(), post.empty() ? "-" : post.c_str());
+                ImGui::TextColored(st::vec(st::muted), T("after: %s   next: %s"), pre.empty() ? "-" : pre.c_str(), post.empty() ? "-" : post.c_str());
                 for (int o : tl.aoidPost) aq.push_back(o);
-                if (ImGui::SmallButton("Edit links"))
+                if (ImGui::SmallButton(T("Edit links")))
                 {
                     m_linkTask = oid;
                     std::snprintf(m_linkPre, sizeof(m_linkPre), "%s", pre.c_str());
@@ -644,9 +644,9 @@ void CEditor::DrawMissions()
                 if (m_linkTask == oid)
                 {
                     ImGui::SetNextItemWidth(-1);
-                    ImGui::InputTextWithHint("##pre", "after (oids, comma separated)", m_linkPre, sizeof(m_linkPre));
+                    ImGui::InputTextWithHint("##pre", T("after (oids, comma separated)"), m_linkPre, sizeof(m_linkPre));
                     ImGui::SetNextItemWidth(-1);
-                    ImGui::InputTextWithHint("##post", "next (oids, comma separated)", m_linkPost, sizeof(m_linkPost));
+                    ImGui::InputTextWithHint("##post", T("next (oids, comma separated)"), m_linkPost, sizeof(m_linkPost));
                     auto parse = [](const char* sz, std::vector<int>& a) {
                         std::stringstream ss(sz);
                         std::string t;
@@ -661,35 +661,35 @@ void CEditor::DrawMissions()
                         }
                         return true;
                     };
-                    if (ImGui::SmallButton("Apply"))
+                    if (ImGui::SmallButton(T("Apply")))
                     {
                         std::vector<int> a1, a2;
-                        if (!parse(m_linkPre, a1) || !parse(m_linkPost, a2)) Status("rejected: the links must be oids");
+                        if (!parse(m_linkPre, a1) || !parse(m_linkPost, a2)) Status(T("rejected: the links must be oids"));
                         else { m_linkTask = 0; FSetTaskLinks(ptask, a1, a2, "Links of task " + std::to_string(oid)); ImGui::Unindent(); ImGui::PopID(); ImGui::TreePop(); ImGui::EndChild(); return; }
                     }
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("Cancel")) m_linkTask = 0;
+                    if (ImGui::SmallButton(T("Cancel"))) m_linkTask = 0;
                 }
             }
             ImGui::Unindent();
             ImGui::PopID();
         }
         ImGui::PushID(pjob->oid);
-        if (ImGui::SmallButton("New job from this one"))
+        if (ImGui::SmallButton(T("New job from this one")))
         {
             std::string error;
-            if (!CreateJob(pjob->oid, error)) Status("new job: " + error);
+            if (!CreateJob(pjob->oid, error)) Status(std::string(T("new job")) + ": " + error);
             ImGui::PopID();
             ImGui::TreePop();
             break;
         }
         if (m_mpjobRemap.count(pjob->oid) && m_plSel)
         {
-            if (ImGui::SmallButton("Copy the selection in as its goal"))
+            if (ImGui::SmallButton(T("Copy the selection in as its goal")))
             {
                 std::string error;
                 const int oidSrc = m_plSel->paloParent == nullptr && m_plSel->oidInstance >= 0 ? m_plSel->oidInstance : m_plSel->oid;
-                if (!CopyIntoJob(oidSrc, pjob->oid, error)) Status("copy into job: " + error);
+                if (!CopyIntoJob(oidSrc, pjob->oid, error)) Status(std::string(T("copy into job")) + ": " + error);
                 ImGui::PopID();
                 ImGui::TreePop();
                 break;
@@ -701,11 +701,11 @@ void CEditor::DrawMissions()
     ImGui::EndChild();
     ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted));
     if (EDFEAT_CUSTOMTASKS)
-        ImGui::TextWrapped("A new job starts at its marker; copy a use or trigger of the old job in as its goal. Its progress is "
-                           "saved with the game (beside the save slot, never in it) once the project is saved.");
+        ImGui::TextWrapped("%s", T("A new job starts at its marker; copy a use or trigger of the old job in as its goal. Its progress is "
+                           "saved with the game (beside the save slot, never in it) once the project is saved."));
     else
-        ImGui::TextWrapped("A new job starts at its marker; copy a use or trigger of the old job in as its goal, or wire a button to "
-                           "its last task (Links). Its progress is not saved yet: it can be played again after a reload.");
+        ImGui::TextWrapped("%s", T("A new job starts at its marker; copy a use or trigger of the old job in as its goal, or wire a button to "
+                           "its last task (Links). Its progress is not saved yet: it can be played again after a reload."));
     ImGui::PopStyleColor();
 }
 

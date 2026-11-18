@@ -563,8 +563,9 @@ static int VrGameView(SW* psw)
     return vr::VRVIEW_Normal;
 }
 
-int RunGame(const GAMEOPTS& go)
+int RunGame(const GAMEOPTS& goIn)
 {
+    GAMEOPTS go = goIn;   // (go.world: a world named on the command line becomes its record)
     // SLY2N_RTZ=1: the PS2's float rounding (toward zero) for the whole game (the differential harnesses: the
     // reference's interpreter rounds its FPU / VU arithmetic that way)
     if (const char* e = std::getenv("SLY2N_RTZ"); e && *e == '1') std::fesetround(FE_TOWARDZERO);
@@ -598,6 +599,15 @@ int RunGame(const GAMEOPTS& go)
     std::unique_ptr<SW> psw;
     // boot: the disc's boot sequence (0x1A4E08: the logo movie, the slots, the title); frontend: the front end world
     // (test: SLY2N_READSLOTS=1: a world run reads <user-dir>/Saves's slots too, so the data access pages show them)
+    // (a world by its name, e.g. a mod package's new world: its record depends on the packages loaded, modworld.h)
+    if (go.world != "boot" && go.world != "frontend" && !go.world.empty() && go.world.find_first_not_of("0123456789") != std::string::npos)
+    {
+        EnsureWorldRecords();
+        const int iwrec = IwrecOfWorldArg(go.world);
+        if (iwrec < 0) { std::fprintf(stderr, "--world: no world named \"%s\"\n", go.world.c_str()); return 1; }
+        std::printf("world \"%s\" is record %d\n", go.world.c_str(), iwrec);
+        go.world = std::to_string(iwrec);
+    }
     if (go.world != "boot" && go.world != "frontend" && std::getenv("SLY2N_READSLOTS")) ReadSaveSlots("");
     if (go.world == "boot") StartBootSequence(!go.fHeadless && !std::getenv("SLY2_NOMOVIE"));
     else if (go.world == "frontend")

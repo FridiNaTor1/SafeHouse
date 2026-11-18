@@ -23,6 +23,13 @@
 //       a way in: entering the sphere (at, radius) in that world, or an existing exit object (its oid: e.g. a door the
 //       editor copied), takes the player to the world "to" (a new world's name, or an installed world's) at its
 //       checkpoint "point" (-1: the world's default, 393).
+//
+//   "guests": [{"world": "Rajan's Palace", "id": "paris-guard-1", "name": "Paris guard", "from": "Paris",
+//               "object": 11539, "at": [x, y, z], "heading": 90, "patrol": 4021}]
+//       a character of another level (a guard, an NPC, a boss: "object" is its object in its own level's shared group,
+//       instance 0) brought into this world with its behaviour: the game loads "from" aside (the kept worlds:
+//       Sly2-Release/pcloader.h) and puts a live copy of it here at "at" (heading in degrees) with its class, animations,
+//       AI, sounds and effects; "patrol": a path of this world it walks along, looping (-1: stands at its place).
 // Header-only (nlohmann::json), shared by the games, the launcher and the editor.
 
 #include "mod_package.h"
@@ -69,6 +76,14 @@ struct Entry {
     float at[3] = {0, 0, 0};
     float radius = 150.0f;
     int point = -1;
+};
+
+struct Guest {
+    std::string world, id, name, from;
+    int object = -1;           // its object in "from" (the shared group's instance 0: its root)
+    float at[3] = {0, 0, 0};
+    float heading = 0.0f;      // degrees
+    int patrol = -1;           // a path object of this world (-1: none)
 };
 
 inline nlohmann::json toJson(const StateCond& c) {
@@ -202,6 +217,29 @@ inline bool fromJson(const nlohmann::json& j, Entry& e, std::string& error) {
     return true;
 }
 
+inline nlohmann::json toJson(const Guest& g) {
+    nlohmann::json j = {{"world", g.world}, {"id", g.id}, {"name", g.name}, {"from", g.from}, {"object", g.object},
+                        {"at", {g.at[0], g.at[1], g.at[2]}}, {"heading", g.heading}};
+    if (g.patrol >= 0) j["patrol"] = g.patrol;
+    return j;
+}
+inline bool fromJson(const nlohmann::json& j, Guest& g, std::string& error) {
+    if (!j.is_object()) { error = "a guest is not an object"; return false; }
+    g = Guest();
+    g.world = j.value("world", "");
+    g.id = j.value("id", "");
+    g.name = j.value("name", g.id);
+    g.from = j.value("from", "");
+    g.object = j.value("object", -1);
+    g.heading = j.value("heading", 0.0f);
+    g.patrol = j.value("patrol", -1);
+    if (j.contains("at") && j["at"].is_array() && j["at"].size() >= 3)
+        for (std::size_t i = 0; i < 3; ++i)
+            if (j["at"][i].is_number()) g.at[i] = j["at"][i].get<float>();
+    if (g.world.empty() || g.id.empty() || g.from.empty() || g.object < 0) { error = "a guest needs \"world\", \"id\", \"from\" and \"object\""; return false; }
+    return true;
+}
+
 // The lists of a manifest (invalid entries skipped; perrors: why)
 template <class T>
 inline std::vector<T> listOf(const Manifest& m, const char* key, std::vector<std::string>* perrors = nullptr) {
@@ -219,6 +257,7 @@ inline std::vector<T> listOf(const Manifest& m, const char* key, std::vector<std
 inline std::vector<MapState> mapStates(const Manifest& m, std::vector<std::string>* perrors = nullptr) { return listOf<MapState>(m, "map_states", perrors); }
 inline std::vector<NewWorld> newWorlds(const Manifest& m, std::vector<std::string>* perrors = nullptr) { return listOf<NewWorld>(m, "new_worlds", perrors); }
 inline std::vector<Entry> entries(const Manifest& m, std::vector<std::string>* perrors = nullptr) { return listOf<Entry>(m, "entries", perrors); }
+inline std::vector<Guest> guests(const Manifest& m, std::vector<std::string>* perrors = nullptr) { return listOf<Guest>(m, "guests", perrors); }
 
 template <class T>
 inline void setListOf(Manifest& m, const char* key, const std::vector<T>& a) {
@@ -230,6 +269,7 @@ inline void setListOf(Manifest& m, const char* key, const std::vector<T>& a) {
 inline void setMapStates(Manifest& m, const std::vector<MapState>& a) { setListOf(m, "map_states", a); }
 inline void setNewWorlds(Manifest& m, const std::vector<NewWorld>& a) { setListOf(m, "new_worlds", a); }
 inline void setEntries(Manifest& m, const std::vector<Entry>& a) { setListOf(m, "entries", a); }
+inline void setGuests(Manifest& m, const std::vector<Guest>& a) { setListOf(m, "guests", a); }
 
 // One map state added or replaced (by world + id)
 inline void putMapState(Manifest& m, const MapState& s) {

@@ -674,11 +674,11 @@ void CEditor::DrawToolStrip()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 8));
     ImGui::Begin("##tools", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
     struct TOOL { const char* label; const char* tip; int gizmo; };
-    static const TOOL s_atool[] = {
-        {"Sel", "Select (Q): click picks, Ctrl+click adds / removes, Shift+click adds, drag in empty space draws a box", -1},
-        {"Mov", "Move (W): drag an arrow; the grid snap is on the status bar", 0},
-        {"Rot", "Rotate (E): drag a ring; the angle snap is on the status bar", 1},
-        {"Scl", "Scale (R): drag a box handle (Shift: all axes)", 2},
+    const TOOL s_atool[] = {
+        {T("Sel"), T("Select (Q): click picks, Ctrl+click adds / removes, Shift+click adds, drag in empty space draws a box"), -1},
+        {T("Mov"), T("Move (W): drag an arrow; the grid snap is on the status bar"), 0},
+        {T("Rot"), T("Rotate (E): drag a ring; the angle snap is on the status bar"), 1},
+        {T("Scl"), T("Scale (R): drag a box handle (Shift: all axes)"), 2},
     };
     for (int i = 0; i < 4; ++i)
     {
@@ -690,14 +690,14 @@ void CEditor::DrawToolStrip()
             if (i > 0) m_gizmo = s_atool[i].gizmo;
         }
         ImGui::PopStyleColor();
-        EdTip(T(s_atool[i].tip));
+        EdTip(s_atool[i].tip);
     }
     ImGui::Separator();
-    if (ImGui::Button("F", ImVec2(40, 30))) FrameSelected();
+    if (ImGui::Button(TL("F", "toolframe").c_str(), ImVec2(40, 30))) FrameSelected();
     EdTip(T("Frame the selection (F)"));
-    if (ImGui::Button("H", ImVec2(40, 30))) HideSelection(true);
+    if (ImGui::Button(TL("H", "toolhide").c_str(), ImVec2(40, 30))) HideSelection(true);
     EdTip(T("Hide the selection (H); Alt+H shows everything again"));
-    if (ImGui::Button("I", ImVec2(40, 30))) { if (m_setIsolate.empty()) IsolateSelection(); else { m_setIsolate.clear(); InvalidateVis(); } }
+    if (ImGui::Button(TL("I", "toolisolate").c_str(), ImVec2(40, 30))) { if (m_setIsolate.empty()) IsolateSelection(); else { m_setIsolate.clear(); InvalidateVis(); } }
     EdTip(T("Isolate the selection (I): only it is shown; again: everything"));
     ImGui::End();
     ImGui::PopStyleVar();
@@ -714,7 +714,15 @@ void CEditor::DrawStatusBar()
     // the right part: selection, snapping, camera
     const float wRight = std::min(size.x * 0.62f, 760.0f);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(st::vec(st::text2), "%s", m_status.c_str());
+    {
+        // (clipped before the right part; the whole line in the tooltip)
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        const float wText = std::max(40.0f, size.x - wRight - 24.0f);
+        ImGui::PushClipRect(p0, ImVec2(p0.x + wText, p0.y + 30.0f), true);
+        ImGui::TextColored(st::vec(st::text2), "%s", m_status.c_str());
+        ImGui::PopClipRect();
+        if (ImGui::IsItemHovered() && ImGui::CalcTextSize(m_status.c_str()).x > wText) ImGui::SetTooltip("%s", m_status.c_str());
+    }
     ImGui::SameLine(size.x - wRight);
     ImGui::TextColored(st::vec(st::muted), "%zu %s", m_asel.size(), T("selected"));
     ImGui::SameLine();

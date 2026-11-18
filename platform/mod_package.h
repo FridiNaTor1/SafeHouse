@@ -228,6 +228,59 @@ inline void setCustomTasks(Manifest& m, const std::string& world, const std::vec
     else m.extra["custom_tasks"] = a;
 }
 
+// A package's cutscene rules (the map editor's cutscene editor), per world and script:
+//   "cutscenes": [{"world": "Paris", "script": 144037, "once": true, "task": 1001, "states": [1, 4],
+//                  "skip": "auto" | "always" | "never", "skip_to_label": -1}]
+// once: the script starts only the first time (kept per save slot, "<slot>.mods.json"); task / states: it starts only
+// while the task is in one of the states; skip: the cutscene skip's choice (auto: the game's own, by what the scene
+// has); skip_to_label: a skip stops where the script reaches this label (the rest plays), -1 the scene's end.
+struct CutsceneRule {
+    std::string world;
+    int script = 0;
+    bool once = false;
+    int task = -1;
+    std::vector<int> states;
+    std::string skip = "auto";
+    int skipToLabel = -1;
+    bool empty() const { return !once && task < 0 && skip == "auto" && skipToLabel < 0; }
+};
+inline std::vector<CutsceneRule> cutsceneRules(const Manifest& m) {
+    std::vector<CutsceneRule> a;
+    const auto it = m.extra.find("cutscenes");
+    if (it == m.extra.end() || !it->is_array()) return a;
+    for (const auto& e : *it) {
+        if (!e.is_object() || !e.contains("world") || !e.at("world").is_string() || !e.contains("script") || !e.at("script").is_number_integer()) continue;
+        CutsceneRule r;
+        r.world = e.at("world").get<std::string>();
+        r.script = e.at("script").get<int>();
+        if (e.contains("once") && e.at("once").is_boolean()) r.once = e.at("once").get<bool>();
+        if (e.contains("task") && e.at("task").is_number_integer()) r.task = e.at("task").get<int>();
+        if (e.contains("states") && e.at("states").is_array())
+            for (const auto& s : e.at("states"))
+                if (s.is_number_integer()) r.states.push_back(s.get<int>());
+        if (e.contains("skip") && e.at("skip").is_string()) r.skip = e.at("skip").get<std::string>();
+        if (e.contains("skip_to_label") && e.at("skip_to_label").is_number_integer()) r.skipToLabel = e.at("skip_to_label").get<int>();
+        if (!r.world.empty()) a.push_back(std::move(r));
+    }
+    return a;
+}
+inline void setCutsceneRule(Manifest& m, const CutsceneRule& r) {
+    nlohmann::json a = nlohmann::json::array();
+    if (const auto it = m.extra.find("cutscenes"); it != m.extra.end() && it->is_array())
+        for (const auto& e : *it)
+            if (!(e.is_object() && e.value("world", "") == r.world && e.value("script", 0) == r.script)) a.push_back(e);
+    if (!r.empty()) {
+        nlohmann::json e = {{"world", r.world}, {"script", r.script}};
+        if (r.once) e["once"] = true;
+        if (r.task >= 0) { e["task"] = r.task; e["states"] = r.states; }
+        if (r.skip != "auto") e["skip"] = r.skip;
+        if (r.skipToLabel >= 0) e["skip_to_label"] = r.skipToLabel;
+        a.push_back(e);
+    }
+    if (a.empty()) m.extra.erase("cutscenes");
+    else m.extra["cutscenes"] = a;
+}
+
 // Why the package does not fit this installation ("" when it does).
 inline std::string mismatch(const Manifest& m, const std::string& game, const std::string& region, int filesFormat) {
     if (!m.game.empty() && m.game != game) return "made for " + m.game + ", not " + game;

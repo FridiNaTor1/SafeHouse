@@ -1256,7 +1256,7 @@ bool CEditor::FImportModel(const std::string& path, LO* plo, bool fNew, std::str
         if (plo && iobjSrc >= 0 && RelGraphicsOf(m_index.groups[size_t(m_rec.aobj[size_t(iobjSrc)].plo->igrp)].objectsPart).empty()) plo = nullptr;
         if (!plo && igrpLevel < 0) { error = "no level group with a texture block"; return false; }
         if (iobjSrc < 0) { error = "no plain object to carry the model (select one)"; return false; }
-        glm::vec3 pos = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+        glm::vec3 pos = m_cam.pos + DirPlace() * 600.0f, hit;
         if (FSnapDown(pos, hit)) pos = hit;
         const int oidNew = CopyRecord(iobjSrc, plo ? m_rec.aobj[size_t(iobjSrc)].plo->igrp : igrpLevel, &pos, true, error);
         if (!oidNew || !m_plSel) { if (error.empty()) error = "the copy failed"; return false; }
@@ -2887,29 +2887,29 @@ void Tip(const char* sz)
 {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", sz);
 }
-const char* SzExportKind(int k) { return k == 0 ? "the object (with its children)" : k == 1 ? "its whole group (the world part)" : "a character (skeleton + animations)"; }
+const char* SzExportKind(int k) { return k == 0 ? T("the object (with its children)") : k == 1 ? T("its whole group (the world part)") : T("a character (skeleton + animations)"); }
 
 // A character export's animation options (ExportAnimations): as the game shows them, or the clips' channels only
 void DrawCharAnimOptions(int& mode, int& fps, bool& fReduce)
 {
     ImGui::SetNextItemWidth(std::min(260.0f, ImGui::GetContentRegionAvail().x));
-    const char* asz[2] = {"Animations as in the game", "Clip channels only (no IK)"};
+    const char* asz[2] = {T("Animations as in the game"), T("Clip channels only (no IK)")};
     if (ImGui::BeginCombo("##exportanim", asz[mode == 1 ? 1 : 0]))
     {
         for (int k = 0; k < 2; ++k) if (ImGui::Selectable(asz[k], mode == k)) mode = k;
         ImGui::EndCombo();
     }
-    Tip("As in the game: every clip played through the game's own update (the limbs' two-bone joints solved, links and "
+    Tip(T("As in the game: every clip played through the game's own update (the limbs' two-bone joints solved, links and "
         "chains, squash and stretch) and each joint baked per frame: Blender shows what the game shows.\n"
         "Clip channels only: the clips' keys without the solvers (the limbs stay at rest while the hands / feet move); "
         "the limbs' targets are extra joints and the root's custom properties (safehouse_ik) list each limb's joints, to "
-        "rebuild them with IK constraints.");
+        "rebuild them with IK constraints."));
     bool f60 = fps >= 60;
-    if (ImGui::Checkbox("60 keys/s", &f60)) fps = f60 ? 60 : 30;
-    Tip("60: a key at every game step (exact at each frame the game draws); 30: half as many before the reduction.");
+    if (ImGui::Checkbox(T("60 keys/s"), &f60)) fps = f60 ? 60 : 30;
+    Tip(T("60: a key at every game step (exact at each frame the game draws); 30: half as many before the reduction."));
     ImGui::SameLine();
-    ImGui::Checkbox("Fewer keys", &fReduce);
-    Tip("Keys dropped where the joints stay within 0.5 mm (at 1 unit = 1 m) of the game's pose.");
+    ImGui::Checkbox(T("Fewer keys"), &fReduce);
+    Tip(T("Keys dropped where the joints stay within 0.5 mm (at 1 unit = 1 m) of the game's pose."));
 }
 }  // namespace
 
@@ -2918,7 +2918,7 @@ void CEditor::DrawModelSection(LO* plo)
     ALO* palo = dynamic_cast<ALO*>(plo);
     const auto it = m_mpobj.find(plo);
     if (!palo || it == m_mpobj.end() || it->second.iglobset < 0) return;
-    if (!ImGui::CollapsingHeader("Model and materials", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!ImGui::CollapsingHeader(T("Model and materials"), ImGuiTreeNodeFlags_DefaultOpen)) return;
     std::size_t ctri = 0, cglob = 0;
     if (palo->pglobset)
         for (const GLOB& g : palo->pglobset->aglob)
@@ -2926,25 +2926,25 @@ void CEditor::DrawModelSection(LO* plo)
             ++cglob;
             ctri += (g.iglobTemplate >= 0 && g.aindex.empty() ? palo->pglobset->aglob[size_t(g.iglobTemplate)].aindex.size() : g.aindex.size()) / 3;
         }
-    ImGui::TextColored(st::vec(st::muted), "%zu parts, %zu triangles%s", cglob, ctri, plo->oidInstance > 0 && plo->oidInstance != plo->oid ? "" : "");
-    if (ImGui::Button("Replace model..."))
-        OpenFileDialog("Replace the model", "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
+    ImGui::TextColored(st::vec(st::muted), T("%zu parts, %zu triangles%s"), cglob, ctri, plo->oidInstance > 0 && plo->oidInstance != plo->oid ? "" : "");
+    if (ImGui::Button(T("Replace model...")))
+        OpenFileDialog(T("Replace the model"), "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
             std::string e;
             std::snprintf(m_importPath, sizeof(m_importPath), "%s", path.c_str());
             if (!FImportModel(path, m_plSel, false, e)) Status("import: " + e);
         });
-    Tip("A .glb / .gltf / .fbx file in place of this model (options in World > Models). A shared group's model changes in every instance.");
+    Tip(T("A .glb / .gltf / .fbx file in place of this model (options in World > Models). A shared group's model changes in every instance."));
     ImGui::SameLine();
-    if (ImGui::Button("Export GLB..."))
-        OpenFileDialog("Export as GLB", ".glb", m_exportPath, [this](const std::string& path) {
+    if (ImGui::Button(T("Export GLB...")))
+        OpenFileDialog(T("Export as GLB"), ".glb", m_exportPath, [this](const std::string& path) {
             std::string e;
             std::snprintf(m_exportPath, sizeof(m_exportPath), "%s", path.c_str());
             if (!FExportGlb(m_plSel, m_exportKind, path, e)) Status("export: " + e);
         });
-    Tip("Writes the model, its textures (the texture pack's where there is one) and, for a character, the skeleton and animations.");
+    Tip(T("Writes the model, its textures (the texture pack's where there is one) and, for a character, the skeleton and animations."));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##exportkind", m_exportKind == 0 ? "object" : m_exportKind == 1 ? "group" : "character"))
+    if (ImGui::BeginCombo("##exportkind", m_exportKind == 0 ? T("object") : m_exportKind == 1 ? T("group") : T("character")))
     {
         for (int k = 0; k < 3; ++k) if (ImGui::Selectable(SzExportKind(k), m_exportKind == k)) m_exportKind = k;
         ImGui::EndCombo();
@@ -2968,19 +2968,19 @@ void CEditor::DrawModelSection(LO* plo)
         }
         ImGui::SameLine();
         ImGui::BeginGroup();
-        ImGui::Text("Material %zu", i);
+        ImGui::Text(T("Material %zu"), i);
         ImGui::SameLine();
-        ImGui::TextColored(st::vec(st::muted), "%s, %dx%d", pshd->shdk == 0 ? "unlit" : pshd->shdk == 1 ? "lit" : "special", dx, dy);
-        if (ImGui::SmallButton("Texture..."))
-            OpenFileDialog("Replace the texture", "Images{.png,.jpg,.jpeg}", m_texPath, [this, i](const std::string& path) {
+        ImGui::TextColored(st::vec(st::muted), "%s, %dx%d", pshd->shdk == 0 ? T("unlit") : pshd->shdk == 1 ? T("lit") : T("special"), dx, dy);
+        if (ImGui::SmallButton(T("Texture...")))
+            OpenFileDialog(T("Replace the texture"), "Images{.png,.jpg,.jpeg}", m_texPath, [this, i](const std::string& path) {
                 std::string e;
                 std::snprintf(m_texPath, sizeof(m_texPath), "%s", path.c_str());
                 if (!FImportTexture(path, m_plSel, int(i), m_texMode, e)) Status("texture: " + e);
             });
-        Tip("A PNG / JPEG for this material. Texture pack (default): at its own size, every model using the texture. Game data: resized into the bitmap.");
+        Tip(T("A PNG / JPEG for this material. Texture pack (default): at its own size, every model using the texture. Game data: resized into the bitmap."));
         ImGui::SameLine();
-        if (ImGui::SmallButton("PNG..."))
-            OpenFileDialog("Save the texture as PNG", ".png", m_texPath, [this, pshd](const std::string& path) {
+        if (ImGui::SmallButton(T("PNG...")))
+            OpenFileDialog(T("Save the texture as PNG"), ".png", m_texPath, [this, pshd](const std::string& path) {
                 const TEXSEL sel = TexselFromShd(pshd, 0, ItexColour(pshd));
                 std::vector<uint8_t> rgba;
                 std::string e;
@@ -2988,78 +2988,84 @@ void CEditor::DrawModelSection(LO* plo)
                 if (md::savePng(ce::pathOf(path), ImageFromDecoded(rgba, sel.pbmp->dx, sel.pbmp->dy, ""), e)) Status("wrote " + path);
                 else Status("png: " + e);
             });
-        Tip("The texture as the game decodes it (paint over it and load it back with Texture...).");
+        Tip(T("The texture as the game decodes it (paint over it and load it back with Texture...)."));
         ImGui::SameLine();
         bool fLit = pshd->shdk == 1;
-        if ((pshd->shdk == 0 || pshd->shdk == 1) && ImGui::Checkbox("lit", &fLit))
+        if ((pshd->shdk == 0 || pshd->shdk == 1) && ImGui::Checkbox(T("lit"), &fLit))
         {
             std::string e;
             const uint32_t argba[3] = {pshd->argba[0], pshd->argba[1], pshd->argba[2]};
             if (!FSetMaterial(m_plSel, int(i), fLit ? 1 : 0, pshd->grfshd, argba, pshd->atex.empty() ? 0 : pshd->atex[0].grftex, e)) Status("material: " + e);
         }
-        Tip("Lit by the level's lights (as characters and props) or flat (the texture times the vertex colours).");
+        Tip(T("Lit by the level's lights (as characters and props) or flat (the texture times the vertex colours)."));
         ImGui::EndGroup();
         ImGui::PopID();
     }
     ImGui::SetNextItemWidth(160);
-    ImGui::Combo("texture import", &m_texMode, "texture pack (full size)\0game data (resized)\0");
-    Tip("Texture pack: Textures/<name>.png in the package (the game's own texture untouched, any size, mipmapped). Game data: the PNG re-encoded into the bitmap and its palettes.");
+    {
+        const char* const asz[] = {T("texture pack (full size)"), T("game data (resized)")};
+        ImGui::Combo(T("texture import"), &m_texMode, asz, 2);
+    }
+    Tip(T("Texture pack: Textures/<name>.png in the package (the game's own texture untouched, any size, mipmapped). Game data: the PNG re-encoded into the bitmap and its palettes."));
 }
 
 void CEditor::DrawModels()
 {
-    ImGui::TextWrapped("Bring your own models and textures in, or take the game's out (glTF 2.0 .glb / .gltf, FBX). Blender: export glTF with +Y up (the default); 1 unit = 1 metre.");
-    ImGui::SeparatorText("Import options");
+    ImGui::TextWrapped("%s", T("Bring your own models and textures in, or take the game's out (glTF 2.0 .glb / .gltf, FBX). Blender: export glTF with +Y up (the default); 1 unit = 1 metre."));
+    ImGui::SeparatorText(T("Import options"));
     ImGui::SetNextItemWidth(120);
-    ImGui::DragFloat("scale (game units per file unit)", &m_importScale, 1.0f, 1.0f, 10000.0f, "%.0f");
-    Tip("The game measures in centimetres: 100 makes a 1 m model 100 units (Sly is about 110 tall).");
+    ImGui::DragFloat(T("scale (game units per file unit)"), &m_importScale, 1.0f, 1.0f, 10000.0f, "%.0f");
+    Tip(T("The game measures in centimetres: 100 makes a 1 m model 100 units (Sly is about 110 tall)."));
     ImGui::SetNextItemWidth(120);
-    ImGui::SliderInt("largest texture in the game data", &m_importMaxTex, 16, 512);
-    Tip("The game's copy of each texture (indexed, 256 colours). The full image also goes into the package's Textures/, which the game draws instead.");
-    ImGui::Checkbox("lit (like the game's props)", &m_importLit);
+    ImGui::SliderInt(T("largest texture in the game data"), &m_importMaxTex, 16, 512);
+    Tip(T("The game's copy of each texture (indexed, 256 colours). The full image also goes into the package's Textures/, which the game draws instead."));
+    ImGui::Checkbox(T("lit (like the game's props)"), &m_importLit);
     ImGui::SameLine();
-    ImGui::Checkbox("cel outline", &m_importOutline);
-    Tip("The black cel border along the silhouette, made from the mesh's shared edges.");
+    ImGui::Checkbox(T("cel outline"), &m_importOutline);
+    Tip(T("The black cel border along the silhouette, made from the mesh's shared edges."));
     ImGui::SetNextItemWidth(160);
-    ImGui::Combo("collision", &m_importCollision, "kept as it is\0none\0a box around the model\0");
-    Tip("What Sly stands on: the replaced object's own collision, none, or a box fitted to the new model.");
-    ImGui::SeparatorText("Import");
-    if (ImGui::Button("As a new object..."))
-        OpenFileDialog("Import a model as a new object", "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
+    {
+        const char* const asz[] = {T("kept as it is"), T("none"), T("a box around the model")};
+        ImGui::Combo(T("collision"), &m_importCollision, asz, 3);
+    }
+    Tip(T("What Sly stands on: the replaced object's own collision, none, or a box fitted to the new model."));
+    ImGui::SeparatorText(T("Import"));
+    if (ImGui::Button(T("As a new object...")))
+        OpenFileDialog(T("Import a model as a new object"), "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
             std::string e;
             std::snprintf(m_importPath, sizeof(m_importPath), "%s", path.c_str());
             if (!FImportModel(path, m_plSel, true, e)) Status("import: " + e);
         });
-    Tip("Placed in front of the camera (on the ground below), in the level's group: a copy of the selected plain object, or of a plain one of the level.");
+    Tip(T("Placed in front of the camera (on the ground below), in the level's group: a copy of the selected plain object, or of a plain one of the level."));
     ImGui::SameLine();
     ImGui::BeginDisabled(m_plSel == nullptr);
-    if (ImGui::Button("In place of the selection's model..."))
-        OpenFileDialog("Replace the model", "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
+    if (ImGui::Button(T("In place of the selection's model...")))
+        OpenFileDialog(T("Replace the model"), "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
             std::string e;
             std::snprintf(m_importPath, sizeof(m_importPath), "%s", path.c_str());
             if (!FImportModel(path, m_plSel, false, e)) Status("import: " + e);
         });
     ImGui::EndDisabled();
-    ImGui::SeparatorText("Export");
+    ImGui::SeparatorText(T("Export"));
     ImGui::BeginDisabled(m_plSel == nullptr);
     for (int k = 0; k < 3; ++k)
     {
         if (ImGui::RadioButton(SzExportKind(k), m_exportKind == k)) m_exportKind = k;
     }
     if (m_exportKind == 2) DrawCharAnimOptions(m_exportAnim, m_exportFps, m_exportReduce);
-    if (ImGui::Button("Export the selection as GLB..."))
-        OpenFileDialog("Export as GLB", ".glb", m_exportPath, [this](const std::string& path) {
+    if (ImGui::Button(T("Export the selection as GLB...")))
+        OpenFileDialog(T("Export as GLB"), ".glb", m_exportPath, [this](const std::string& path) {
             std::string e;
             std::snprintf(m_exportPath, sizeof(m_exportPath), "%s", path.c_str());
             if (!FExportGlb(m_plSel, m_exportKind, path, e)) Status("export: " + e);
         });
     ImGui::EndDisabled();
-    if (!m_lastExport.empty()) ImGui::TextColored(st::vec(st::muted), "Last: %s", m_lastExport.c_str());
-    ImGui::SeparatorText("Round trip");
-    ImGui::TextWrapped("A character exported here keeps its joints' names (\"MURRAY#9.31\": object 9, record 31; a limb's joints add "
+    if (!m_lastExport.empty()) ImGui::TextColored(st::vec(st::muted), T("Last: %s"), m_lastExport.c_str());
+    ImGui::SeparatorText(T("Round trip"));
+    ImGui::TextWrapped("%s", T("A character exported here keeps its joints' names (\"MURRAY#9.31\": object 9, record 31; a limb's joints add "
                        "their part, \"_thigh_L\"; \"_deform\" joints carry a joint's squash and stretch). Edit the mesh in Blender, keep "
                        "the armature and the names, and import it back in place of the character's model: it stays skinned and animated. "
-                       "Imported parts have no shader animations (blinks, scrolling) and use the level's lights.");
+                       "Imported parts have no shader animations (blinks, scrolling) and use the level's lights."));
 }
 
 void CEditor::DrawHelp()
@@ -3067,27 +3073,30 @@ void CEditor::DrawHelp()
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     if (m_fShowHelp)
     {
-        ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(600, 0), ImGuiCond_Appearing);
         ImGui::SetNextWindowPos(ImVec2(size.x * 0.5f - (m_fShowKeys ? 200.0f : 0.0f), size.y * 0.42f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowBgAlpha(1.0f);
-        if (ImGui::Begin("Getting started", &m_fShowHelp, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+        if (ImGui::Begin(TL("Getting started", "help").c_str(), &m_fShowHelp, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
         {
-            auto step = [](const char* head, const char* body) {
-                ImGui::TextColored(st::vec(st::accent), "%s", head);
+            int n = 0;
+            auto step = [&n](const char* head, const char* body) {
+                ImGui::TextColored(st::vec(st::accent), "%d  %s", ++n, head);
                 ImGui::Indent();
                 ImGui::TextWrapped("%s", body);
                 ImGui::Unindent();
                 ImGui::Spacing();
             };
-            step("1  Look around", "Hold the right mouse button and use W A S D (Q / E down / up, Shift faster, the wheel sets the speed). Click an object to select it; F frames it.");
-            step("2  Change things", "Drag the gizmo's arrows (W move, E rotate, R scale) or type numbers in the Inspector. Options, curves, scripts, text and missions have their own panels.");
-            step("3  Add things", "World > Create places copies of the level's objects; World > Models imports your own .glb / .fbx models; the Inspector's Model section replaces a model or a texture.");
-            step("4  Try it", "Play test starts the game in this world with your project. Ctrl+Z undoes anything, also after reopening.");
-            step("5  Share it", "Ctrl+S saves the project: it is a mod package. Project > Install puts it in Sly 2's mods folder; Export as .zip makes a file to share.");
+            step(T("Look around"), T("Hold the right mouse button and use W A S D (Q / E down / up, Shift faster, the wheel sets the speed). Click an object to select it; F frames it."));
+            step(T("Find things"), T("The Outliner (right) lists every object by type: search it, hide or isolate a group. Ctrl+click selects several, a drag in empty space with the select tool (Q) draws a box."));
+            step(T("Change things"), T("Drag the gizmo's arrows (W move, E rotate, R scale) or type numbers in Properties. Grid and angle snapping are on the status bar."));
+            step(T("Build"), T("The bottom panel's Create tab makes blocks, ramps, stairs and floors, ledges, pipes, ropes, doors, uses, crawl spaces and keys; Assets places props from this level or another."));
+            step(T("Tell a story"), T("Missions: jobs and their tasks. States: how the level changes as the story goes on, and states of your own. Level: brand-new levels. View > Cutscene timeline: cutscenes."));
+            step(T("Try it"), T("Play test starts the game in this level with your project (its arrow: a job, a task, or Sly at the view's point). Ctrl+Z undoes anything, also after reopening."));
+            step(T("Share it"), T("Ctrl+S saves the project: it is a mod package. Project > Install puts it in the game's mods folder; Export as .zip makes a file to share."));
             ImGui::Separator();
-            ImGui::Checkbox("Show at start", &m_fHelpAtStart);
-            ImGui::SameLine(ImGui::GetWindowWidth() - 150);
-            if (ImGui::Button("Keyboard shortcuts")) m_fShowKeys = true;
+            ImGui::Checkbox(T("Show at start"), &m_fHelpAtStart);
+            ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(T("Keyboard shortcuts")).x - 30.0f);
+            if (ImGui::Button(T("Keyboard shortcuts"))) m_fShowKeys = true;
         }
         ImGui::End();
     }
@@ -3095,17 +3104,21 @@ void CEditor::DrawHelp()
     {
         ImGui::SetNextWindowPos(ImVec2(size.x * 0.5f + (m_fShowHelp ? 330.0f : 0.0f), size.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowBgAlpha(1.0f);
-        if (ImGui::Begin("Keyboard shortcuts", &m_fShowKeys, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+        if (ImGui::Begin(TL("Keyboard shortcuts", "keys").c_str(), &m_fShowKeys, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
         {
-            static const char* const s_akey[][2] = {
-                {"Right mouse + W A S D", "fly"}, {"Q / E (while flying)", "down / up"}, {"Shift (while flying)", "faster"}, {"Mouse wheel", "flying speed"},
-                {"Left click", "select (on a curve: a point)"}, {"W / E / R", "move / rotate / scale"}, {"F", "frame the selection"},
-                {"Ctrl+D", "duplicate"}, {"Delete", "delete"}, {"Ctrl+Z / Ctrl+Y", "undo / redo (Ctrl+Shift+Z redo)"}, {"Ctrl+S", "save"},
-                {"F1", "getting started"}, {"Enter (in a field)", "apply the value"},
+            const char* const akey[][2] = {
+                {T("Right mouse + W A S D"), T("fly")}, {T("Q / E (while flying)"), T("down / up")}, {T("Shift (while flying)"), T("faster")},
+                {T("Mouse wheel"), T("flying speed")}, {T("Left click"), T("select (on a curve: a point)")}, {T("Ctrl+click"), T("add to / take from the selection")},
+                {"Q", T("the select tool (a drag in empty space: a box)")}, {T("W / E / R"), T("move / rotate / scale")}, {"F", T("frame the selection")},
+                {"H / Alt+H", T("hide the selection / show everything")}, {"I", T("isolate the selection (again: show all)")},
+                {"[ / ]", T("grid size smaller / larger")}, {T("Esc"), T("select nothing")}, {T("Ctrl+A"), T("select all")},
+                {T("Ctrl+C / Ctrl+V"), T("copy / paste (Ctrl+Shift+V: in place)")}, {T("Ctrl+D"), T("duplicate")},
+                {T("Delete"), T("delete")}, {T("Ctrl+Z / Ctrl+Y"), T("undo / redo (Ctrl+Shift+Z redo)")}, {T("Ctrl+S"), T("save")},
+                {"F1", T("getting started")}, {T("Enter (in a field)"), T("apply the value")},
             };
             if (ImGui::BeginTable("keys", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
             {
-                for (const auto& k : s_akey)
+                for (const auto& k : akey)
                 {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);

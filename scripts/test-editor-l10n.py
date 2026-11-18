@@ -54,6 +54,37 @@ def keys():
     i = t.index("char* SzVisGroup")
     for m in re.finditer(r'return "([^"]*)"', t[i:i + 1500]):
         add(m.group(1))
+    n = (ROOT / "editor" / "game" / "editor_names2.h").read_text(encoding="utf-8")
+    i = n.index("SzClassFriendly(int cid)")
+    for m in re.finditer(r'return "([^"]*)"', n[i:n.index("default:", i)]):
+        add(m.group(1))
+    # (the cutscene editor's command catalogue and track kinds, Sly2-Release/cutscene.cpp: their names go through T())
+    cut = (ROOT / "Sly2-Release" / "cutscene.cpp").read_text(encoding="utf-8")
+    for m in re.finditer(r'add\(0x[0-9A-F]+, "([^"]*)", "', cut):
+        add(m.group(1))
+    # (their descriptions too: each command's tooltip, its arguments' names and tooltips, the easing curves' names)
+    i0 = cut.index("std::vector<CMDDESC> MakeCatalogue()")
+    cat = cut[i0:cut.index("return a;", i0)]
+    for m in re.finditer(r'\{(?:0x[0-9A-F]+|B), "([^"]*)", PK_\w+, "([^"]*)"\}', cat):
+        add(m.group(1))
+        add(m.group(2))
+    for m in re.finditer(r'\badd\(0x[0-9A-F]+,', cat):
+        d, j = 0, m.start() + 3   # (its "(")
+        while j < len(cat):
+            d += {"(": 1, ")": -1}.get(cat[j], 0)
+            if d == 0:
+                break
+            j += 1
+        lits = re.findall(r'"((?:[^"\\]|\\.)*)"', cat[m.start():j])
+        if lits:
+            k = lits[-1]
+            add(bytes(k, "utf-8").decode("unicode_escape").encode("latin-1").decode("utf-8") if "\\" in k else k)
+    i = cut.index("const char* SzEase(int icurve)")
+    for m in re.finditer(r'return "([^"]*)"', cut[i:cut.index("}", cut.index("default:", i))]):
+        add(m.group(1))
+    i = cut.index("SzTrack(TRACKK tk)")
+    for m in re.finditer(r'"([^"]*)"', cut[i:cut.index("};", i)]):
+        add(m.group(1))
     for w in ("Sly", "Bentley", "Murray", "Everyone", "Sly and Bentley", "locked", "available", "done and closed", "Progress",
               "Block", "Ramp", "Stairs", "Cylinder", "Crawl tunnel", "Mesh", "Characters", "Gameplay", "Paths / traversal", "Lighting"):
         add(w)
@@ -102,8 +133,8 @@ def main():
             print(f"  format / spaces: {k!r}")
         if glyph:
             print("  no glyph: " + "".join(glyph[:40]))
-        # (strings equal to the English are fine: proper names, "Laser", "Volume"; more than 15% left as the English is not)
-        if stale or bad or glyph or untranslated > len(ks) * 0.15:
+        # (every string in every language: a proper name or a word the language shares ("Laser") is given as it is)
+        if stale or bad or glyph or untranslated:
             fail = True
     print("test-editor-l10n: " + ("FAIL" if fail else "PASS"))
     return 1 if fail else 0

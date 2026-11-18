@@ -51,6 +51,13 @@ int CbOfValueKind(int k)
     }
 }
 bool FFloatKind(int k) { return k == 1 || k == 2 || k == 9 || k == 10; }
+// at most cb bytes of a UTF-8 text, not cutting a letter (the translated names)
+std::string Utf8Cut(const std::string& s, std::size_t cb)
+{
+    if (s.size() <= cb) return s;
+    while (cb > 0 && (static_cast<unsigned char>(s[cb]) & 0xC0) == 0x80) --cb;
+    return s.substr(0, cb);
+}
 constexpr float c_dtFrame = 1.0f / 60.0f;
 }  // namespace
 
@@ -78,9 +85,11 @@ struct CSCMD
     // its place on the timeline
     float t0 = 0.0f, t1 = 0.0f;         // shown from / to
     float tHold = 0.0f;                 // how long it holds its track (0: the next starts at once)
+    float tExec = 0.0f;                 // when its track runs it (a shot's end is shown at its arrival: t0 moved)
     bool fMeasured = false, fRan = false, fEstimate = false;
     int itrack = -1, lane = 0;          // its track and its row there (clips that overlap stack)
     int oidActor = -1;                  // the object it acts on (-1: none / the track's)
+    int icPair = -1;                    // a letterbox's "Pause game" off (its clip's end)
     float G(uint32_t ib) const { float g; std::memcpy(&g, &an[(ib - 0x10) / 4], 4); return g; }
     int N(uint32_t ib) const { return an[(ib - 0x10) / 4]; }
 };
@@ -139,6 +148,8 @@ struct CSTRACE
     std::vector<RUN> arun;
     int oidPlayer = -1;
 };
+
+struct AKDATA;   // (editor_cutclip.inc: an animation's data as the level stores it)
 
 class CCutsceneEditor
 {
@@ -228,6 +239,7 @@ private:
     void DrawAddMenu(int icBefore);
     float m_pps = 60.0f, m_tView = 0.0f;   // pixels per second, the view's first second
     int m_isel = -1;
+    int m_itab = 0, m_itabWanted = -1;     // the scene's inspector tab (Scene / Start it / Add / Characters)
     int m_dragKind = 0;                    // 1 the clip moved, 2 its end, 3 the playhead, 4 the loop range
     float m_dragT0 = 0.0f, m_dragDt = 0.0f;
     bool m_fByRun = false;                 // the tracks by the script's own tracks (runners), not by kind
@@ -257,6 +269,7 @@ private:
                            bool fCurved = false, float faceDeg = NAN);
     glm::vec3 ActorPosAt(int oidActor, float t, float* pheading) const;
     void DrawPathPanel();
+    bool FCharacterCombo(const char* label, int& oid);
     int m_oidPathActor = -1, m_oidArriveAnim = -1;
     bool m_fPathWalk = true, m_fPathCurved = false, m_fPathFace = false;
     float m_pathFaceDeg = 0.0f;
@@ -268,9 +281,56 @@ private:
     float m_keyBlend = 1.0f;
     int m_keyEase = 3;
     // cinematic animations' channels and keys as sub-tracks (step 4)
-    struct SUBROW { std::string name; std::vector<float> at; bool fEvents = false; };
+    struct SUBROW { std::string name; std::vector<float> at; bool fEvents = false; int oid = INT_MIN; };
     std::vector<SUBROW> SubrowsOf(const CSCMD& c) const;
     ASEG* PasegOfClip(const CSCMD& c) const;
+    // round 3: the clips' keys edited (editor_cutclip.inc: the ASEG's bytes in the level), new clips from poses
+    bool FClipData(ASEG* paseg, AKDATA& d, std::string& rel, std::size_t& ib, std::size_t& cb, std::string& error) const;
+    bool FWriteClip(ASEG* paseg, const AKDATA& d, const std::string& label);
+    bool FEditClipKeys(const CSCMD& c, const SUBROW& row, float t, float tTo, bool fAdd, float tStretch = 0.0f);
+    void DrawClipPanel(const CSCMD& c);
+    void DrawNewClipPanel();
+    // round 3: the presentation track (editor_cutpresent.inc): letterbox, title cards, captions, fades
+    struct FADEINFO { float tIn = 0, tHold = 0, tOut = 0; uint8_t rgba[4] = {0, 0, 0, 0x80}; };
+    bool FFadeClip(const CSCMD& c) const;
+    bool FFadeOf(int oidFade, FADEINFO& fi) const;
+    bool FSetFadeOption(int oidFade, int eopid, const void* pv, const std::string& label);
+    void LayoutPresentation();
+    bool FAddSpanAtTime(float t, float len, int kindOn, const std::vector<std::pair<int, double>>& aOn, int kindOff, const std::vector<std::pair<int, double>>& aOff,
+                        const std::string& label);
+    bool FAddPresentation(int kind, float t, float len, const std::string& text, const float rgb[3], float tIn, float tOut, std::string& error);
+    void DrawPresentPanel();
+    void DrawPresentInspector(CSCMD& c);
+    bool FResizePresentation(int i, float dt);
+    bool FPresentEdge(const CSCMD& c) const;
+    bool FFadeAt(float t, float rgba[4]) const;
+    int m_presentKind = 0;
+    float m_presentLen = 2.0f, m_presentIn = 0.5f, m_presentOut = 0.5f, m_presentRgb[3] = {0, 0, 0};
+    char m_presentText[256] = "";
+    int m_fadePendingOid = -1;
+    float m_fadeRgbPending[3] = {0, 0, 0};
+    struct CLIPPOSE { int oidActor; int oidClip; float tClip; float at; };
+    std::vector<CLIPPOSE> m_apose;
+    int NewClipFromPoses(std::string& error);
+    int m_keyRow = 0;                          // the selected key: its sub-row and clip time (-1: none)
+    float m_keyT = -1.0f;
+    int m_keyDragRow = -1;                     // a key dragged on its row: from m_keyDragT0 by m_dragDt
+    float m_keyDragT0 = 0.0f;
+    // step 5: when it plays and what a skip does (the package's rule, mod.json "cutscenes"), events at a time, the
+    // previews of the subtitles / letterbox / title card at the playhead
+    cane::mods::CutsceneRule RuleOf() const;
+    void SetRule(const cane::mods::CutsceneRule& r);
+    void DrawRulePanel();
+    void DrawEventPanel();
+    bool FAddAtTime(float t, int kind, int variant, const std::vector<std::pair<int, double>>& aset, const std::string& label);
+    void DrawPreviewOverlay();
+    int m_eventKind = 0, m_eventValue = 1, m_eventObject = -1;
+    // step 6: the splice that starts it (the task's own script: editor_scriptdiag.inc FWriteSceneStarter)
+    void DrawStarterPanel();
+    int m_oidStarterTask = -1, m_starterState = 1, m_starterKind = 0, m_starterEvent = 1;
+    bool FWriteStarter(int kind, int oid, int value, const glm::vec3& pos, std::vector<std::string>& adiag, std::string& error);
+    std::vector<std::string> m_astarterDiag;
+    std::string m_starterNote;
     // recorded play sessions (step 2)
     void RecordSession();
     bool FImportSession(const std::string& path, int oidActor, float t, std::string& error);
@@ -760,9 +820,13 @@ void CCutsceneEditor::Layout()
     }
     // (a shot's end is the moment the camera arrives: shown there, its shot the clip before it)
     for (CSCMD& c : m_acmd)
+    {
+        c.tExec = c.t0;
         if (c.kind == 0x39) c.t0 = c.t1;
+    }
     m_tEnd = std::max(0.5f, tEnd);
     for (const CSCMD& c : m_acmd) m_tEnd = std::max(m_tEnd, c.t1);
+    LayoutPresentation();
 }
 
 void CCutsceneEditor::BuildTracks()
@@ -812,7 +876,7 @@ void CCutsceneEditor::BuildTrackList()
         return;
     }
     // by kind: the camera, the dialogue, each character, effects, sound, events, the flow
-    static const cut::TRACKK s_aorder[] = {cut::TK_Camera, cut::TK_Dialog, cut::TK_Actor, cut::TK_Effects, cut::TK_Sound, cut::TK_Events, cut::TK_Flow};
+    static const cut::TRACKK s_aorder[] = {cut::TK_Camera, cut::TK_Present, cut::TK_Dialog, cut::TK_Actor, cut::TK_Effects, cut::TK_Sound, cut::TK_Events, cut::TK_Flow};
     for (cut::TRACKK tk : s_aorder)
         for (CSCMD& c : m_acmd)
         {
@@ -820,6 +884,7 @@ void CCutsceneEditor::BuildTrackList()
             const cut::CMDDESC& d = cut::DescOfKind(c.kind);
             cut::TRACKK tkc = d.tk;
             if (c.kind == 0x23 && c.an[1] == -1 && c.an[2] == -1) tkc = cut::TK_Flow;   // (a plain wait)
+            if (FFadeClip(c)) tkc = cut::TK_Present;                                      // (a fade the script's event starts)
             if (tkc != tk) continue;
             if (tk == cut::TK_Actor)
             {
@@ -847,7 +912,12 @@ std::string CCutsceneEditor::Label(const CSCMD& c) const
         std::string s = e.StrText(c.an[0]);
         return std::string(T("Line")) + " " + std::to_string(c.an[0]) + (s.empty() ? "" : ": " + s);
     }
-    case 0x0A: return std::string(T("Animation")) + " " + NameOf(c.an[0]);
+    case 0x0A:
+    {
+        // (an animation's own name already says it: "Animation 124160")
+        const std::string n = NameOf(c.an[0]);
+        return n.rfind(T("Animation"), 0) == 0 || n.rfind("Animation", 0) == 0 ? n : std::string(T("Animation")) + " " + n;
+    }
     case 0x22: return std::string(T("Prize animation")) + " " + NameOf(c.an[0]);
     case 0x27: return std::string(c.N(0x18) ? T("Walk along") : T("Run along")) + " " + NameOf(c.an[0]);
     case 0x28: return std::string(c.N(0x18) ? T("Walk to") : T("Run to")) + " " + NameOf(c.an[0]);
@@ -860,10 +930,15 @@ std::string CCutsceneEditor::Label(const CSCMD& c) const
         return std::string(T(d.name)) + " " + NameOf(c.an[0]);
     case 0x0B: return std::string(T("Start script")) + " " + std::to_string(c.an[0]);
     case 0x0D: return std::string(T("State machine")) + " " + NameOf(c.an[0]) + " -> " + std::to_string(c.an[2]);
-    case 0x12: return c.an[0] ? T("Pause the game (scene starts)") : T("Unpause (scene ends)");
+    case 0x12:
+        if (c.an[0] && (c.an[1] & 1)) return T("Letterbox (the game paused)");
+        return c.an[0] ? T("Pause the game (scene starts)") : T("Unpause (scene ends)");
+    case 0x09:
+        if (FFadeClip(c)) return std::string(T("Fade")) + " " + std::to_string(c.an[0]);
+        return T(d.name);
     case 0x36: return std::string(T("Sound")) + " " + std::to_string(c.an[0]);
     case 0x4C: case 0x4D: return std::string(T(d.name)) + " " + std::to_string(c.an[0]);
-    case 0x53: return std::string(T("Hint")) + ": " + e.StrText(c.an[0]);
+    case 0x53: return std::string(T("Caption")) + ": " + e.StrText(c.an[0]);
     case 0x13: case 0x14: case 0x15: case 0x04: case 0x05: return std::string(T(d.name)) + " " + std::to_string(c.an[0]);
     default: return T(d.name);
     }
@@ -900,7 +975,7 @@ void CCutsceneEditor::StartTrace()
     // (absolute paths: the child starts in the executable's folder)
     std::vector<std::string> args{"--data-dir", ce::utf8(cane::fs::absolute(e.m_inst.dir, ec)), "--user-dir", ce::utf8(cane::fs::absolute(ce::pathOf(TraceDir()) / "user", ec)),
                                   "--mod-package", ce::utf8(cane::fs::absolute(dirPkg / ce::pathOf(e.m_proj.manifest.id), ec)),
-                                  "--world", std::to_string(e.m_eo.record), "--headless", "--fixed-dt", "--frames", "40000",
+                                  "--world", e.WorldArg(e.m_eo.record), "--headless", "--fixed-dt", "--frames", "40000",
                                   "--cutscene-trace", std::to_string(m_oid), "--cutscene-out", ce::utf8(cane::fs::absolute(ce::pathOf(m_tracePath), ec)), "--cutscene-max", "150"};
     if (m_taskMeasure > 0) args[7] += ":" + std::to_string(m_taskMeasure);
     if (m_measureMode == 1)
@@ -1652,7 +1727,7 @@ void CCutsceneEditor::PlayInGame(float t)
     std::snprintf(sz, sizeof sz, "%d@%.3f", m_oid, t);
     std::error_code ec;
     std::vector<std::string> args{"--data-dir", ce::utf8(cane::fs::absolute(e.m_inst.dir, ec)), "--user-dir", cane::utf8(cane::fs::absolute(cane::userDirectory(), ec)),
-                                  "--mod-package", ce::utf8(cane::fs::absolute(e.m_proj.dir, ec)), "--world", std::to_string(e.m_eo.record), "--play-scpt", sz};
+                                  "--mod-package", ce::utf8(cane::fs::absolute(e.m_proj.dir, ec)), "--world", e.WorldArg(e.m_eo.record), "--play-scpt", sz};
     if (e.m_fPlayDry)
     {
         std::string line;
@@ -1680,8 +1755,44 @@ int CCutsceneEditor::CreateCutscene(std::string& error)
         if (fBuilders && c > 1 && c < cBest) cBest = c, iobjBest = int(i);
     }
     if (iobjBest < 0) { error = T("no script in this world to start from"); return 0; }
-    const int oid = e.CopyRecord(iobjBest, e.LevelGroup(), nullptr, false, error);
+    // (into a group that has scripts, so the new scene can have a script module of its own: its fades, its events'
+    // handlers; the level's group, else another level group, else the copied script's own; the copy's module reset)
+    int igrpDest = e.LevelGroup();
+    auto fScripts = [&](int ig) { return ig >= 0 && ig < int(e.m_index.groups.size()) && !e.m_index.groups[std::size_t(ig)].scriptsPart.empty(); };
+    if (!fScripts(igrpDest))
+    {
+        int igrpAlt = -1;
+        for (const ce::GroupInfo& g : e.m_index.groups)
+            if (g.level && !g.scriptsPart.empty() && !g.objectsPart.empty() && igrpAlt < 0) igrpAlt = g.index;
+        std::string relSrc;
+        std::size_t ibSrc = 0, cbSrc = 0;
+        if (igrpAlt < 0 && e.FRecordRange(iobjBest, relSrc, ibSrc, cbSrc))
+            for (const ce::GroupInfo& g : e.m_index.groups)
+                if (g.objectsPart == relSrc && !g.scriptsPart.empty()) igrpAlt = g.index;
+        if (igrpAlt >= 0) igrpDest = igrpAlt;
+    }
+    const int oid = e.CopyRecord(iobjBest, igrpDest, nullptr, false, error);
     if (!oid) return 0;
+    for (std::size_t i = 0; i < e.m_rec.aobj.size(); ++i)
+        if (e.m_rec.aobj[i].oid == oid && e.m_rec.aobj[i].cid == EDCID(0x72) && e.m_rec.aobj[i].depth == 0)
+        {
+            std::string rel;
+            std::size_t ib = 0, cb = 0;
+            const std::vector<uint8_t>* pab = nullptr;
+            if (!e.FRecordRange(int(i), rel, ib, cb) || !(pab = e.m_proj.partRef(rel)) || ib + 16 > pab->size()) break;
+            int16_t n;
+            const std::size_t ibN = ib + IbOidOfRecord(pab->data() + ib) + 4;
+            std::memcpy(&n, pab->data() + ibN, 2);
+            if (n != -1)
+            {
+                n = -1;
+                e.m_proj.begin(std::string(T("New cutscene")) + " " + std::to_string(oid) + ": " + T("no script module"));
+                e.m_proj.patch(rel, ibN, &n, 2);
+                e.m_proj.end();
+                e.Reload(0);
+            }
+            break;
+        }
     // its commands: all but the first removed, the first replaced by the new scene's
     Open(oid);
     if (m_acmd.size() < 2 || !m_decodeNote.empty()) { error = T("the copy's commands cannot be edited"); return oid; }
@@ -1865,15 +1976,15 @@ int CCutsceneEditor::InsertPoint(float t) const
     // the main track's first command still holding it at t (or starting after it): a new track put before it starts
     // when the main track reaches it, then waits the rest
     for (const CSCMD& c : m_acmd)
-        if (c.ic > 1 && c.icBlock == 0 && c.kind != 1 && c.t0 + c.tHold > t + 1e-3f) return c.ic;
+        if (c.ic > 1 && c.icBlock == 0 && c.kind != 1 && c.tExec + c.tHold > t + 1e-3f) return c.ic;
     return int(m_acmd.size());
 }
 float CCutsceneEditor::TFreeAt(int iBefore) const
 {
-    if (iBefore >= 0 && iBefore < int(m_acmd.size())) return m_acmd[std::size_t(iBefore)].t0;
+    if (iBefore >= 0 && iBefore < int(m_acmd.size())) return m_acmd[std::size_t(iBefore)].tExec;
     float t = 0.0f;
     for (const CSCMD& c : m_acmd)
-        if (c.icBlock == 0 && c.ic > 0) t = std::max(t, c.t0 + c.tHold);
+        if (c.icBlock == 0 && c.ic > 0) t = std::max(t, c.tExec + c.tHold);
     return t;
 }
 
@@ -1949,21 +2060,28 @@ bool CCutsceneEditor::FNewCharacterPath(int oidActor, float t, const std::vector
     return true;
 }
 
-void CCutsceneEditor::DrawPathPanel()
+// the characters of the scene (its tracks') and the level's actors, as a combo
+bool CCutsceneEditor::FCharacterCombo(const char* label, int& oid)
 {
-    ImGui::SeparatorText(T("Character path"));
-    // the characters of the scene (its tracks') and the player
-    if (ImGui::BeginCombo(T("character"), m_oidPathActor >= 0 ? NameOf(m_oidPathActor).c_str() : T("choose")))
+    bool f = false;
+    if (ImGui::BeginCombo(label, oid >= 0 ? NameOf(oid).c_str() : T("choose")))
     {
         std::set<int> set;
         for (const CSTRACK& tr : m_atrack)
             if (tr.tk == cut::TK_Actor && tr.oid >= 0) set.insert(tr.oid);
         for (const auto& up : e.m_psw->aploAll)
             if (FIsLoDerivedFrom(up.get(), EDCID(0x34)) && set.size() < 40) set.insert(up->oid);
-        for (int oid : set)
-            if (ImGui::Selectable((NameOf(oid) + "##pa" + std::to_string(oid)).c_str(), oid == m_oidPathActor)) m_oidPathActor = oid;
+        for (int o : set)
+            if (ImGui::Selectable((NameOf(o) + "##pa" + std::to_string(o)).c_str(), o == oid)) { oid = o; f = true; }
         ImGui::EndCombo();
     }
+    return f;
+}
+
+void CCutsceneEditor::DrawPathPanel()
+{
+    ImGui::SeparatorText(T("Character path"));
+    FCharacterCombo(T("character"), m_oidPathActor);
     ImGui::Checkbox(T("walk"), &m_fPathWalk);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(70);
@@ -2017,7 +2135,7 @@ void CCutsceneEditor::RecordSession()
     cane::fs::create_directories(ce::pathOf(TraceDir()), ec);
     cane::fs::remove(ce::pathOf(SessionPath()), ec);
     std::vector<std::string> args{"--data-dir", ce::utf8(cane::fs::absolute(e.m_inst.dir, ec)), "--user-dir", cane::utf8(cane::fs::absolute(cane::userDirectory(), ec)),
-                                  "--world", std::to_string(e.m_eo.record), "--record-session", ce::utf8(cane::fs::absolute(ce::pathOf(SessionPath()), ec))};
+                                  "--world", e.WorldArg(e.m_eo.record), "--record-session", ce::utf8(cane::fs::absolute(ce::pathOf(SessionPath()), ec))};
     if (e.m_fPlayDry) { std::printf("editor: record: %s\n", SessionPath().c_str()); return; }
     if (!ce::spawnDetached(exe, args)) { e.Status("could not start " + ce::utf8(exe)); return; }
     m_fRecording = true;
@@ -2165,7 +2283,7 @@ bool CCutsceneEditor::FImportSession(const std::string& path, int oidActor, floa
     if (!m_decodeNote.empty()) { error = m_decodeNote; return false; }
     const int iBefore = InsertPoint(t);
     const float tWait = std::max(0.0f, t - TFreeAt(iBefore));
-    const std::string what = std::string(T("Cutscene")) + " " + std::to_string(oidScene) + ": " + T("the recording as") + " " + NameOf(oidActor) + T("'s track");
+    const std::string what = std::string(T("Cutscene")) + " " + std::to_string(oidScene) + ": " + T("the recording as the track of") + " " + NameOf(oidActor);
     int i = iBefore;
     bool fOk = FInsertCommand(i++, 0x00, 0, {{0x10, -1}}, what);
     if (fOk && tWait > 0.02f) { Decode(); fOk = FInsertCommand(i++, 0x23, 0, {{0x10, tWait}, {0x14, -1}, {0x18, -1}}, what); }
@@ -2220,10 +2338,10 @@ int CCutsceneEditor::IcShotOf(int icEnd) const
     return -1;
 }
 
-// the easing curves offered (the game's 0, 1, 3 and the PC's 6), with the curve drawn
+// the easing curves offered (the game's 0, 1, 3 and the PC's ease out), with the curve drawn
 bool CCutsceneEditor::FEaseCombo(const char* id, int& ease)
 {
-    static const int s_a[] = {0, 1, 6, 3};
+    static const int s_a[] = {0, 1, cut::ICURVE_EASEOUT, 3};
     bool f = false;
     if (ImGui::BeginCombo(id, T(cut::SzEase(ease))))
     {
@@ -2290,6 +2408,355 @@ bool CCutsceneEditor::FNewCameraKey(float t, float blend, int ease, std::string&
     return true;
 }
 
+// ---- when it plays, what a skip does (the package's rule, platform/mod_package.h CutsceneRule)
+
+cane::mods::CutsceneRule CCutsceneEditor::RuleOf() const
+{
+    for (const cane::mods::CutsceneRule& r : cane::mods::cutsceneRules(e.m_proj.manifest))
+        if (r.world == e.m_index.entry.name && r.script == m_oid) return r;
+    cane::mods::CutsceneRule r;
+    r.world = e.m_index.entry.name;
+    r.script = m_oid;
+    return r;
+}
+
+void CCutsceneEditor::SetRule(const cane::mods::CutsceneRule& r)
+{
+    cane::mods::setCutsceneRule(e.m_proj.manifest, r);
+    e.Status(std::string(T("Cutscene")) + " " + std::to_string(m_oid) + ": " + T("when it plays / its skip set (saved with the project)"));
+}
+
+void CCutsceneEditor::DrawRulePanel()
+{
+    ImGui::SeparatorText(T("When it plays"));
+    cane::mods::CutsceneRule r = RuleOf();
+    bool fChanged = false;
+    fChanged |= ImGui::Checkbox(T("only the first time"), &r.once);
+    EdTip(T("The script starts only the first time in a save (kept next to the save slot); later starts are left out"));
+    bool fTask = r.task >= 0;
+    if (ImGui::Checkbox(T("only while a task is"), &fTask)) { r.task = fTask ? 0 : -1; if (fTask && r.states.empty()) r.states = {1}; fChanged = true; }
+    if (fTask)
+    {
+        ImGui::SetNextItemWidth(90);
+        if (ImGui::InputInt("##rtask", &r.task, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) fChanged = true;
+        ImGui::SameLine();
+        if (ImGui::SmallButton(TL("selection", "rt").c_str()) && e.m_plSel) { r.task = e.m_plSel->oid; fChanged = true; }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", PloOfOid(r.task) ? NameOf(r.task).c_str() : T("(not in this world)"));
+        for (int n = 0; n <= 3; ++n)
+        {
+            bool f = std::find(r.states.begin(), r.states.end(), n) != r.states.end();
+            if (n) ImGui::SameLine();
+            if (ImGui::Checkbox((std::string(T(SzTaskState(n))) + "##rs" + std::to_string(n)).c_str(), &f))
+            {
+                r.states.erase(std::remove(r.states.begin(), r.states.end(), n), r.states.end());
+                if (f) r.states.push_back(n);
+                std::sort(r.states.begin(), r.states.end());
+                fChanged = true;
+            }
+        }
+    }
+    ImGui::SeparatorText(T("Skip"));
+    static const char* s_askip[] = {"auto", "always", "never"};
+    int iskip = r.skip == "always" ? 1 : r.skip == "never" ? 2 : 0;
+    const char* askipName[] = {T("as the game decides (scenes with lines or 3+ shots)"), T("always skippable"), T("never skippable")};
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Combo("##rskip", &iskip, askipName, 3)) { r.skip = s_askip[iskip]; fChanged = true; }
+    EdTip(T("Whether holding the skip button skips this scene. A skip plays the rest fast to its end (the tasks, places and objects end as when watched)"));
+    // (the labels of the script: where a skip may stop)
+    std::vector<int> alabel;
+    for (const CSCMD& c : m_acmd)
+        if (c.kind == 0x13) alabel.push_back(c.an[0]);
+    std::string cur = r.skipToLabel < 0 ? std::string(T("the scene's end")) : std::string(T("label")) + " " + std::to_string(r.skipToLabel);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(T("a skip runs to"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##rlabel", cur.c_str()))
+    {
+        if (ImGui::Selectable(T("the scene's end"), r.skipToLabel < 0)) { r.skipToLabel = -1; fChanged = true; }
+        for (int l : alabel)
+            if (ImGui::Selectable((std::string(T("label")) + " " + std::to_string(l)).c_str(), l == r.skipToLabel)) { r.skipToLabel = l; fChanged = true; }
+        ImGui::EndCombo();
+    }
+    EdTip(T("A label: the skip stops where the script reaches it and the rest plays (add a Label command there first)"));
+    if (fChanged) SetRule(r);
+}
+
+// An event at a time: a track of its own that waits until t, then runs the command (a task's state, an object shown /
+// hidden, a sound, the script's own splice event ...)
+bool CCutsceneEditor::FAddAtTime(float t, int kind, int variant, const std::vector<std::pair<int, double>>& aset, const std::string& label)
+{
+    if (!m_decodeNote.empty()) { e.Status(m_decodeNote); return false; }
+    const int iBefore = InsertPoint(t);
+    const float tWait = std::max(0.0f, t - TFreeAt(iBefore));
+    int i = iBefore;
+    bool fOk = FInsertCommand(i++, 0x00, 0, {{0x10, -1}}, label);
+    if (fOk && tWait > 0.02f) { Decode(); fOk = FInsertCommand(i++, 0x23, 0, {{0x10, std::round(tWait * 60.0f) / 60.0f}, {0x14, -1}, {0x18, -1}}, label); }
+    if (fOk) { Decode(); fOk = FInsertCommand(i++, kind, variant, aset, label); }
+    if (fOk) { Decode(); fOk = FInsertCommand(i++, 0x01, 0, {}, label); }
+    Decode();
+    if (fOk) m_isel = i - 2;
+    return fOk;
+}
+
+void CCutsceneEditor::DrawEventPanel()
+{
+    ImGui::SeparatorText(T("Event at the playhead"));
+    // (kind, its value's name)
+    struct EV { int kind; const char* name; const char* value; bool fObject; };
+    static const EV s_aev[] = {{0x11, "Set task state", "state", true}, {0x2C, "Show object", nullptr, true}, {0x2D, "Hide object", nullptr, true},
+                               {0x36, "Sound", "sound id", false}, {0x09, "Script event (splice)", "value", false}, {0x4C, "Music", "music", false},
+                               {0x44, "Title card", nullptr, false}, {0x33, "Rumble", nullptr, false}, {0x32, "Camera shake", "kind", false}};
+    const int cev = int(sizeof s_aev / sizeof s_aev[0]);
+    m_eventKind = std::clamp(m_eventKind, 0, cev - 1);
+    const EV& ev = s_aev[m_eventKind];
+    ImGui::SetNextItemWidth(170);
+    if (ImGui::BeginCombo("##evk", T(ev.name)))
+    {
+        for (int k = 0; k < cev; ++k)
+            if (ImGui::Selectable(T(s_aev[k].name), k == m_eventKind)) m_eventKind = k;
+        ImGui::EndCombo();
+    }
+    if (ev.fObject)
+    {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputInt("##evo", &m_eventObject, 0, 0);
+        ImGui::SameLine();
+        if (ImGui::SmallButton(TL("selection", "evo").c_str()) && e.m_plSel) m_eventObject = e.m_plSel->oid;
+        EdTip(T("The task / object (its id; selection: the one selected in the 3D view)"));
+    }
+    if (ev.value)
+    {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70);
+        ImGui::InputInt((std::string("##evv") + ev.value).c_str(), &m_eventValue, 0, 0);
+        EdTip(T(ev.value));
+    }
+    if (ImGui::Button(T("Add the event at the playhead")))
+    {
+        std::vector<std::pair<int, double>> a;
+        switch (ev.kind)
+        {
+        case 0x11: a = {{0x10, m_eventObject}, {0x14, m_eventValue}}; break;
+        case 0x2C: case 0x2D: a = {{0x10, m_eventObject}, {0x14, 0.0}, {-2, 1}}; break;
+        case 0x36: a = {{0x10, m_eventValue}, {0x14, -1}, {0x18, 1000.0}, {0x1C, 3000.0}, {0x20, 1.0}, {0x24, 0.0}, {0x28, 1.0}}; break;
+        case 0x33: a = {{0x10, 0.5}, {0x14, 0}, {-2, 1}}; break;
+        case 0x32: a = {{0x10, m_eventValue}, {-2, 1}}; break;
+        default: a = {{0x10, m_eventValue}}; break;
+        }
+        char sz[32];
+        std::snprintf(sz, sizeof sz, "%.2f", m_t);
+        FAddAtTime(m_t, ev.kind, 0, a, std::string(T("Cutscene")) + " " + std::to_string(m_oid) + ": " + T(ev.name) + " " + T("at") + " " + sz + " s");
+    }
+    EdTip(T("A track of its own waits until the playhead's time, then runs it (the scene's own tracks are not held)"));
+}
+
+// The starter: the scene started from a task's own script when the task becomes a state, or from another object's
+// script (a volume / trigger entered, an object used, a job's start / end, another script's event, a new button
+// press zone), written in the readable (named) script format and checked first
+namespace
+{
+const char* SzStarterKind(int k)
+{
+    static const char* s_a[] = {"a task's state", "Sly enters a volume / trigger", "an object is used", "a job starts", "a job ends",
+                                "an event from another script", "a button press zone (new)"};
+    return k >= 0 && k < 7 ? s_a[k] : "?";
+}
+}  // namespace
+
+// kind: 0 task (oid, value: its state), 1 volume / trigger, 2 object used, 3 job start, 4 job end, 5 another script's
+// event (oid: the script, value: the event's value), 6 a new button press zone (a copy of the level's use spot at pos)
+bool CCutsceneEditor::FWriteStarter(int kind, int oid, int value, const glm::vec3& pos, std::vector<std::string>& adiag, std::string& error)
+{
+    adiag.clear();
+    const std::string name = "$cutscene-" + std::to_string(m_oid);
+    const std::string call = "((<geto> (<find-object> " + name + " #obj:0) .trigger) #obj:0)";
+    LO* plo = PloOfOid(oid);
+    switch (kind)
+    {
+    case 0:
+        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x85))) { error = T("choose a task"); return false; }
+        return e.FWriteSceneStarter(m_oid, plo, value, adiag, error);
+    case 1:
+        if (!plo || !(FIsLoDerivedFrom(plo, EDCID(0x05)) || FIsLoDerivedFrom(plo, EDCID(0x18)) || FIsLoDerivedFrom(plo, EDCID(0x16)))) { error = T("choose a volume, trigger volume or shape"); return false; }
+        return e.FWriteObjectHandler(plo, "on-activate", {"self"}, call, {{name, m_oid}}, adiag, error, true);
+    case 2:
+        if (!plo) { error = T("choose the object that is used"); return false; }
+        return e.FWriteObjectHandler(plo, "on-activate", {"self"}, call, {{name, m_oid}}, adiag, error, true);
+    case 3: case 4:
+    {
+        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x84))) { error = T("choose a job"); return false; }
+        int oidTask = -1;
+        if (!e.FOptionInt(plo, EDEOPID(kind == 3 ? 1243 : 1244), oidTask) || !PloOfOid(oidTask)) { error = T("the job's first / last task was not found"); return false; }
+        if (kind == 3) return e.FWriteObjectHandler(PloOfOid(oidTask), "on-task-start", {"self"}, call, {{name, m_oid}}, adiag, error, true);
+        return e.FWriteObjectHandler(PloOfOid(oidTask), "on-task-state", {"self"}, "(if (<=> (<geto> %self .state) 2) " + call + ")", {{name, m_oid}}, adiag, error, true);
+    }
+    case 5:
+        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x72)) || plo == m_pscpt) { error = T("choose another script"); return false; }
+        return e.FWriteObjectHandler(plo, "on-event", {"self", "event"}, "(if (<=> %1 " + std::to_string(value) + ") " + call + ")", {{name, m_oid}}, adiag, error, true);
+    case 6:
+    {
+        int iobj = -1;
+        for (std::size_t i = 0; i < e.m_rec.aobj.size() && iobj < 0; ++i)
+            if ((e.m_rec.aobj[i].cid == EDCID(0x23) || e.m_rec.aobj[i].cid == EDCID(0x24)) && e.m_rec.aobj[i].plo && e.m_rec.aobj[i].depth == 0) iobj = int(i);
+        if (iobj < 0) { error = T("this level has no use spot to copy for a button press zone"); return false; }
+        const int oidZone = e.CopyRecord(iobj, e.CopyGroup(), &pos, false, error);
+        if (!oidZone) return false;
+        Decode();
+        if (!e.FWriteObjectHandler(PloOfOid(oidZone), "on-activate", {"self"}, call, {{name, m_oid}}, adiag, error, true)) return false;
+        adiag.push_back(std::string(T("the button press zone:")) + " " + NameOf(oidZone));
+        return true;
+    }
+    default: error = "?"; return false;
+    }
+}
+
+void CCutsceneEditor::DrawStarterPanel()
+{
+    ImGui::SeparatorText(T("Start it from"));
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##stkind", T(SzStarterKind(m_starterKind))))
+    {
+        for (int k = 0; k < 7; ++k)
+            if (ImGui::Selectable(T(SzStarterKind(k)), k == m_starterKind)) m_starterKind = k;
+        ImGui::EndCombo();
+    }
+    LO* pt = nullptr;
+    if (m_starterKind != 6)
+    {
+        ImGui::SetNextItemWidth(90);
+        ImGui::InputInt("##sttask", &m_oidStarterTask, 0, 0);
+        ImGui::SameLine();
+        if (ImGui::SmallButton(TL("selection", "st").c_str()) && e.m_plSel) m_oidStarterTask = e.m_plSel->oid;
+        EdTip(T("The task / volume / object / job / script (its id; selection: the one selected in the 3D view)"));
+        ImGui::SameLine();
+        pt = PloOfOid(m_oidStarterTask);
+        ImGui::TextDisabled("%s", pt ? NameOf(m_oidStarterTask).c_str() : T("(choose one)"));
+    }
+    if (m_starterKind == 0)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(T("when it becomes"));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(130);
+        if (ImGui::BeginCombo("##ststate", T(SzTaskState(m_starterState))))
+        {
+            for (int n = 0; n <= 3; ++n)
+                if (ImGui::Selectable(T(SzTaskState(n)), n == m_starterState)) m_starterState = n;
+            ImGui::EndCombo();
+        }
+    }
+    if (m_starterKind == 5)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(T("its event's value"));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70);
+        ImGui::InputInt("##stev", &m_starterEvent, 0, 0);
+        EdTip(T("The value of the other script's \"Script event\" command that starts this cutscene (add one to that script where it should start)"));
+        if (pt && FIsLoDerivedFrom(pt, EDCID(0x72)))
+        {
+            std::string sent;
+            int kind = 0, b = 0;
+            int32_t an[18];
+            for (int i = 0; FScptCommand(pt, i, kind, b, an); ++i)
+                if (kind == 0x09) sent += (sent.empty() ? "" : ", ") + std::to_string(an[0]);
+            ImGui::TextDisabled("%s %s", T("the events it sends:"), sent.empty() ? T("(none yet)") : sent.c_str());
+        }
+    }
+    if (m_starterKind == 6) ImGui::TextWrapped("%s", T("A new use spot (the level's own, copied) where the view looks: Sly presses the button there and the cutscene starts. Move it with the gizmo after."));
+    if (ImGui::Button(T("Write the starter script")))
+    {
+        std::string error;
+        glm::vec3 pos = e.m_cam.pos + e.m_cam.Dir() * 400.0f;
+        m_starterNote = FWriteStarter(m_starterKind, m_oidStarterTask, m_starterKind == 5 ? m_starterEvent : m_starterState, pos, m_astarterDiag, error)
+                            ? std::string(T("written in its script (readable, with names)"))
+                            : error;
+        e.Status(m_starterNote);
+        WhoStarts();
+    }
+    EdTip(T("Adds to the object's own script (a task's on-task-start, a volume's or a used object's on-activate, a script's on-event; a module of its own is made when it has none) the line that starts the cutscene, as the game's own scripts start theirs. Checked first: a script with errors is not written. See it in the Scripts tab."));
+    if (!m_starterNote.empty()) ImGui::TextWrapped("%s", m_starterNote.c_str());
+    for (const std::string& d : m_astarterDiag) ImGui::BulletText("%s", d.c_str());
+}
+
+// The playhead's subtitle, the letterbox while the scene has the game paused with its bars, the title card (over the 3D
+// view, as the game shows them)
+void CCutsceneEditor::DrawPreviewOverlay()
+{
+    if (!m_oid) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const float top = ImGui::GetFrameHeight();
+    const float yBottom = size.y - 36 - std::max(260.0f, (size.y - top) * 0.42f);   // (the timeline's top)
+    // the letterbox: from a "Pause game" with the subtitle box and its bars (what & 1, ai.cpp PauseGame) to its end
+    bool fBars = false, fTitle = false;
+    for (const CSCMD& c : m_acmd)
+    {
+        if (c.kind == 0x12 && c.an[0] && (c.an[1] & 1) && c.t0 <= m_t + 1e-4f)
+        {
+            // (to its own "Pause game" off: of its track, LayoutPresentation)
+            const float tOff = c.icPair >= 0 ? m_acmd[std::size_t(c.icPair)].t0 : m_tEnd + 1.0f;
+            fBars = fBars || m_t < tOff;
+        }
+        if (c.kind == 0x44 && c.t0 <= m_t && m_t < c.t1) fTitle = true;
+    }
+    if (fBars && m_fLookActive)
+    {
+        const float h = size.y * 0.1f;
+        dl->AddRectFilled(ImVec2(0, top), ImVec2(size.x, top + h), IM_COL32(0, 0, 0, 230));
+        dl->AddRectFilled(ImVec2(0, yBottom - h), ImVec2(size.x, yBottom), IM_COL32(0, 0, 0, 230));
+    }
+    // the fade at the playhead (as the game draws it: the whole frame in its colour)
+    float rgbaFade[4];
+    if (m_fLookActive && FFadeAt(m_t, rgbaFade))
+        dl->AddRectFilled(ImVec2(0, top), ImVec2(size.x, yBottom), ImGui::ColorConvertFloat4ToU32(ImVec4(rgbaFade[0], rgbaFade[1], rgbaFade[2], rgbaFade[3])));
+    // a caption (the game's hint box, its HUD ticker at the top) at the playhead: the game shows it only while the HUD is
+    // up (not while the scene has the game paused)
+    bool fPaused = false;
+    for (const CSCMD& c : m_acmd)
+        if (c.kind == 0x12 && c.an[0] && c.t0 <= m_t + 1e-4f && (c.icPair < 0 || m_t < m_acmd[std::size_t(c.icPair)].t0)) fPaused = true;
+    for (const CSCMD& c : m_acmd)
+        if (c.kind == 0x53 && c.t0 <= m_t && m_t < c.t1 && !fPaused)
+        {
+            const std::string text = e.StrText(c.an[0]);
+            if (text.empty()) continue;
+            const float wrap = std::min(size.x * 0.45f, 700.0f);
+            const ImVec2 ts = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrap);
+            const ImVec2 p(size.x * 0.5f - ts.x * 0.5f, top + (yBottom - top) * 0.08f);
+            dl->AddRectFilled(ImVec2(p.x - 12, p.y - 8), ImVec2(p.x + ts.x + 12, p.y + ts.y + 8), IM_COL32(20, 30, 60, 210), 8.0f);
+            dl->AddRect(ImVec2(p.x - 12, p.y - 8), ImVec2(p.x + ts.x + 12, p.y + ts.y + 8), IM_COL32(240, 200, 80, 255), 8.0f, 0, 2.0f);
+            dl->AddText(nullptr, 0.0f, p, IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
+        }
+    if (fTitle)
+    {
+        const char* sz = T("(title card)");
+        const ImVec2 ts = ImGui::CalcTextSize(sz);
+        dl->AddText(nullptr, ImGui::GetFontSize() * 2.0f, ImVec2(size.x * 0.5f - ts.x, (top + yBottom) * 0.5f - ts.y), st::u32(st::text), sz);
+    }
+    // the subtitle: the line playing at the playhead (as measured, else its clip)
+    int idLine = -1;
+    for (const auto& l : m_trace.aline)
+        if (l.t0 <= m_t && m_t < l.t1) idLine = l.id;
+    if (idLine < 0)
+        for (const CSCMD& c : m_acmd)
+            if (c.kind == 0x45 && c.t0 <= m_t && m_t < c.t1) idLine = c.an[0];
+    if (idLine >= 0)
+    {
+        const std::string text = e.StrText(idLine);
+        if (!text.empty())
+        {
+            const float wrap = std::min(size.x * 0.6f, 900.0f);
+            const ImVec2 ts = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrap);
+            const ImVec2 p(size.x * 0.5f - ts.x * 0.5f, yBottom - (fBars && m_fLookActive ? size.y * 0.1f : 0.0f) - ts.y - 18);
+            dl->AddRectFilled(ImVec2(p.x - 10, p.y - 6), ImVec2(p.x + ts.x + 10, p.y + ts.y + 6), IM_COL32(0, 0, 0, 160), 6.0f);
+            dl->AddText(nullptr, 0.0f, p, IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
+        }
+    }
+}
+
 // ---- cinematic animations: their channels and keys
 
 ASEG* CCutsceneEditor::PasegOfClip(const CSCMD& c) const
@@ -2325,6 +2792,7 @@ std::vector<CCutsceneEditor::SUBROW> CCutsceneEditor::SubrowsOf(const CSCMD& c) 
         if (fNew)
         {
             aorder.push_back(chn.oid);
+            it->second.oid = chn.oid;
             it->second.name = chn.oid == -1 || chn.oid == c.oidActor ? (c.oidActor >= 0 ? NameOf(c.oidActor) : std::string(T("its object"))) : NameOf(chn.oid);
         }
         std::vector<float>& at = it->second.at;
@@ -2351,6 +2819,9 @@ std::vector<CCutsceneEditor::SUBROW> CCutsceneEditor::SubrowsOf(const CSCMD& c) 
     }
     return a;
 }
+
+#include "editor_cutclip.inc"
+#include "editor_cutpresent.inc"
 
 // ---- the dock
 
@@ -2440,7 +2911,13 @@ void CCutsceneEditor::DrawTracks(float w, float h)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 o = ImGui::GetCursorScreenPos();
     const float wTime = std::max(50.0f, w - wHead - 8.0f);
-    if (m_fFitPending) { m_pps = std::max(4.0f, wTime / std::max(1.0f, m_tEnd * 1.04f)); m_tView = 0.0f; m_fFitPending = false; }
+    if (m_fFitPending)
+    {
+        // (a few pixels before 0: the instant commands at the start show whole)
+        m_pps = std::max(4.0f, wTime / std::max(1.0f, m_tEnd * 1.04f));
+        m_tView = -10.0f / m_pps;
+        m_fFitPending = false;
+    }
     auto xOf = [&](float t) { return o.x + wHead + (t - m_tView) * m_pps; };
     auto tOf = [&](float x) { return m_tView + (x - o.x - wHead) / m_pps; };
     ImGuiIO& io = ImGui::GetIO();
@@ -2459,14 +2936,17 @@ void CCutsceneEditor::DrawTracks(float w, float h)
     }
     // ruler
     dl->AddRectFilled(ImVec2(o.x, o.y), ImVec2(o.x + w, o.y + hRuler), st::u32(st::raised));
-    const float step = m_pps > 120 ? 0.25f : m_pps > 40 ? 1.0f : m_pps > 12 ? 5.0f : 10.0f;
+    // (the ticks at least ~56 pixels apart: their labels do not run into each other)
+    float step = 60.0f;
+    for (float st : {0.1f, 0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 30.0f})
+        if (st * m_pps >= 56.0f) { step = st; break; }
     for (float t = std::floor(std::max(0.0f, m_tView) / step) * step; xOf(t) < o.x + w; t += step)
     {
         const float x = xOf(t);
         if (x < o.x + wHead) continue;
         dl->AddLine(ImVec2(x, o.y + hRuler - 6), ImVec2(x, o.y + hRuler), st::u32(st::muted));
         char sz[16];
-        std::snprintf(sz, sizeof sz, step < 1 ? "%.2f" : "%.0f", t);
+        std::snprintf(sz, sizeof sz, step < 0.25f ? "%.1f" : step < 1 ? "%.2f" : "%.0f", t);
         dl->AddText(ImVec2(x + 2, o.y + 3), st::u32(st::text2), sz);
     }
     // the loop range
@@ -2485,7 +2965,7 @@ void CCutsceneEditor::DrawTracks(float w, float h)
     // the rows
     float y = o.y + hRuler + 2;
     std::vector<std::pair<ImVec2, ImVec2>> aclip(m_acmd.size(), {ImVec2(0, 0), ImVec2(0, 0)});
-    static const uint32_t s_argb[] = {0x6C80A3, 0x3AA3F0, 0xF4C531, 0x3CC66B, 0xB57CF0, 0xF08A4B, 0xF0506E};
+    static const uint32_t s_argb[] = {0x6C80A3, 0x3AA3F0, 0xF4C531, 0x3CC66B, 0xB57CF0, 0xF08A4B, 0xF0506E, 0xD9D9D9};
     ImGui::PushClipRect(ImVec2(o.x, o.y), ImVec2(o.x + w, o.y + h), true);
     // (the selected animation's channels: sub-rows under its track, a diamond per key)
     std::vector<SUBROW> asub;
@@ -2501,7 +2981,7 @@ void CCutsceneEditor::DrawTracks(float w, float h)
         const uint32_t rgb = s_argb[std::size_t(m_fByRun ? 0 : tr.tk)];
         dl->AddRectFilled(ImVec2(o.x, y), ImVec2(o.x + w, y + hTrack - 2), st::u32(it % 2 ? st::surface : st::input));
         dl->AddRectFilled(ImVec2(o.x, y), ImVec2(o.x + 4, y + hTrack - 2), st::u32(rgb));
-        dl->AddText(ImVec2(o.x + 8, y + 4), st::u32(st::text), tr.name.substr(0, 26).c_str());
+        dl->AddText(ImVec2(o.x + 8, y + 4), st::u32(st::text), Utf8Cut(tr.name, 26).c_str());
         if (tr.oid >= 0)
         {
             ImGui::SetCursorScreenPos(ImVec2(o.x, y));
@@ -2547,25 +3027,52 @@ void CCutsceneEditor::DrawTracks(float w, float h)
         ImGui::PopClipRect();
         if (fSub)
         {
-            // the channels: their object, a diamond at each key (clip time from the clip's start); click: the playhead there
+            // the channels: their object, a diamond at each key (clip time from the clip's start); click: the key selected
+            // and the playhead there; drag: the key moved (each of the row's channels' keys at that time); double-click
+            // an empty spot: a key added there
             const CSCMD& c = m_acmd[std::size_t(m_isel)];
             float ys = y + hTrack;
             const float hs = hRow * 0.8f;
-            for (const SUBROW& r : asub)
+            for (std::size_t ir = 0; ir < asub.size(); ++ir)
             {
+                const SUBROW& r = asub[ir];
+                const bool fEditRow = r.oid != INT_MIN || r.fEvents;
                 dl->AddRectFilled(ImVec2(o.x + 12, ys), ImVec2(o.x + w, ys + hs - 1), st::u32(st::bg, 0.6f));
-                dl->AddText(ImVec2(o.x + 16, ys + 2), st::u32(r.fEvents ? st::cta : st::text2), r.name.substr(0, 24).c_str());
+                dl->AddText(ImVec2(o.x + 16, ys + 2), st::u32(r.fEvents ? st::cta : st::text2), Utf8Cut(r.name, 24).c_str());
                 ImGui::PushClipRect(ImVec2(o.x + wHead, ys), ImVec2(o.x + w, ys + hs), true);
+                const bool fRowHot = fHover && io.MousePos.y >= ys && io.MousePos.y < ys + hs && io.MousePos.x > o.x + wHead;
+                bool fOnKey = false;
                 for (float tk : r.at)
                 {
-                    const float x = xOf(c.t0 + tk), ym = ys + hs * 0.5f;
+                    const bool fDragged = m_dragKind == 5 && m_keyDragRow == int(ir) && std::fabs(tk - m_keyDragT0) < 1e-3f;
+                    const float tShown = fDragged ? std::max(0.0f, tk + m_dragDt) : tk;
+                    const float x = xOf(c.t0 + tShown), ym = ys + hs * 0.5f;
                     const bool fHot = std::fabs(io.MousePos.x - x) < 5 && std::fabs(io.MousePos.y - ym) < hs * 0.5f && fHover;
-                    dl->AddQuadFilled(ImVec2(x, ym - 4), ImVec2(x + 4, ym), ImVec2(x, ym + 4), ImVec2(x - 4, ym), st::u32(r.fEvents ? st::cta : st::accent, fHot ? 1.0f : 0.75f));
-                    if (fHot)
+                    const bool fSelKey = m_keyRow == int(ir) && std::fabs(m_keyT - tk) < 1e-3f;
+                    dl->AddQuadFilled(ImVec2(x, ym - 4), ImVec2(x + 4, ym), ImVec2(x, ym + 4), ImVec2(x - 4, ym), st::u32(r.fEvents ? st::cta : st::accent, fHot || fSelKey ? 1.0f : 0.75f));
+                    if (fSelKey) dl->AddQuad(ImVec2(x, ym - 6), ImVec2(x + 6, ym), ImVec2(x, ym + 6), ImVec2(x - 6, ym), st::u32(st::text), 1.5f);
+                    if (fHot && m_dragKind == 0)
                     {
-                        fSubHot = true;
-                        ImGui::SetTooltip("%s: %s %.2f s (%.2f s %s)", r.name.c_str(), r.fEvents ? T("event at") : T("key at"), tk, c.t0 + tk, T("in the scene"));
-                        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { m_t = std::clamp(c.t0 + tk, 0.0f, m_tEnd); m_fPlaying = false; }
+                        fSubHot = fOnKey = true;
+                        ImGui::SetTooltip("%s: %s %.2f s (%.2f s %s)%s", r.name.c_str(), r.fEvents ? T("event at") : T("key at"), tk, c.t0 + tk, T("in the scene"),
+                                          fEditRow ? T("\ndrag: move it; Delete: remove it") : "");
+                        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                        {
+                            m_t = std::clamp(c.t0 + tk, 0.0f, m_tEnd);
+                            m_fPlaying = false;
+                            m_keyRow = int(ir);
+                            m_keyT = tk;
+                            if (fEditRow) { m_dragKind = 5; m_keyDragRow = int(ir); m_keyDragT0 = tk; m_dragT0 = tOf(io.MousePos.x); m_dragDt = 0.0f; }
+                        }
+                    }
+                }
+                if (fRowHot && !fOnKey)
+                {
+                    fSubHot = true;
+                    if (fEditRow && !r.fEvents && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    {
+                        const float tc = std::max(0.0f, std::round((tOf(io.MousePos.x) - c.t0) * 60.0f) / 60.0f);
+                        if (FEditClipKeys(c, r, tc, 0.0f, true)) { m_keyRow = int(ir); m_keyT = tc; }
                     }
                 }
                 ImGui::PopClipRect();
@@ -2586,10 +3093,11 @@ void CCutsceneEditor::DrawTracks(float w, float h)
         const CSCMD& c = m_acmd[std::size_t(ihover)];
         const cut::CMDDESC& d = cut::DescOfKind(c.kind);
         ImGui::SetTooltip("%s\n%s\n%.2f .. %.2f s%s", Label(c).c_str(), T(d.tip), c.t0, c.t1, c.fRan ? "" : m_trace.fOk ? T(" (not run in the measured play)") : T(" (estimated)"));
-        const bool fEdge = IbDuration(c) >= 0 && io.MousePos.x > aclip[std::size_t(ihover)].second.x - 6;
+        const bool fEdge = (IbDuration(c) >= 0 || FPresentEdge(c)) && io.MousePos.x > aclip[std::size_t(ihover)].second.x - 6;
         if (fEdge) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
+            if (m_isel != ihover) m_keyT = -1.0f;
             m_isel = ihover;
             m_dragKind = fEdge ? 2 : 1;
             m_dragT0 = tOf(io.MousePos.x);
@@ -2609,8 +3117,24 @@ void CCutsceneEditor::DrawTracks(float w, float h)
             if (std::fabs(dt) >= c_dtFrame && i >= 0 && i < int(m_acmd.size()))
             {
                 if (k == 1) FMoveClip(i, dt);
+                else if (FPresentEdge(m_acmd[std::size_t(i)])) FResizePresentation(i, dt);
                 else FResizeClip(i, (m_acmd[std::size_t(i)].t1 - m_acmd[std::size_t(i)].t0) + dt);
             }
+        }
+    }
+    else if (m_dragKind == 5)
+    {
+        // (a key dragged on its row: moved by whole frames when let go)
+        m_dragDt = std::round((tOf(io.MousePos.x) - m_dragT0) * 60.0f) / 60.0f;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            const float dt = m_dragDt, t0 = m_keyDragT0;
+            const int ir = m_keyDragRow;
+            m_dragKind = 0;
+            m_dragDt = 0.0f;
+            m_keyDragRow = -1;
+            if (std::fabs(dt) >= c_dtFrame && ir >= 0 && ir < int(asub.size()) && m_isel > 0 && m_isel < int(m_acmd.size()))
+                if (FEditClipKeys(m_acmd[std::size_t(m_isel)], asub[std::size_t(ir)], t0, std::max(0.0f, t0 + dt), false)) m_keyT = std::max(0.0f, t0 + dt);
         }
     }
     else if (m_dragKind >= 3 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) m_dragKind = 0;
@@ -2625,9 +3149,19 @@ void CCutsceneEditor::DrawTracks(float w, float h)
     if (fHover && !ImGui::GetIO().WantTextInput)
     {
         if (ImGui::IsKeyPressed(ImGuiKey_Space)) m_fPlaying = !m_fPlaying;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) { m_isel = -1; m_keyT = -1.0f; }
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) m_t = std::max(0.0f, m_t - c_dtFrame);
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) m_t = std::min(m_tEnd, m_t + c_dtFrame);
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete) && m_isel > 0) FDeleteCommand(m_isel);
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete) && m_isel > 0)
+        {
+            // (a selected animation key first: the key removed; else the clip)
+            const std::vector<SUBROW> asubK = SubrowsOf(m_acmd[std::size_t(m_isel)]);
+            if (m_keyT >= 0.0f && m_keyRow >= 0 && m_keyRow < int(asubK.size()))
+            {
+                if (FEditClipKeys(m_acmd[std::size_t(m_isel)], asubK[std::size_t(m_keyRow)], m_keyT, -1.0f, false)) m_keyT = -1.0f;
+            }
+            else FDeleteCommand(m_isel);
+        }
     }
 }
 
@@ -2670,19 +3204,39 @@ void CCutsceneEditor::DrawInspector()
     if (m_isel < 0 || m_isel >= int(m_acmd.size()))
     {
         ImGui::TextColored(st::vec(st::muted), "%s", T("Cutscene"));
-        ImGui::TextWrapped("%s %d: %zu %s", T("script"), m_oid, m_acmd.size(), T("commands"));
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s %d: %zu %s", T("script"), m_oid, m_acmd.size(), T("commands"));
+        // (the scene's settings in tabs: what it is, how it starts, what to add at the playhead, the characters)
+        if (!ImGui::BeginTabBar("##cstabs")) { ImGui::EndChild(); return; }
+        const char* aszTab[] = {T("Scene"), T("Start it"), T("Add"), T("Characters")};
+        int itabNow = m_itab;
+        for (int k = 0; k < 4; ++k)
+        {
+            ImGuiTabItemFlags fl = m_itabWanted == k ? ImGuiTabItemFlags_SetSelected : 0;
+            if (ImGui::BeginTabItem((std::string(aszTab[k]) + "###cstab" + std::to_string(k)).c_str(), nullptr, fl)) { itabNow = k; ImGui::EndTabItem(); }
+        }
+        ImGui::EndTabBar();
+        m_itabWanted = -1;
+        m_itab = itabNow;
+        ImGui::BeginChild("##cstab", ImVec2(0, 0), false);
+        if (m_itab == 0)
+        {
         ImGui::SeparatorText(T("Started by"));
         if (m_astarts.empty()) ImGui::TextDisabled("%s", T("(nothing found: a splice script may start it by its own name)"));
         for (const std::string& s : m_astarts) ImGui::BulletText("%s", s.c_str());
         ImGui::SeparatorText(T("What it does"));
         if (m_aeffects.empty()) ImGui::TextDisabled("%s", T("(no tasks, scripts or objects changed)"));
         for (const std::string& s : m_aeffects) ImGui::BulletText("%s", s.c_str());
-        ImGui::Separator();
+        DrawRulePanel();
+        }
+        if (m_itab == 1) DrawStarterPanel();
+        if (m_itab == 2)
+        {
         if (ImGui::Button(T("Add a command at the end..."))) ImGui::OpenPopup("##addend");
         if (ImGui::BeginPopup("##addend")) { DrawAddMenu(int(m_acmd.size())); ImGui::EndPopup(); }
         ImGui::SeparatorText(T("Camera key"));
         ImGui::SetNextItemWidth(70);
-        ImGui::InputFloat(T("move##ckb"), &m_keyBlend, 0, 0, "%.2f s");
+        ImGui::InputFloat(TL("move", "ckb").c_str(), &m_keyBlend, 0, 0, "%.2f s");
         EdTip(T("How long the camera takes to get there (it ends at the playhead)"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120);
@@ -2693,7 +3247,13 @@ void CCutsceneEditor::DrawInspector()
             if (!FNewCameraKey(m_t, m_keyBlend, m_keyEase, error)) e.Status(error);
         }
         EdTip(T("Fly the view where the camera should be (turn Camera off to fly freely), then: the camera moves there from where it is, arriving at the playhead, and stays until the scene's next shot"));
+        DrawPresentPanel();
+        DrawEventPanel();
+        }
+        if (m_itab == 3)
+        {
         DrawPathPanel();
+        DrawNewClipPanel();
         ImGui::SeparatorText(T("Play session"));
         ImGui::BeginDisabled(m_fRecording);
         if (ImGui::Button(m_fRecording ? T("Recording...") : T("Record a play session"))) RecordSession();
@@ -2710,17 +3270,28 @@ void CCutsceneEditor::DrawInspector()
             }
             EdTip(T("The recording as the chosen character's track from the playhead: its stops as waits, its moves as paths it walks or runs along"));
         }
+        }
+        ImGui::EndChild();
         ImGui::EndChild();
         return;
     }
     CSCMD& c = m_acmd[std::size_t(m_isel)];
     const cut::CMDDESC& d = cut::DescOfKind(c.kind);
-    ImGui::TextColored(st::vec(st::accent), "%s", T(d.name));
+    if (ImGui::SmallButton(T("< the scene"))) { m_isel = -1; m_keyT = -1.0f; ImGui::EndChild(); return; }
+    EdTip(T("Back to the scene's settings (Esc, or a click on an empty spot of the tracks)"));
+    ImGui::SameLine();
+    ImGui::TextColored(st::vec(st::accent), "%s", FFadeClip(c) ? T("Fade") : T(d.name));
     ImGui::SameLine();
     ImGui::TextDisabled("(%s %d, 0x%X)", T("command"), c.ic, c.kind);
     ImGui::TextWrapped("%s", T(d.tip));
     ImGui::TextColored(st::vec(st::muted), "%.2f .. %.2f s%s", c.t0, c.t1, c.fMeasured ? T(" (measured)") : T(" (estimated)"));
     const bool fEditable = c.ifield >= 0 && m_decodeNote.empty();
+    // (an animation: its keys first, what one edits it for; its arguments below)
+    if (c.kind == 0x0A || c.kind == 0x22 || c.kind == 0x4B)
+    {
+        DrawClipPanel(c);
+        ImGui::SeparatorText(T("Arguments"));
+    }
     ImGui::BeginDisabled(!fEditable);
     const bool fTable = ImGui::BeginTable("##pars", 2, ImGuiTableFlags_SizingStretchProp);
     if (fTable)
@@ -2852,11 +3423,12 @@ void CCutsceneEditor::DrawInspector()
             PATHDATA pd;
             bool fCurve = e.FPathRead(pp, pd) && pd.crvk != 0;
             ImGui::SameLine();
-            if (ImGui::Checkbox(T("curved##pc"), &fCurve))
+            if (ImGui::Checkbox(TL("curved", "pc").c_str(), &fCurve))
                 FSetPathPoints(pp, aw, std::string(T("Cutscene path")) + " " + std::to_string(pp->oid) + ": " + (fCurve ? T("curved") : T("straight")), fCurve ? 1 : 0);
             EdTip(T("A smooth curve through its points (off: straight from point to point)"));
         }
     }
+    if (c.kind == 0x12 || c.kind == 0x44 || c.kind == 0x53 || FFadeClip(c)) DrawPresentInspector(c);
     if (c.kind == 0x39)
         if (const int ics = IcShotOf(m_isel); ics > 0)
         {
@@ -2870,7 +3442,7 @@ void CCutsceneEditor::DrawInspector()
             if (FEaseCombo("##keyease", ease)) FSetSlot(cs, 0x44, ease, std::string(T("Cutscene")) + " " + std::to_string(m_oid) + ": " + T("camera key easing") + " " + T(cut::SzEase(ease)));
             float g = cs.G(0x40);
             ImGui::SetNextItemWidth(80.0f);
-            if (ImGui::InputFloat(T("seconds##keylen"), &g, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
+            if (ImGui::InputFloat(TL("seconds", "keylen").c_str(), &g, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
                 FSetSlot(cs, 0x40, std::max(c_dtFrame, g), std::string(T("Cutscene")) + " " + std::to_string(m_oid) + ": " + T("camera move") + " " + std::to_string(g).substr(0, 4) + " s");
             EdTip(T("How long the camera takes to reach this key's view (0: the commands' between the move and its end)"));
         }
@@ -2910,7 +3482,7 @@ void CCutsceneEditor::Draw()
     if (m_oid)
     {
         const ImVec2 avail = ImGui::GetContentRegionAvail();
-        const float wInsp = std::clamp(avail.x * 0.3f, 240.0f, 380.0f);
+        const float wInsp = std::clamp(avail.x * 0.36f, 260.0f, 480.0f);
         DrawTracks(avail.x - wInsp - 6, avail.y);
         ImGui::SameLine();
         DrawInspector();
@@ -2919,6 +3491,7 @@ void CCutsceneEditor::Draw()
     ImGui::End();
     if (!fKeep) Close();
     DrawGhosts();
+    DrawPreviewOverlay();
 }
 
 bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
@@ -2991,6 +3564,7 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
     }
     else if (verb == "cutt") { float a[1] = {0}; floats(arg, a, 1); m_t = std::clamp(a[0], 0.0f, m_tEnd); m_fPlaying = false; }   // cutt:SECONDS (the playhead)
     else if (verb == "cutsel") m_isel = std::atoi(arg.c_str());   // cutsel:COMMAND
+    else if (verb == "cuttab") m_itabWanted = std::atoi(arg.c_str());   // cuttab:N (the scene inspector's tab: 0 Scene, 1 Start it, 2 Add, 3 Characters)
     else if (verb == "cutset")   // cutset:COMMAND:SLOT(hex)=VALUE (an argument by its slot, -2 its "don't wait")
     {
         const auto c1 = arg.find(':'), eq = arg.find('=');
@@ -3061,10 +3635,94 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
                 std::printf("editor: path %d kind %d closed %d point %zu g %.3f at %.1f %.1f %.1f\n", pp->oid, pd.crvk, pd.fClosed ? 1 : 0, i, pd.ag[i], aw[i].x, aw[i].y, aw[i].z);
     }
     else if (verb == "cutrecord") RecordSession();
+    else if (verb == "cutrule")   // cutrule:ONCE:TASK:STATES(1+2):SKIP(auto|always|never):LABEL
+    {
+        std::vector<std::string> ap;
+        std::stringstream ss(arg);
+        for (std::string t; std::getline(ss, t, ':');) ap.push_back(t);
+        cane::mods::CutsceneRule r = RuleOf();
+        if (ap.size() >= 5)
+        {
+            r.once = ap[0] == "1";
+            r.task = std::atoi(ap[1].c_str());
+            r.states.clear();
+            std::stringstream sv(ap[2]);
+            for (std::string t; std::getline(sv, t, '+');) if (!t.empty()) r.states.push_back(std::atoi(t.c_str()));
+            r.skip = ap[3];
+            r.skipToLabel = std::atoi(ap[4].c_str());
+            SetRule(r);
+        }
+        const cane::mods::CutsceneRule q = RuleOf();
+        std::printf("editor: cut %d rule: once %d task %d states %zu skip %s label %d\n", m_oid, q.once ? 1 : 0, q.task, q.states.size(), q.skip.c_str(), q.skipToLabel);
+    }
+    else if (verb == "cutevent")   // cutevent:T:KIND(hex):SLOT=V,... (a command at T on a track of its own)
+    {
+        std::stringstream ss(arg);
+        std::string a, k, rest;
+        std::getline(ss, a, ':');
+        std::getline(ss, k, ':');
+        std::getline(ss, rest);
+        std::vector<std::pair<int, double>> aset;
+        std::stringstream sr(rest);
+        for (std::string t; std::getline(sr, t, ',');)
+            if (const auto eq = t.find('='); eq != std::string::npos) aset.push_back({int(std::strtol(t.substr(0, eq).c_str(), nullptr, 16)), std::atof(t.c_str() + eq + 1)});
+        FAddAtTime(float(std::atof(a.c_str())), int(std::strtol(k.c_str(), nullptr, 16)), 0, aset, "Cutscene " + std::to_string(m_oid) + ": event");
+    }
+    else if (verb == "cutstarter")   // cutstarter:TASK:STATE (the scene started from the task's script)
+    {
+        const int oidTask = std::atoi(arg.c_str());
+        const auto c1 = arg.find(':');
+        const int state = c1 == std::string::npos ? 1 : std::atoi(arg.c_str() + c1 + 1);
+        std::vector<std::string> adiag;
+        std::string error;
+        const bool fOk = e.FWriteSceneStarter(m_oid, PloOfOid(oidTask), state, adiag, error);
+        std::printf("editor: cutstarter %d: %s%s\n", m_oid, fOk ? "written" : "failed: ", error.c_str());
+        for (const std::string& d : adiag) std::printf("editor: cutstarter %d: %s\n", m_oid, d.c_str());
+    }
+    else if (verb == "cutpresent")   // cutpresent:KIND:T:LENGTH[:TEXT or R,G,B] (0 letterbox, 1 title card, 2 caption, 3 fade)
+    {
+        std::vector<std::string> ap;
+        std::stringstream ss(arg);
+        for (std::string t; std::getline(ss, t, ':');) ap.push_back(t);
+        if (ap.size() >= 3)
+        {
+            float rgb[3] = {0, 0, 0};
+            if (ap.size() >= 4 && ap[0] == "3") floats(ap[3], rgb, 3);
+            std::string error;
+            if (!FAddPresentation(std::atoi(ap[0].c_str()), float(std::atof(ap[1].c_str())), float(std::atof(ap[2].c_str())), ap.size() >= 4 ? ap[3] : std::string(), rgb, 0.5f, 0.5f, error))
+                std::printf("editor: cutpresent: %s\n", error.c_str());
+        }
+    }
+    else if (verb == "cutpresize")   // cutpresize:COMMAND:DT (a presentation clip's end dragged)
+    {
+        const int i = std::atoi(arg.c_str());
+        const auto c1 = arg.find(':');
+        if (i > 0 && i < int(m_acmd.size()) && c1 != std::string::npos) FResizePresentation(i, float(std::atof(arg.c_str() + c1 + 1)));
+    }
+    else if (verb == "cutstart")   // cutstart:KIND:OID:VALUE (0 task state, 1 volume, 2 used, 3 job start, 4 job end, 5 script event, 6 new button zone)
+    {
+        int a[3] = {0, -1, 1};
+        std::stringstream ss(arg);
+        std::string t;
+        for (int k = 0; k < 3 && std::getline(ss, t, ':'); ++k) a[k] = std::atoi(t.c_str());
+        std::vector<std::string> adiag;
+        std::string error;
+        const bool fOk = FWriteStarter(a[0], a[1], a[2], e.m_cam.pos + e.m_cam.Dir() * 400.0f, adiag, error);
+        std::printf("editor: cutstart %d kind %d: %s%s\n", m_oid, a[0], fOk ? "written" : "failed: ", error.c_str());
+        // (the Start it tab shows it as if pressed there)
+        m_starterKind = a[0], m_oidStarterTask = a[1];
+        (a[0] == 5 ? m_starterEvent : m_starterState) = a[2];
+        m_starterNote = fOk ? std::string(T("written in its script (readable, with names)")) : error;
+        m_astarterDiag = adiag;
+        WhoStarts();
+        for (const std::string& d : adiag) std::printf("editor: cutstart %d: %s\n", m_oid, d.c_str());
+    }
     else if (verb == "cutkey")   // cutkey:T:BLEND:EASE (a camera key at T from the view)
     {
         float a[3] = {0, 1, 3};
-        floats(arg, a, 3);
+        std::string args = arg;
+        std::replace(args.begin(), args.end(), ':', ',');
+        floats(args, a, 3);
         std::string error;
         if (!FNewCameraKey(a[0], a[1], int(a[2]), error)) std::printf("editor: cutkey: %s\n", error.c_str());
     }
@@ -3074,6 +3732,73 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
         if (i > 0 && i < int(m_acmd.size()))
             for (const SUBROW& r : SubrowsOf(m_acmd[std::size_t(i)]))
                 std::printf("editor: cut %d sub %d: %s: %zu %s\n", m_oid, i, r.name.c_str(), r.at.size(), r.fEvents ? "events" : "keys");
+    }
+    else if (verb == "cutkeys")   // cutkeys:COMMAND (an animation's rows and each key's clip time)
+    {
+        const int i = std::atoi(arg.c_str());
+        if (i > 0 && i < int(m_acmd.size()))
+        {
+            const std::vector<SUBROW> a = SubrowsOf(m_acmd[std::size_t(i)]);
+            for (std::size_t r = 0; r < a.size(); ++r)
+            {
+                std::string ts;
+                for (float t : a[r].at) { char sz[16]; std::snprintf(sz, sizeof sz, " %.3f", t); ts += sz; }
+                std::printf("editor: cut %d keys %d row %zu %s:%s\n", m_oid, i, r, a[r].name.c_str(), ts.c_str());
+            }
+            if (ASEG* pa = PasegOfClip(m_acmd[std::size_t(i)]))
+                if (const ASEGD* pd = PasegdOf(pa)) std::printf("editor: cut %d keys %d clip %d length %.3f\n", m_oid, i, pa->oid, pd->tMax);
+        }
+    }
+    else if (verb == "cutzoom") { float a[2] = {m_pps, m_tView}; floats(arg, a, 2); m_pps = std::clamp(a[0], 2.0f, 2000.0f); m_tView = a[1]; m_fFitPending = false; }   // cutzoom:PIXELS_PER_SECOND,FIRST_SECOND
+    else if (verb == "cutkeysel") { const auto c1 = arg.find(':'); m_keyRow = std::atoi(arg.c_str()); m_keyT = c1 == std::string::npos ? -1.0f : float(std::atof(arg.c_str() + c1 + 1)); }   // cutkeysel:ROW:T (a key selected)
+    else if (verb == "cutkeymove" || verb == "cutkeyadd" || verb == "cutkeydel")   // cutkeymove:COMMAND:ROW:T:TO / cutkeyadd:COMMAND:ROW:T / cutkeydel:COMMAND:ROW:T
+    {
+        std::vector<std::string> ap;
+        std::stringstream ss(arg);
+        for (std::string t; std::getline(ss, t, ':');) ap.push_back(t);
+        const int i = ap.empty() ? -1 : std::atoi(ap[0].c_str());
+        if (ap.size() >= 3 && i > 0 && i < int(m_acmd.size()))
+        {
+            const std::vector<SUBROW> a = SubrowsOf(m_acmd[std::size_t(i)]);
+            const int r = std::atoi(ap[1].c_str());
+            if (r >= 0 && r < int(a.size()))
+            {
+                const float t = float(std::atof(ap[2].c_str()));
+                if (verb == "cutkeyadd") FEditClipKeys(m_acmd[std::size_t(i)], a[std::size_t(r)], t, 0.0f, true);
+                else if (verb == "cutkeydel") FEditClipKeys(m_acmd[std::size_t(i)], a[std::size_t(r)], t, -1.0f, false);
+                else if (ap.size() >= 4) FEditClipKeys(m_acmd[std::size_t(i)], a[std::size_t(r)], t, float(std::atof(ap[3].c_str())), false);
+            }
+        }
+    }
+    else if (verb == "cutcliplen")   // cutcliplen:COMMAND:SECONDS (the clip retimed)
+    {
+        const int i = std::atoi(arg.c_str());
+        const auto c1 = arg.find(':');
+        if (i > 0 && i < int(m_acmd.size()) && c1 != std::string::npos) FEditClipKeys(m_acmd[std::size_t(i)], SUBROW{}, 0.0f, 0.0f, false, float(std::atof(arg.c_str() + c1 + 1)));
+    }
+    else if (verb == "cutpose")   // cutpose:ACTOR:T:AT (the actor's pose at the scene's time T as a key at AT of a new clip)
+    {
+        float a[3] = {0, 0, 0};
+        std::string args = arg;
+        std::replace(args.begin(), args.end(), ':', ',');
+        floats(args, a, 3);
+        LO* plAseg = nullptr;
+        float tClip = 0.0f;
+        if (FAnimOn(int(a[0]), a[1], plAseg, tClip)) { m_apose.push_back({int(a[0]), plAseg->oid, tClip, a[2]}); std::printf("editor: cut %d pose %zu: %d by clip %d at %.2f -> %.2f\n", m_oid, m_apose.size(), int(a[0]), plAseg->oid, tClip, a[2]); }
+        else std::printf("editor: cutpose: no animation on %d at %.2f\n", int(a[0]), a[1]);
+    }
+    else if (verb == "cutnewclip")   // cutnewclip:T (the poses made a clip, played from T)
+    {
+        std::string error;
+        const int oidActor = m_apose.empty() ? -1 : m_apose[0].oidActor;
+        const int oid = NewClipFromPoses(error);
+        std::printf("editor: new animation %d%s\n", oid, error.empty() ? "" : (": " + error).c_str());
+        if (oid)
+        {
+            Decode();
+            FAddAtTime(float(std::atof(arg.c_str())), 0x0A, 0, {{0x10, oid}, {0x14, oidActor}, {0x18, 0}, {-2, 0}}, "Cutscene " + std::to_string(m_oid) + ": new animation");
+            m_apose.clear();
+        }
     }
     else if (verb == "cutshot") FShotFromView(std::atoi(arg.c_str()));   // cutshot:COMMAND (the camera from the view)
     else if (verb == "cutnew") { std::string error; const int oid = CreateCutscene(error); std::printf("editor: new cutscene %d%s\n", oid, error.empty() ? "" : (": " + error).c_str()); }
@@ -3103,6 +3828,9 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
             bool fIn;
             if (FObjectAt(o, m_t, p, q, fIn) && FCidDerivedFrom(o.cid, EDCID(0x34))) std::printf("editor: cut %d at %.2f: %s at %.1f %.1f %.1f\n", m_oid, m_t, NameOf(o.oid).c_str(), p.x, p.y, p.z);
         }
+        // the subtitle the preview shows (the line measured playing at the playhead)
+        for (const auto& l : m_trace.aline)
+            if (l.t0 <= m_t && m_t < l.t1) std::printf("editor: cut %d at %.2f: subtitle %d \"%s\"\n", m_oid, m_t, l.id, e.StrText(l.id).c_str());
         // the poses (the clip on each animated character at the playhead; its records' spread about its object record)
         for (int oid : m_aoidAnimated)
         {

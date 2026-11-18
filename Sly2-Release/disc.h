@@ -86,6 +86,16 @@ public:
         const auto it = m_mpCustomTask.find({world, oid});
         return it != m_mpCustomTask.end() ? it->second : std::string();
     }
+    // The loaded packages' cutscene rules (mod.json "cutscenes", mod_package.h): the rule for a world's script and its
+    // package (null: none; a later package's wins).
+    [[nodiscard]] const cane::mods::CutsceneRule* PcutsceneRule(const std::string& world, int oid, std::string* pidPackage = nullptr) const
+    {
+        const auto it = m_mpCutsceneRule.find({world, oid});
+        if (it == m_mpCutsceneRule.end()) return nullptr;
+        if (pidPackage) *pidPackage = it->second.first;
+        return &it->second.second;
+    }
+    [[nodiscard]] bool FCutsceneRules() const { return !m_mpCutsceneRule.empty(); }
     // (mod packages' worlds, platform/mod_worlds.h; docs/MODDING.md "Map states" / "New levels") The loaded packages'
     // new worlds (each served at a sector of its own from ISECTOR_MODWORLD, its index a file of the package), map
     // states and entries, in package load order.
@@ -96,9 +106,13 @@ public:
         uint32_t isector = 0;
     };
     static constexpr uint32_t ISECTOR_MODWORLD = 0xD0000000u;
+    // a new world's sector (stable: from its package's id and its own, not the load order)
+    [[nodiscard]] uint32_t IsectorModWorldOf(const std::string& package, const std::string& id) const;
     [[nodiscard]] const std::vector<MODWORLD>& AmodWorld() const { return m_amodworld; }
     [[nodiscard]] const std::vector<std::pair<std::string, cane::mods::MapState>>& AmapState() const { return m_amapstate; }
     [[nodiscard]] const std::vector<cane::mods::Entry>& Aentry() const { return m_aentry; }
+    [[nodiscard]] const std::vector<cane::mods::Guest>& Aguest() const { return m_aguest; }   // (modguests.h)
+    void AddGuest(const cane::mods::Guest& g) { m_aguest.push_back(g); }                      // (--guest)
     // (the map editor) a project's worlds, states and entries (its manifest; its files/ folder holds the new worlds'
     // indexes), as a loaded package's
     void AddPackageWorlds(const cane::mods::Manifest& m);
@@ -228,9 +242,11 @@ private:
     std::vector<std::string> m_adirPackagesExtra;
     std::vector<std::string> m_aidPackage;
     std::map<std::pair<std::string, int>, std::string> m_mpCustomTask;   // (world, task oid) -> package id
+    std::map<std::pair<std::string, int>, std::pair<std::string, cane::mods::CutsceneRule>> m_mpCutsceneRule;   // (world, script) -> package, rule
     std::vector<MODWORLD> m_amodworld;
     std::vector<std::pair<std::string, cane::mods::MapState>> m_amapstate;   // (package id, state)
     std::vector<cane::mods::Entry> m_aentry;
+    std::vector<cane::mods::Guest> m_aguest;
     std::vector<std::string> m_adirModRoots;
     std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)> m_pfnPartRead;
     int m_cmod = 0;

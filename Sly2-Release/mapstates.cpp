@@ -714,6 +714,46 @@ void WritePresenceIfRequested(SW* psw)
                       {"in", plo->fInWorld}, {"pos", {std::round(pos.x * 10) / 10, std::round(pos.y * 10) / 10, std::round(pos.z * 10) / 10}}});
     }
     j["objects"] = ao;
+    // the state machines' states, and the poses they give (the map editor shows a state's pose: Paris's fallen sign):
+    // every record of an object under a state machine's object whose local matrix is not the loaded one
+    // ("order": the object's place among the objects of its oid, a clone's oid repeats)
+    ojson asm_ = ojson::array();
+    std::set<const LO*> setSm;
+    for (SMA* p : g_apsma)
+    {
+        if (!p || !p->palo || !p->psm) continue;
+        setSm.insert(p->palo);
+        asm_.push_back({{"object", p->palo->oid}, {"sm", p->psm->oid}, {"state", OidSmaCur(p)}});
+    }
+    j["sm"] = asm_;
+    ojson apose = ojson::array();
+    std::map<int, int> mpcOid;
+    for (const auto& up : psw->aploAll)
+    {
+        LO* plo = up.get();
+        const int order = mpcOid[plo->oid]++;
+        if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        bool fUnder = false;
+        for (const LO* pa = plo; pa && !fUnder; pa = pa->paloParent) fUnder = setSm.count(pa) != 0;
+        if (!fUnder) continue;
+        ALO* palo = static_cast<ALO*>(plo);
+        ojson axf = ojson::array();
+        for (std::size_t i = 0; i < palo->axf.size(); ++i)
+        {
+            const XF* pxf = palo->axf[i].get();
+            if (!pxf || pxf->palo != palo) continue;
+            float d = 0.0f;
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r) d = std::max(d, std::fabs(pxf->mat[c][r] - pxf->matLoad[c][r]));
+            if (d < 1e-3f) continue;
+            ojson m = ojson::array();
+            for (int c = 0; c < 4; ++c)
+                for (int r = 0; r < 4; ++r) m.push_back(pxf->mat[c][r]);
+            axf.push_back({{"i", i}, {"mat", m}});
+        }
+        if (!axf.empty()) apose.push_back({{"oid", plo->oid}, {"order", order}, {"xf", axf}});
+    }
+    j["poses"] = apose;
     std::ofstream f(cane::paths::ioPath(cane::path(s_pathPresence)), std::ios::binary);
     f << j.dump() << "\n";
     std::printf("presence: %zu objects of %s written to %s\n", psw->aploAll.size(), j["world"].get<std::string>().c_str(), s_pathPresence.c_str());

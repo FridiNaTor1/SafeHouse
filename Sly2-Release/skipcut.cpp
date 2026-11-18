@@ -1,6 +1,7 @@
 // See skipcut.h.
 
 #include "skipcut.h"
+#include "cutscene.h"
 
 #include "audio.h"
 #include "actor.h"
@@ -101,6 +102,7 @@ int FChainScene(uint64_t* pid, int* pframeEnd, uint64_t id)
 uint64_t IdCutscene()
 {
     if (FMenuShown() || !g_psw) return 0;
+    if (FScptNeverSkipRunning()) return 0;   // (PC: a mod's cutscene rule, cutscene.h)
     uint64_t id = IdScptCutscene();
     for (int cid : {0x35, 0x36, 0x37})
         for (LO* plo : g_psw->mpcidaplo[cid])
@@ -404,8 +406,9 @@ bool FSkipCutStep()
         s_skip.idScene = id;
         ++s_skip.cChain;
     }
-    if (id != s_skip.idScene || FScptWaitsNow() || s_skip.cstep >= CSTEP_MAX)
+    if (id != s_skip.idScene || FScptWaitsNow() || cut::FCutsceneSkipStops() || s_skip.cstep >= CSTEP_MAX)
     {
+        if (cut::FCutsceneSkipStops() && std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: stopped at the cutscene rule's label\n");
         const bool fArm = id != s_skip.idScene && FPadStillLocked();
         StopFast();
         s_skip.frameArm = fArm ? g_frameJoy : -1;   // (the scene over, the pad still locked: a following one is skipped too)

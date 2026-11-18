@@ -227,7 +227,7 @@ int CEditor::CreateBrush(const BRUSH& bIn, const glm::vec3* ppos, std::string& e
     if (ppos)
     {
         // (FImportModel places 600 in front of the camera, snapped down: the camera moved so that point is *ppos)
-        m_cam.pos = *ppos - m_cam.Dir() * 600.0f + glm::vec3(0, 0, 1.0f);
+        m_cam.pos = *ppos - DirPlace() * 600.0f + glm::vec3(0, 0, 1.0f);
     }
     const bool fOk = FImportModel(ce::utf8(path), nullptr, true, error);
     m_cam = camSaved;

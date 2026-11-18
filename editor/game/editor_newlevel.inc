@@ -27,6 +27,7 @@ bool CEditor::FCreateLevel(std::string& error)
     spec.name = m_nlName;
     spec.templateRecord = m_nlTemplate;
     spec.emptyLevel = !m_nlKeepLevel;
+    spec.keepLighting = m_nlLights;
     spec.hasSpawn = true;
     std::copy(m_nlSpawn, m_nlSpawn + 4, spec.spawn);
     if (const ce::WorldEntry* pe = m_inst.world(m_nlEntryWorld)) spec.episode = pe->episode;
@@ -69,7 +70,7 @@ void CEditor::OpenLevel(int record)
 #else
     const auto exe = cane::executableDirectory() / EDGAME_EXE;
 #endif
-    std::vector<std::string> args{"--data-dir", ce::utf8(m_inst.dir), "--user-dir", cane::utf8(cane::userDirectory()), "--editor", std::to_string(record),
+    std::vector<std::string> args{"--data-dir", ce::utf8(m_inst.dir), "--user-dir", cane::utf8(cane::userDirectory()), "--editor", WorldArg(record),
                                   "--editor-project", ce::utf8(m_proj.dir)};
     // (a level just made empty: a floor under its spawn and the view on it, so there is ground to build on)
     if (record == m_nlMadeRecord && !m_nlKeepLevel && m_nlFloor)
@@ -79,8 +80,8 @@ void CEditor::OpenLevel(int record)
                       m_nlSpawn[1] - 1200.0f, m_nlSpawn[2] + 700.0f);
         args.insert(args.end(), {"--editor-do", sz});
     }
-    if (m_fPlayDry) { std::printf("editor: open level: --editor %d --editor-project %s\n", record, ce::utf8(m_proj.dir).c_str()); return; }
-    if (!ce::spawnDetached(exe, args)) { Status("could not start " + ce::utf8(exe)); return; }
+    if (m_fPlayDry) { std::printf("editor: open level: --editor %s --editor-project %s\n", WorldArg(record).c_str(), ce::utf8(m_proj.dir).c_str()); return; }
+    if (!ce::spawnDetached(exe, args)) { Status(std::string(T("could not start")) + " " + ce::utf8(exe)); return; }
     m_fQuit = true;
 }
 
@@ -135,7 +136,7 @@ void CEditor::DrawEntries()
 
 glm::vec3 CEditor::PosViewGround()
 {
-    glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+    glm::vec3 p = m_cam.pos + DirPlace() * 600.0f, hit;
     if (FSnapDown(p, hit)) p = hit;
     return p;
 }
@@ -230,10 +231,9 @@ void CEditor::DrawLevelTab()
 #if EDGAME_SLY2
 void CEditor::DrawNewLevelDialog()
 {
-    if (m_fNewLevelOpen) { ImGui::OpenPopup("##newlevel"); m_fNewLevelOpen = false; }
-    if (!ImGui::BeginPopupModal("##newlevel", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
-    ImGui::TextUnformatted(T("New level"));
-    ImGui::Separator();
+    const std::string title = TL("New level", "newlevel");
+    if (m_fNewLevelOpen) { ImGui::OpenPopup(title.c_str()); m_fNewLevelOpen = false; m_nlMadeRecord = -1; }
+    if (!ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
     char sz[96];
     std::snprintf(sz, sizeof(sz), "%s", m_nlName.c_str());
     ImGui::SetNextItemWidth(260);
@@ -251,7 +251,32 @@ void CEditor::DrawNewLevelDialog()
     worldCombo(T("Template level"), m_nlTemplate);
     EdTip(T("Its characters, effects, HUD and textures are used; empty: its geometry, props, guards and jobs are left out."));
     ImGui::Checkbox(T("Keep the whole template (a copy to change)"), &m_nlKeepLevel);
-    if (!m_nlKeepLevel) ImGui::Checkbox(T("Start with a floor under the spawn"), &m_nlFloor);
+    if (!m_nlKeepLevel)
+    {
+        ImGui::Checkbox(T("Start with a floor under the spawn"), &m_nlFloor);
+        ImGui::Checkbox(T("Keep the template's lights and sky"), &m_nlLights);
+        EdTip(T("Its light objects are copied into the new level (where they stand in the template), so what you build is lit as the template's level is."));
+        // (what the template has: a level without lights or a sky, e.g. Prison Vault, gives a dark, empty sky)
+        static int s_tplCounted = -1;
+        static int s_cLights = 0, s_cSky = 0;
+        if (s_tplCounted != m_nlTemplate)
+        {
+            s_tplCounted = m_nlTemplate;
+            s_cLights = s_cSky = 0;
+            ce::WorldIndex wi;
+            std::string e2;
+            if (const ce::WorldEntry* pe = m_inst.world(m_nlTemplate); pe && wi.load(m_inst, *pe, e2))
+                for (const ce::GroupInfo& g : wi.groups)
+                    for (const ce::ObjRecord& r : g.objects)
+                    {
+                        if (r.cid == 0x04 && g.level) ++s_cLights;
+                        if (r.cid == 0x61) ++s_cSky;
+                    }
+        }
+        ImGui::SameLine();
+        if (s_cLights == 0 && s_cSky == 0) ImGui::TextColored(st::vec(st::danger), "(%s)", T("this template has neither: try Paris or Rajan's Palace"));
+        else ImGui::TextColored(st::vec(st::muted), "(%d %s, %d %s)", s_cLights, T("lights"), s_cSky, T("sky"));
+    }
     ImGui::SetNextItemWidth(260);
     ImGui::DragFloat4(T("Spawn (x, y, z, heading)"), m_nlSpawn, 4.0f, -100000.0f, 100000.0f, "%.0f");
     ImGui::SeparatorText(T("The way in"));
@@ -262,16 +287,24 @@ void CEditor::DrawNewLevelDialog()
     ImGui::Checkbox(T("And a way back from the new level"), &m_nlReturn);
     if (m_nlReturn) { ImGui::SetNextItemWidth(260); ImGui::DragFloat4(T("Back at (x, y, z, radius)"), m_nlReturnAt, 4.0f, -100000.0f, 100000.0f, "%.0f"); }
     ImGui::Separator();
-    if (ImGui::Button(T("Make it")))
+    if (m_nlMadeRecord < 0)
     {
-        std::string error;
-        if (!FCreateLevel(error)) Status(std::string(T("new level")) + ": " + error);
-        ImGui::CloseCurrentPopup();
+        if (ImGui::Button(T("Make it")))
+        {
+            std::string error;
+            if (!FCreateLevel(error)) Status(std::string(T("new level")) + ": " + error);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
     }
-    ImGui::SameLine();
-    if (m_nlMadeRecord >= 0 && ImGui::Button(T("Open it"))) { ImGui::CloseCurrentPopup(); OpenLevel(m_nlMadeRecord); }
-    ImGui::SameLine();
-    if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
+    else
+    {
+        // (made: open it now, or later from the Level tab's list)
+        ImGui::TextColored(st::vec(st::success), "%s %s", T("Made:"), m_nlName.c_str());
+        if (ImGui::Button(T("Open it"))) { ImGui::CloseCurrentPopup(); OpenLevel(m_nlMadeRecord); }
+        ImGui::SameLine();
+        if (ImGui::Button(T("Close"))) ImGui::CloseCurrentPopup();
+    }
     ImGui::EndPopup();
 }
 #endif

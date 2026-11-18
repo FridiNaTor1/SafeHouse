@@ -232,6 +232,7 @@ struct SCPT
     bool fRealTime = false;  // (the flags' 0x100: the real clock, command 0x10)
     uint64_t idSkipScene = 0;  // native QoL: this particular start of a skippable scene (skipcut.h)
     int nSkipKind = -1;        // native QoL: SceneSkipKind's class, computed at the first start
+    bool fNeverSkip = false;   // (PC: a mod's cutscene rule "never skippable": its own or the script's that started it)
 };
 
 std::unordered_map<LO*, SCPT>& MpScpt()
@@ -819,7 +820,8 @@ void ExecuteRun(const PRUN& prun)
         RunRun(r);
         break;
     }
-    case 0x01: case 0x13: break;
+    case 0x01: break;
+    case 0x13: cut::NoteScptLabel(p->pscptLo, pc->N(0x10)); break;   // (PC addition: a rule's skip stops here, cutscene.h)
     case 0x02:
     {
         const int n = pc->N(0x10);
@@ -913,6 +915,7 @@ void ExecuteRun(const PRUN& prun)
         LO* plo = PloFind(p, pc->N(0x10));
         if (!plo || !IsA(plo, 0x72)) break;
         StartScptImpl(plo, s0);
+        if (SCPT* pss = PscptOf(plo)) pss->fNeverSkip = pss->fNeverSkip || ps->fNeverSkip;   // (PC: the rule carries on)
         if (pc->b == 0) p->pscptSub = plo;
         break;
     }
@@ -1850,8 +1853,9 @@ int SceneSkipKind(LO* pscpt)
                 }
         }
     }
-    if (cDialog || cBinoc) return SKIPK_Dialog;
-    return cCamera >= 3 ? SKIPK_Cinematic : SKIPK_None;
+    // (PC addition: a mod package's cutscene rule may choose, cutscene.h)
+    if (cDialog || cBinoc) return cut::SkipKindByRule(pscpt, SKIPK_Dialog);
+    return cut::SkipKindByRule(pscpt, cCamera >= 3 ? SKIPK_Cinematic : SKIPK_None);
 }
 namespace
 {
@@ -1861,6 +1865,7 @@ void StartScptImpl(LO* pscpt, LO* ploStarter)
 {
     SCPT* ps = PscptOf(pscpt);
     if (!ps || ps->fRunning) return;
+    if (!cut::FCutsceneMayStart(pscpt)) return;   // (PC addition: a mod package's cutscene rule, cutscene.h)
     static const bool s_fOff = std::getenv("SLY2N_NOSCPT") != nullptr;  // (debug: no script runs)
     if (s_fOff) return;
     if (std::getenv("SLY2N_SCPTDIALOG"))  // (debug: the scripts with dialog lines as they start)
@@ -1872,6 +1877,7 @@ void StartScptImpl(LO* pscpt, LO* ploStarter)
     }
     ps->ploStarter = ploStarter;
     ps->fRunning = 1;
+    ps->fNeverSkip = cut::FCutsceneNeverSkip(pscpt);
     if (ps->nSkipKind < 0) ps->nSkipKind = SceneSkipKind(pscpt);
     ps->idSkipScene = ps->nSkipKind == SKIPK_Dialog || ps->nSkipKind == SKIPK_Cinematic ? NewSkipCutScene() : 0;
     ps->f78 = 0;
@@ -2550,13 +2556,23 @@ bool FScptRunning(LO* pscpt)
 
 void ResetScpts() { MpScpt().clear(); }
 
+bool FScptNeverSkipRunning()
+{
+    for (const auto& [plo, s] : MpScpt())
+        if (s.fRunning && s.fNeverSkip) return true;
+    return false;
+}
+
 uint64_t IdScptCutscene()
 {
     uint64_t id = 0;
     for (const auto& [plo, s] : MpScpt())
+    {
+        // (PC addition: a running script a mod's rule makes "never skippable" keeps the scenes it starts unskippable)
         if (s.fRunning && s.idSkipScene && (!id || s.idSkipScene < id) &&
             std::any_of(s.arun.begin(), s.arun.end(), [](const PRUN& r) { return !r->fRetired && r->fPause; }))
             id = s.idSkipScene;
+    }
     return id;
 }
 

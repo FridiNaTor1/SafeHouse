@@ -8,6 +8,7 @@
 struct EDITOROPTS
 {
     int record = -1;             // the world record (-1: the game's first hub, Sly 2's Paris 2 / Sly 3's Venice 3)
+    std::string world;           // --editor NAME: a world by its name (a project's new world: its record depends on the load)
     std::string project;         // the project folder ("": <user dir>/Editor/<game>/<world>)
     std::string script;          // --editor-do "cmd;cmd;...": automated steps (tools/editorshots.sh)
     bool fHidden = false;        // --editor-hidden: no window shown (automated runs)

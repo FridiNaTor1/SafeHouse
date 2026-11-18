@@ -78,6 +78,8 @@ public:
     bool exportFolder(const fs::path& dest, std::string& error) const;
     bool exportZip(const fs::path& zip, std::string& error) const;
     bool install(const fs::path& modsDir, std::string& error) const;
+    // the project's prefabs/ files (name, bytes): exported and installed with the package
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> prefabFiles() const;
 
 private:
     void apply(const PartEdit& e, bool forward);

@@ -80,14 +80,14 @@ void CEditor::PathLive(LO* plo, const PATHDATA& pd)
 bool CEditor::FPathWrite(LO* plo, const PATHDATA& pd, const std::string& label)
 {
     PATHDATA cur;
-    if (!FPathRead(plo, cur) || cur.apos.size() != pd.apos.size()) { Status("this path is not stored in a binary part"); return false; }
+    if (!FPathRead(plo, cur) || cur.apos.size() != pd.apos.size()) { Status(T("this path is not stored in a binary part")); return false; }
     // atomic: every number finite, or nothing is written
     auto finite = [](const std::vector<glm::vec3>& a) {
         for (const glm::vec3& v : a)
             if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z) || std::fabs(v.x) > 1e7f || std::fabs(v.y) > 1e7f || std::fabs(v.z) > 1e7f) return false;
         return true;
     };
-    if (!finite(pd.apos) || !finite(pd.avIn) || !finite(pd.avOut)) { Status("rejected: a point has an invalid number"); PathLive(plo, cur); return false; }
+    if (!finite(pd.apos) || !finite(pd.avIn) || !finite(pd.avOut)) { Status(T("rejected: a point has an invalid number")); PathLive(plo, cur); return false; }
     const std::size_t c = pd.apos.size();
     std::vector<uint8_t> ab(c * 12 + (pd.crvk ? c * 24 : 0));
     std::memcpy(ab.data(), pd.apos.data(), c * 12);
@@ -166,7 +166,7 @@ bool CEditor::FPathSnap(LO* plo, int ipoint, const std::string& label)
     }
     if (!c) { Status("snap: no collision below"); return false; }
     const bool fOk = FPathWrite(plo, pd, label);
-    if (fOk) Status("snapped " + std::to_string(c) + " point(s) onto the collision below");
+    if (fOk) Status(Fmt(T("snapped %d point(s) onto the collision below"), c));
     return fOk;
 }
 
@@ -253,21 +253,21 @@ void CEditor::DrawPathInspector(LO* plo)
 {
     PATHDATA pd;
     if (!FPathLive(plo, pd)) return;
-    ImGui::SeparatorText("Curve");
-    ImGui::TextColored(st::vec(st::muted), "%zu points, %s%s", pd.apos.size(), pd.crvk ? "cubic" : "linear", pd.fClosed ? ", closed" : "");
-    ImGui::Checkbox("Edit points", &m_fCurveMode);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The gizmo moves the curve's points (the selected one, or the whole curve about the pivot), not the object");
-    const char* apiv[] = {"Curve middle", "First point", "Object origin", "Selected point"};
+    ImGui::SeparatorText(T("Curve"));
+    ImGui::TextColored(st::vec(st::muted), T("%zu points, %s%s"), pd.apos.size(), pd.crvk ? T("cubic") : T("linear"), pd.fClosed ? T(", closed") : "");
+    ImGui::Checkbox(T("Edit points"), &m_fCurveMode);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("The gizmo moves the curve's points (the selected one, or the whole curve about the pivot), not the object"));
+    const char* apiv[] = {T("Curve middle"), T("First point"), T("Object origin"), T("Selected point")};
     ImGui::SetNextItemWidth(180);
-    ImGui::Combo("Pivot", &m_pivot, apiv, 4);
+    ImGui::Combo(T("Pivot"), &m_pivot, apiv, 4);
     ImGui::SameLine();
-    if (ImGui::SmallButton("Whole curve")) { m_ipoint = -1; m_fCurveMode = true; }
-    if (ImGui::Button("Snap point")) { if (m_ipoint >= 0) FPathSnap(plo, m_ipoint, "Snap point " + std::to_string(m_ipoint) + " of " + std::to_string(plo->oid)); }
+    if (ImGui::SmallButton(T("Whole curve"))) { m_ipoint = -1; m_fCurveMode = true; }
+    if (ImGui::Button(T("Snap point"))) { if (m_ipoint >= 0) FPathSnap(plo, m_ipoint, "Snap point " + std::to_string(m_ipoint) + " of " + std::to_string(plo->oid)); }
     ImGui::SameLine();
-    if (ImGui::Button("Snap all")) FPathSnap(plo, -1, "Snap path " + std::to_string(plo->oid));
+    if (ImGui::Button(T("Snap all"))) FPathSnap(plo, -1, "Snap path " + std::to_string(plo->oid));
     ImGui::SameLine();
-    ImGui::Checkbox("Snap on drop", &m_fSnapCollision);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Points dropped by the gizmo land on the level's collision below them");
+    ImGui::Checkbox(T("Snap on drop"), &m_fSnapCollision);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("Points dropped by the gizmo land on the level's collision below them"));
     if (ImGui::BeginTable("pts", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp, ImVec2(0, std::min(200.0f, 26.0f * float(pd.apos.size() + 1)))))
     {
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30);
@@ -293,7 +293,7 @@ void CEditor::DrawPathInspector(LO* plo)
         ImGui::EndTable();
     }
     ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted));
-    ImGui::TextWrapped("Built again when the world starts (see Reload / Play test): nav polygons, ropes, laser timing, camera zones, a guard's place on it.");
+    ImGui::TextWrapped("%s", T("Built again when the world starts (see Reload / Play test): nav polygons, ropes, laser timing, camera zones, a guard's place on it."));
     ImGui::PopStyleColor();
 }
 

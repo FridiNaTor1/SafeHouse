@@ -10,6 +10,7 @@
 // pockets, options 308 / 309 / 310; the prize's task, option 906), exits' destinations, vaults' combinations.
 #if EDGAME_SLY2
 #include "jt.h"
+#include "../../editor/core/newworld.h"
 #endif
 namespace edimpl
 {
@@ -115,7 +116,7 @@ int CEditor::BuildFromPalette(int cid, bool fCurve, std::string& error)
 #if EDFEAT_STRUCT
     const int iobj = IobjExampleOf(EdCidRt(cid));
     if (iobj < 0) { error = std::string(T("this level has no placed example of that class to copy")) + " (" + SzClass(EdCidRt(cid)) + ")"; return 0; }
-    glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+    glm::vec3 p = m_cam.pos + DirPlace() * 600.0f, hit;
     if (FSnapDown(p, hit)) p = hit;
     p.x = SnapMove(p.x);
     p.y = SnapMove(p.y);
@@ -215,7 +216,7 @@ void CEditor::DrawBuildPalette()
                 {
                     std::string error;
                     const int iobj = IobjExampleOf(cid);
-                    glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+                    glm::vec3 p = m_cam.pos + DirPlace() * 600.0f, hit;
                     if (FSnapDown(p, hit)) p = hit;
                     if (iobj < 0 || !CopyRecord(iobj, CopyGroup(), &p, true, error)) Status(std::string(T("make")) + ": " + (iobj < 0 ? std::string(T("no stored example")) : error));
                 }
@@ -229,13 +230,11 @@ void CEditor::DrawBuildPalette()
     ImGui::SeparatorText(T("Presets"));
     {
         const int cCrawl = mpc[EdCidRt(0x1B)];
-        ImGui::BeginDisabled(cCrawl == 0);
         if (ImGui::Button(T("Crawl space")))
         {
             std::string error;
             if (!BuildCrawlSpace(error)) Status(std::string(T("crawl space")) + ": " + error);
         }
-        ImGui::EndDisabled();
         EdTip(T("Two crawl entries (one at each end) and a low ceiling with side walls (brushes), along the view: Sly and Bentley crawl through it, Murray cannot (his list has no crawl spaces)."));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
@@ -243,17 +242,25 @@ void CEditor::DrawBuildPalette()
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
         ImGui::DragFloat(T("Width"), &m_crawlWidth, 4.0f, 96.0f, 1024.0f, "%.0f");
-        if (cCrawl == 0) ImGui::TextColored(st::vec(st::muted), "%s", T("(this level has no crawl entry to copy: open a level with crawl spaces, e.g. Paris's tables)"));
+        if (cCrawl == 0) ImGui::TextColored(st::vec(st::muted), "%s", T("(this level has no crawl entry: one is taken from another level, e.g. Paris's tables)"));
     }
     {
         LO* pg = m_plSel && FIsLoDerivedFrom(m_plSel, EdCidRt(0x38)) ? m_plSel : nullptr;
         ImGui::BeginDisabled(!pg || mpc[EdCidRt(0x5C)] == 0);
-        if (ImGui::Button(T("Key in the selected guard's pocket")))
-        {
-            std::string error;
-            if (!BuildKey(pg, error)) Status(std::string(T("key")) + ": " + error);
-        }
+        if (ImGui::Button(T("Key in the selected guard's pocket"))) KeyButton(pg);
         ImGui::EndDisabled();
+        if (m_oidKeyTask)
+        {
+            ImGui::SameLine();
+            ImGui::BeginDisabled(m_asel.empty());
+            if (ImGui::Button(T("Lock: the selection waits for the key")))
+            {
+                std::string error;
+                if (!FKeyLock(m_oidKeyTask, m_asel, error)) Status(std::string(T("lock")) + ": " + error);
+            }
+            ImGui::EndDisabled();
+        }
+        DrawKeyUniquePopup();
         EdTip(T("A copy of this level's key (a prize) put in the selected guard's pocket: Sly pickpockets it; its task is done when he has it, and doors / uses can wait for that task (their task states)."));
     }
 }
@@ -516,6 +523,100 @@ glm::vec3 DirAxis(const glm::vec3& dir)
 }
 }  // namespace
 
+// a new top-level record of the class in the level group, its bytes from wherever the class has one: this level's
+// parts first (one nested inside a prop: Paris's tables), then the other installed levels'. The copy is the level's own:
+// a new oid, no script module, placed on its own (no parent's record), at pos. Its other options are the source's.
+int CEditor::ImportRecordOfClass(int cid, const glm::vec3& pos, std::string& from, std::string& error)
+{
+#if EDFEAT_STRUCT
+    const int igrp = CopyGroup();
+    if (igrp < 0 || igrp >= int(m_index.groups.size()) || m_index.groups[std::size_t(igrp)].objectsPart.empty()) { error = "no level group"; return 0; }
+    const bool fLox = FCidDerivedFrom(cid, EDCID(3));
+    // (a record's header: S8 k (0: plain, < 0: a shared group's) S16 cid S32 oid S16 n S32 cb, then cb bytes; checked
+    // by the parser and, for a placed class, by its matrix (a rotation): the candidates, tried in turn until one loads)
+    struct CAND { std::vector<uint8_t> rec; std::string from; };
+    std::vector<CAND> acand;
+    auto scan = [&](const std::vector<uint8_t>& ab, const std::string& world) {
+        for (std::size_t i = 0; i + 13 < ab.size() && acand.size() < 6; ++i)
+        {
+            const int8_t k = int8_t(ab[i]);
+            if (k > 0 || k < -2 || ab[i + 1] != uint8_t(cid) || ab[i + 2] != uint8_t(cid >> 8)) continue;
+            int32_t oid, cb;
+            std::memcpy(&oid, ab.data() + i + 3, 4);
+            std::memcpy(&cb, ab.data() + i + 9, 4);
+            if (oid <= 0 || cb < 16 || i + 13 + std::size_t(cb) > ab.size()) continue;
+            if (fLox)
+            {
+                if (cb < 2 + 48 + 4) continue;
+                const glm::mat4 m = MatFromBytes(ab.data() + i + 15);
+                bool fOk = true;
+                for (int c = 0; c < 3 && fOk; ++c) fOk = std::fabs(glm::length(glm::vec3(m[c])) - 1.0f) < 0.02f;
+                fOk = fOk && std::fabs(glm::dot(glm::vec3(m[0]), glm::vec3(m[1]))) < 0.02f && std::isfinite(m[3].x) && std::fabs(m[3].x) < 1e6f;
+                if (!fOk) continue;
+            }
+            std::vector<uint8_t> probe(2 + 13 + std::size_t(cb));
+            probe[0] = 1;
+            std::memcpy(probe.data() + 2, ab.data() + i, 13 + std::size_t(cb));
+            std::vector<ce::ObjRecord> one;
+            std::string e2;
+            if (!ce::parseObjects(probe.data(), probe.size(), one, e2, EDGAME_SLY3 != 0) || one.size() != 1 || one[0].cb != 13 + std::size_t(cb)) continue;
+            acand.push_back({std::vector<uint8_t>(ab.begin() + std::ptrdiff_t(i), ab.begin() + std::ptrdiff_t(i + 13 + std::size_t(cb))), world});
+            i += 12 + std::size_t(cb);
+        }
+    };
+    for (const ce::GroupInfo& g : m_index.groups)
+    {
+        std::vector<uint8_t> ab;
+        if (!g.objectsPart.empty() && m_proj.readPart(g.objectsPart, ab)) scan(ab, m_index.entry.name);
+    }
+    for (const ce::WorldEntry& we : m_inst.worlds)
+    {
+        if (acand.size() >= 6) break;
+        if (!we.indexBase.empty() || we.record == m_eo.record) continue;
+        ce::WorldIndex wi;
+        std::string e2;
+        if (!wi.load(m_inst, we, e2)) continue;
+        for (const ce::GroupInfo& g : wi.groups)
+        {
+            std::vector<uint8_t> ab;
+            if (!g.objectsPart.empty() && m_proj.readPart(g.objectsPart, ab)) scan(ab, we.name);
+        }
+    }
+    if (acand.empty()) { error = T("no level of the installation has one"); return 0; }
+    for (CAND& c : acand)
+    {
+        std::vector<uint8_t>& rec = c.rec;
+        const int32_t oidNew = OidNew();
+        const int16_t nNone = -1;
+        rec[0] = 0;   // (the level's own)
+        std::memcpy(rec.data() + 3, &oidNew, 4);
+        std::memcpy(rec.data() + 7, &nNone, 2);
+        if (fLox)
+        {
+            std::memcpy(rec.data() + 13, &nNone, 2);   // (no parent's record: placed by its own matrix)
+            glm::mat4 m = MatFromBytes(rec.data() + 15);
+            m[3] = glm::vec4(pos, 1.0f);
+            float a[12];
+            if (FBytesFromMat(m, a)) std::memcpy(rec.data() + 15, a, 48);
+        }
+        const std::string label = "Create " + std::string(SzClass(cid)) + " " + std::to_string(oidNew) + " from " + c.from;
+        m_proj.begin(label, true);
+        std::size_t ibNew = 0;
+        const bool fOk = m_proj.appendRecord(m_index.groups[std::size_t(igrp)].objectsPart, rec, &ibNew, error);
+        m_proj.end();
+        if (!fOk) { if (m_proj.canUndo() && m_proj.history().back().label == label) m_proj.undo(); continue; }
+        Reload(oidNew);   // (a record the loader refuses is undone there: the next one is tried)
+        if (PloOid(oidNew)) { from = c.from; return oidNew; }
+    }
+    error = T("no crawl entry found loads here");
+    return 0;
+#else
+    (void)cid; (void)pos; (void)from;
+    error = "not for " EDGAME_NAME " yet";
+    return 0;
+#endif
+}
+
 int CEditor::BuildCrawlSpace(std::string& error)
 {
 #if EDFEAT_STRUCT
@@ -534,25 +635,48 @@ int CEditor::BuildCrawlSpace(std::string& error)
         std::memcpy(&n, ab.data() + ib + IbOidOfRecord(ab.data() + ib) + 4, 2);
         if (n < 0) { iobj = int(i); break; }
     }
-    if (iobj < 0) { error = T("this level has no crawl entry to copy"); return 0; }
+    // (none of the level's own outside a prop: one made from a crawl entry's record found in this level's props or
+    // another level's, the level's own from then on)
+    if (iobj >= 0 && m_rec.aobj[std::size_t(iobj)].depth > 0) iobj = -1;
+    int oidImported = 0;
+    std::string from;
+    if (iobj < 0)
+    {
+        oidImported = ImportRecordOfClass(cidCrawl, m_cam.pos + DirPlace() * 600.0f, from, error);
+        if (!oidImported) return 0;
+        for (std::size_t i = 0; i < m_rec.aobj.size() && iobj < 0; ++i)
+            if (m_rec.aobj[i].oid == oidImported && m_rec.aobj[i].depth == 0) iobj = int(i);
+        // (its options naming objects of the level it came from: removed; its floor point is set below)
+        for (int iguard = 0; iguard < 8; ++iguard)
+        {
+            LO* pi = PloOid(oidImported);
+            int ibad = -1;
+            for (std::size_t i = 0; pi && i < m_rec.afield.size() && ibad < 0; ++i)
+            {
+                const EDITFIELD& f = m_rec.afield[i];
+                if (f.fk != EDITFK_Option || f.plo != pi || f.eopid == EDEOPID(1182)) continue;
+                const OPTTYPE t = OptType(f.k);
+                int n = 0;
+                if ((std::string(t.name) == "object id" || FOidOption(f.eopid)) && FOptionInt(pi, f.eopid, n) && n > 0 && !PloOid(n)) ibad = int(i);
+            }
+            if (ibad < 0) break;
+            FRemoveOption(ibad, std::string(T("Remove option")) + " " + StrOption(m_rec.afield[std::size_t(ibad)].eopid) + " " + T("of") + " " + std::to_string(oidImported));
+        }
+        for (std::size_t i = 0; i < m_rec.aobj.size() && iobj < 0; ++i)
+            if (m_rec.aobj[i].oid == oidImported && m_rec.aobj[i].depth == 0) iobj = int(i);
+        if (iobj < 0)
+        {
+            int c = 0;
+            for (const EDITOBJREC& r : m_rec.aobj) c += r.oid == oidImported;
+            error = "the new crawl entry " + std::to_string(oidImported) + " is not found (" + std::to_string(c) + " records, " + (PloOid(oidImported) ? "loaded" : "not loaded") + ")";
+            return 0;
+        }
+    }
     LO* ploEx = m_rec.aobj[std::size_t(iobj)].plo;
     const int oidExample = m_rec.aobj[std::size_t(iobj)].oid;
     const glm::vec3 posExample = ploEx ? PosWorld(ploEx) : glm::vec3(0.0f);
-    // an entry inside a shared group (Paris's tables): that group placed (a prop to crawl under)
-    if (ploEx && m_rec.aobj[std::size_t(iobj)].depth > 0)
-    {
-        BuildAssets();
-        for (const ASSET& a : m_aasset)
-            if (ploEx->igrp == a.igrp && !a.aoidProxy.empty())
-            {
-                PlaceAsset(a);
-                return m_plSel ? m_plSel->oid : 0;
-            }
-        error = T("its crawl entries are inside a shared group with no placed instance");
-        return 0;
-    }
     const glm::vec3 d = DirAxis(m_cam.Dir());
-    glm::vec3 p0 = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+    glm::vec3 p0 = m_cam.pos + DirPlace() * 600.0f, hit;
     if (FSnapDown(p0, hit)) p0 = hit;
     p0.x = SnapMove(p0.x);
     p0.y = SnapMove(p0.y);
@@ -592,7 +716,7 @@ int CEditor::BuildCrawlSpace(std::string& error)
             if (m_rec.aobj[i].oid == oidExample && m_rec.aobj[i].cid == cidCrawl && m_rec.aobj[i].depth == 0) iex = int(i);
         if (iex < 0) iex = IobjExampleOf(cidCrawl);
         if (iex < 0) break;
-        const int oid = CopyRecord(iex, CopyGroup(), &pe, true, error);
+        const int oid = iend == 0 && oidImported ? oidImported : CopyRecord(iex, CopyGroup(), &pe, true, error);
         if (!oid) return 0;
         if (!oidFirst) oidFirst = oid;
         if (LO* pc = PloOid(oid))
@@ -603,7 +727,7 @@ int CEditor::BuildCrawlSpace(std::string& error)
                 // (its height above the floor as the example's: the example's entries stand on their floor)
                 glm::vec3 exHit;
                 float dzEx = 0.0f;
-                if (FSnapDown(posExample + glm::vec3(0, 0, 10.0f), exHit)) dzEx = std::clamp(posExample.z - exHit.z, 0.0f, 150.0f);
+                if (!oidImported && FSnapDown(posExample + glm::vec3(0, 0, 10.0f), exHit)) dzEx = std::clamp(posExample.z - exHit.z, 0.0f, 150.0f);
                 const float yaw = std::atan2(-s * d.y, -s * d.x);
                 SetPlaceWorld(pl, glm::translate(glm::mat4(1.0f), glm::vec3(pe.x, pe.y, posTunnel.z + dzEx)) * glm::rotate(glm::mat4(1.0f), yaw, glm::vec3(0, 0, 1)));
                 FRecordPlace(pl, std::string(T("Crawl entry")) + " " + std::to_string(oid));
@@ -620,7 +744,8 @@ int CEditor::BuildCrawlSpace(std::string& error)
         }
     }
     if (LO* pt = PloOid(oidTunnel)) SelectOnly(pt);
-    Status(std::string(T("made a crawl space")) + ": " + T("tunnel") + " " + std::to_string(oidTunnel) + ", " + T("entries from") + " " + std::to_string(oidExample));
+    Status(std::string(T("made a crawl space")) + ": " + T("tunnel") + " " + std::to_string(oidTunnel) + ", " + T("entries from") + " " +
+           (oidImported ? std::string(T("a crawl entry of")) + " " + from : std::to_string(oidExample)));
     return oidTunnel;
 #else
     error = "not for " EDGAME_NAME " yet";
@@ -629,11 +754,41 @@ int CEditor::BuildCrawlSpace(std::string& error)
 }
 
 // a key: a copy of the level's key-like prize (a PRIZE 0x5C instance: the "key" group's when there is one), put in the
-// guard's pocket (option 309: the prize's oid; the guard's FillPocket gives it before any random prize)
-int CEditor::BuildKey(LO* pguard, std::string& error)
+// guard's pocket (option 309: the prize's oid; the guard's FillPocket gives it before any random prize), with a task of
+// its own (a copy of the copied key's task: no links, no object changes, no marker, not saved; done when Sly takes the
+// key, option 906) that a lock can wait for (KeyLock: a map state of the project's own that takes the lock out of the
+// world once the task is done). A guard shared by several (placed by a proxy) is made unique first when fUnique, else
+// refused with the reason (every guard of the group would carry it); a spawner's guards cannot be.
+int CEditor::BuildKey(LO* pguard, std::string& error, int mode)
 {
 #if EDGAME_SLY2 && EDFEAT_STRUCT
     if (!pguard || !FIsLoDerivedFrom(pguard, 0x38)) { error = T("select a guard first"); return 0; }
+    // (a shared guard: one record for every guard of its group)
+    int cSame = 0;
+    for (const auto& up : m_psw->aploAll) cSame += up->oid == pguard->oid && FIsLoDerivedFrom(up.get(), 0x38);
+    // (one guard whose record is its group's alone is not shared: its group loaded once, no proxy places copies of it)
+    const bool fShared = cSame > 1 || pguard->oidInstance > 0;
+    if (fShared)
+    {
+        PLACE pl;
+        const bool fProxy = FPlace(pguard, pl) && pl.fProxy;
+        m_cKeyShared = cSame;
+        m_fKeyProxy = fProxy;
+        if (mode == 0) { error = T("this guard shares its pocket with others of its kind"); return 0; }
+        if (mode == 1 && !fProxy) { error = T("this guard is a copy made by the level (a spawner or a clone): it cannot be made unique"); return 0; }
+    }
+    if (fShared && mode == 1)
+    {
+        const glm::vec3 posGuard = PosWorld(pguard);
+        if (!FMakeUnique(pguard, error)) return 0;
+        // (the unique copy: the guard nearest to where it stood, now a top-level record of the level)
+        LO* pbest = nullptr;
+        float dBest = 1e30f;
+        for (const auto& up : m_psw->aploAll)
+            if (FIsLoDerivedFrom(up.get(), 0x38) && up->oidInstance <= 0 && glm::distance(PosWorld(up.get()), posGuard) < dBest) { dBest = glm::distance(PosWorld(up.get()), posGuard); pbest = up.get(); }
+        if (!pbest || dBest > 50.0f) { error = "the unique guard is not found"; return 0; }
+        pguard = pbest;
+    }
     // the prize's placed instance (its proxy) to copy: a pocket's prize first, else any placed prize
     int oidSrc = 0;
     for (const auto& up : m_psw->aploAll)
@@ -644,9 +799,48 @@ int CEditor::BuildKey(LO* pguard, std::string& error)
             if (up->Cid() == 0x5C && up->oidInstance > 0 && m_mpoidProxy.count(up->oidInstance)) { oidSrc = up->oidInstance; break; }
     if (!oidSrc) { error = T("this level has no placed prize (key) to copy"); return 0; }
     const int oidGuard = pguard->oid;
+    // the copied key's task (option 906 of the prize instance)
+    int oidTaskSrc = 0;
+    for (const auto& up : m_psw->aploAll)
+        if (up->oidInstance == oidSrc && up->Cid() == 0x5C)
+            if (const uint32_t t = up->U32Field(0, 0x230, 0xFFFFFFFFu); t != 0xFFFFFFFFu) oidTaskSrc = int(t);
+    if (!PloOid(oidTaskSrc, EDCID(0x85)))
+        for (const auto& up : m_psw->aploAll)
+            if (up->Cid() == EDCID(0x85)) { oidTaskSrc = up->oid; break; }
     glm::vec3 p = PosWorld(pguard) + glm::vec3(0, 0, 100.0f);
     const int oidKey = CopyRecord(m_mpoidProxy[oidSrc], CopyGroup(), &p, false, error);
     if (!oidKey) return 0;
+    // its own task
+    int oidTask = 0;
+    if (LO* pts = PloOid(oidTaskSrc, EDCID(0x85)))
+    {
+        const int iobj = IobjOfLo(pts);
+        oidTask = OidFreeSmall(1000);
+        RECEDIT re;
+        for (int e : {1260, 1261, 1262, 1263, 1295, 1296, 1297, 1298, 1299, 1287, 1288, 1278})
+            if (EDEOPID(e) >= 0) re.setRemove.insert(EDEOPID(e));
+        re.fLinks = true;   // (no links: available from the start, done when the key is taken)
+        re.nModule = -1;
+        re.mpSet[EDEOPID(1279)] = 0;
+        std::vector<uint8_t> rec;
+        m_proj.begin(std::string(T("Task of key")) + " " + std::to_string(oidKey), true);
+        const bool fOk = iobj >= 0 && oidTask && FBuildCopy(iobj, oidTask, re, rec, error) && FAppendCopy(iobj, rec, error);
+        m_proj.end();
+        if (!fOk) oidTask = 0;
+        else Reload(oidTask);
+    }
+    // the key's task set to it (option 906 of its instance: its proxy's per-instance option)
+    if (oidTask)
+        for (const auto& up : m_psw->aploAll)
+            if (up->oidInstance == oidKey && up->Cid() == 0x5C)
+            {
+                if (const int ifield = IfieldOption(up.get(), 906); ifield >= 0)
+                {
+                    const int32_t v = oidTask;
+                    FSetOption(ifield, &v, 4, std::string(T("Key")) + " " + std::to_string(oidKey) + ": " + T("its own task") + " " + std::to_string(oidTask));
+                }
+                break;
+            }
     LO* pg = PloOid(oidGuard);
     if (!pg) { error = "the guard is gone"; return 0; }
     // option 309 (a method option, one CRef: kind 6 an S32 oid)
@@ -655,15 +849,57 @@ int CEditor::BuildKey(LO* pguard, std::string& error)
     const int32_t v = oidKey;
     ab.insert(ab.end(), reinterpret_cast<const uint8_t*>(&k), reinterpret_cast<const uint8_t*>(&k) + 2);
     ab.insert(ab.end(), reinterpret_cast<const uint8_t*>(&v), reinterpret_cast<const uint8_t*>(&v) + 4);
-    const bool fShared = pg->oidInstance > 0 || (pg->igrp >= 0 && pg->igrp < int(m_index.groups.size()) && !m_index.groups[std::size_t(pg->igrp)].level);
     if (!FAddOption(pg, 309, ab, std::string(T("Key")) + " " + std::to_string(oidKey) + " " + T("in the pocket of") + " " + std::to_string(oidGuard))) { error = "could not add the pocket's prize"; return 0; }
-    Status(std::string(T("made a key")) + " " + std::to_string(oidKey) + " " + T("from") + " " + std::to_string(oidSrc) + ", " + T("in the pocket of") + " " + std::to_string(oidGuard) +
-           (fShared ? std::string(" (") + T("a shared guard: every one of them carries it until it is taken") + ")" : std::string()) + "; " + T("it opens what the copied key's task opens"));
+    m_oidKeyLast = oidKey;
+    m_oidKeyTask = oidTask;
+    Status(std::string(T("made a key")) + " " + std::to_string(oidKey) + " " + T("in the pocket of") + " " + std::to_string(oidGuard) + "; " +
+           (oidTask ? std::string(T("its own task")) + " " + std::to_string(oidTask) + " (" + T("select a door or a barrier and press Lock to make it wait for the key") + ")"
+                    : std::string(T("it opens what the copied key's task opens"))));
     return oidKey;
 #else
-    (void)pguard;
+    (void)pguard; (void)mode;
     error = "not for " EDGAME_NAME " yet";
     return 0;
+#endif
+}
+
+// a lock for a key's task: the objects taken out of the world once the task is done (a map state of the project's own,
+// mod.json: honoured by the game at the world's start and at every task change); shared objects made unique first
+bool CEditor::FKeyLock(int oidTask, const std::vector<LO*>& alock, std::string& error)
+{
+#if EDGAME_SLY2
+    if (!PloOid(oidTask, EDCID(0x85))) { error = T("the key has no task of its own"); return false; }
+    if (alock.empty()) { error = T("select the door or barrier the key opens"); return false; }
+    cane::mods::MapState st;
+    const ce::WorldEntry* pe = m_inst.world(m_eo.record);
+    st.world = pe ? pe->name : std::string();
+    st.id = "key-" + std::to_string(oidTask);
+    for (const cane::mods::MapState& s : ce::mapStates(m_proj, st.world))
+        if (s.id == st.id) st = s;
+    st.name = std::string(T("Unlocked by key task")) + " " + std::to_string(oidTask);
+    cane::mods::StateCond c;
+    c.kind = cane::mods::StateCond::Task;
+    c.oid = oidTask;
+    c.states = {2, 3};
+    st.when = {c};
+    for (LO* p : alock)
+    {
+        // (a proxy's instance: its root's oid repeats in every instance of the group; the proxy's oid names this one)
+        LO* pr = p;
+        while (pr->paloParent) pr = pr->paloParent;
+        const int oid = pr->oidInstance > 0 ? pr->oidInstance : pr->oid;
+        if (std::find(st.remove.begin(), st.remove.end(), oid) == st.remove.end()) st.remove.push_back(oid);
+    }
+    ce::putMapState(m_proj, st);
+    if (!FSaveStates(error)) return false;
+    for (std::size_t i = 0; i < m_astate.size(); ++i)
+        if (m_astate[i].id == "custom:" + st.id) { m_istateEdit = int(i); m_fStateNewOpen = false; }
+    Status(std::string(T("lock")) + ": " + std::to_string(alock.size()) + " " + T("object(s) taken out when the key's task is done") + " (" + T("States tab") + ": " + st.name + ")");
+    return true;
+#else
+    (void)oidTask; (void)alock;
+    error = "not for " EDGAME_NAME " yet";
+    return false;
 #endif
 }
 
@@ -774,6 +1010,51 @@ bool CEditor::FSetExitTo(LO* plo, LO* pother)
 #endif
 }
 
+// the key buttons: a shared guard asks first (made unique, or not at all)
+void CEditor::KeyButton(LO* pguard)
+{
+    std::string error;
+    if (BuildKey(pguard, error, 0)) return;
+    if (pguard && error == T("this guard shares its pocket with others of its kind"))
+    {
+        m_oidKeyGuard = pguard->oid;
+        m_fKeyUniqueAsk = true;
+        return;
+    }
+    Status(std::string(T("key")) + ": " + error);
+}
+
+void CEditor::DrawKeyUniquePopup()
+{
+    if (m_fKeyUniqueAsk) { ImGui::OpenPopup("##keyunique"); m_fKeyUniqueAsk = false; }
+    if (!ImGui::BeginPopupModal("##keyunique", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    ImGui::TextUnformatted(T("This guard shares its pocket"));
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+    ImGui::Text("%s: %d", T("Guards with this pocket"), m_cKeyShared);
+    if (m_fKeyProxy)
+        ImGui::TextUnformatted(T("It is one of a group placed by a proxy: a key put in it would be in every one of these guards' pockets. Make this one unique (its own copy in the level, placed where it stands) and give the key to it alone? Options its proxy sets for this one guard are not carried over."));
+    else
+        ImGui::TextUnformatted(T("It is a copy the level makes (a spawner or a clone): it cannot be made unique. The key can go in every one's pocket: the first taken is the key, the others' pockets drop it then."));
+    ImGui::PopTextWrapPos();
+    if (m_fKeyProxy && ImGui::Button(T("Make it unique and give it the key")))
+    {
+        std::string error;
+        if (LO* pg = PloOid(m_oidKeyGuard); !pg || !BuildKey(pg, error, 1)) Status(std::string(T("key")) + ": " + error);
+        ImGui::CloseCurrentPopup();
+    }
+    if (m_fKeyProxy) ImGui::SameLine();
+    if (ImGui::Button(T("Put it in every one's pocket")))
+    {
+        std::string error;
+        if (LO* pg = PloOid(m_oidKeyGuard); !pg || !BuildKey(pg, error, 2)) Status(std::string(T("key")) + ": " + error);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(T("Cancel"))) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 // the Properties' interactive section: a guard's pocket (pickpocket), a key (prize), an exit's destination, a vault
 void CEditor::DrawInteractSection(LO* plo)
 {
@@ -786,11 +1067,8 @@ void CEditor::DrawInteractSection(LO* plo)
     {
         ImGui::TextColored(st::vec(st::muted), "%s", T("Pocket (Sly pickpockets it):"));
         for (const std::string& sz : PocketWords(plo)) ImGui::BulletText("%s", sz.c_str());
-        if (ImGui::SmallButton(T("Put a key in this pocket")))
-        {
-            std::string error;
-            if (!BuildKey(plo, error)) Status(std::string(T("key")) + ": " + error);
-        }
+        if (ImGui::SmallButton(T("Put a key in this pocket"))) KeyButton(plo);
+        DrawKeyUniquePopup();
     }
     if (fPrize)
     {
@@ -803,6 +1081,18 @@ void CEditor::DrawInteractSection(LO* plo)
             for (const OPT& o : up->aopt)
                 if ((o.eopid == 309 || o.eopid == 310) && !o.aval.empty() && (o.aval[0].n == oidSelf || o.aval[0].n == plo->oid)) aguard.push_back(NameOfObject(up.get()) + " " + std::to_string(up->oid));
         if (!aguard.empty()) ImGui::TextWrapped("%s: %s", T("In the pocket of"), aguard[0].c_str());
+        if (t != 0xFFFFFFFFu && PloOid(int(t), EDCID(0x85)))
+        {
+            ImGui::TextColored(st::vec(st::muted), "%s", T("A lock: select it (Ctrl+click: a door, a barrier...) with this key last, then:"));
+            if (ImGui::SmallButton(T("Lock: the other selected objects wait for this key")))
+            {
+                std::vector<LO*> a;
+                for (LO* p : m_asel)
+                    if (p != plo) a.push_back(p);
+                std::string error;
+                if (!FKeyLock(int(t), a, error)) Status(std::string(T("lock")) + ": " + error);
+            }
+        }
     }
     if (fExit)
     {
@@ -865,7 +1155,7 @@ void CEditor::DrawInteractSection(LO* plo)
 // --editor-do verbs of this module
 bool CEditor::FBuildVerb(const std::string& verb, const std::string& arg)
 {
-    if (FStatesVerb(verb, arg) || FLevelVerb(verb, arg) || FEverythingVerb(verb, arg) || FBrushEditVerb(verb, arg)) return true;
+    if (FStatesVerb(verb, arg) || FLevelVerb(verb, arg) || FGuestVerb(verb, arg) || FPrefabVerb(verb, arg) || FLightingVerb(verb, arg) || FSoundVerb(verb, arg) || FCheckVerb(verb, arg) || FEverythingVerb(verb, arg) || FBrushEditVerb(verb, arg)) return true;
     if (verb == "optscan")   // optscan:A-B: every object with an option in A..B (its class and values)
     {
         int a = 0, b = 0;
@@ -918,13 +1208,24 @@ bool CEditor::FBuildVerb(const std::string& verb, const std::string& arg)
         else std::printf("editor: crawl space %d\n", oid);
         return true;
     }
-    if (verb == "key")   // key[:GUARD]: a key in the guard's (or the selected guard's) pocket
+    if (verb == "key")   // key[:GUARD[:unique|all]]: a key in the guard's (or the selected guard's) pocket, with its own task (a shared
+                         // guard: refused, or made unique first, or given to every guard of its kind)
     {
         std::string error;
+        const auto colon = arg.find(':');
         LO* pg = arg.empty() ? m_plSel : PloOid(std::atoi(arg.c_str()));
-        const int oid = BuildKey(pg, error);
+        const std::string how = colon != std::string::npos ? arg.substr(colon + 1) : std::string();
+        const int oid = BuildKey(pg, error, how == "unique" ? 1 : how == "all" ? 2 : 0);
         if (!oid) Status("key: " + error);
-        else std::printf("editor: key %d\n", oid);
+        else std::printf("editor: key %d task %d\n", oid, m_oidKeyTask);
+        return true;
+    }
+    if (verb == "keylock")   // keylock[:TASK]: the selection waits for the last key's task (or TASK)
+    {
+        std::string error;
+        const int oidTask = arg.empty() ? m_oidKeyTask : std::atoi(arg.c_str());
+        if (!FKeyLock(oidTask, m_asel, error)) Status("keylock: " + error);
+        else std::printf("editor: lock of task %d: %zu objects\n", oidTask, m_asel.size());
         return true;
     }
     if (verb == "dockscroll") { m_dockScroll = float(std::atof(arg.c_str())); return true; }   // dockscroll:Y (the Create tab)

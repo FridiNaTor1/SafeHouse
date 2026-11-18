@@ -8,7 +8,8 @@
 // the template's level groups (its geometry, props, guards, jobs, collision) are left out: what stays are the
 // characters, effects and HUD groups, so the player starts in an empty world; the main level group keeps its textures
 // and shaders (an own copy of its Graphics part: brushes and imported models take their materials from there and add
-// their textures to it) and an own Objects part (empty) the editor adds objects to. The game gives the world a record
+// their textures to it) and an own Objects part the editor adds objects to, which starts with the template's lights
+// and skies (keepLighting: the new level is lit as the template is). The game gives the world a record
 // after the disc's (44, 45, ... in the packages' order; Sly2-Release --world N / --editor N).
 
 #include "project.h"
@@ -25,6 +26,7 @@ struct NewWorldSpec {
     std::string name;            // "Test Floor" (its id from it)
     int templateRecord = -1;     // an installed world (its record)
     bool emptyLevel = true;      // the template's level groups left out (false: the whole template world, a copy to change)
+    bool keepLighting = true;    // (empty) the template's lights and skies kept (its level groups' light / sky records)
     int episode = -1;            // -1: the template's
     bool hasSpawn = false;
     float spawn[4] = {0, 0, 0, 0};   // where the player starts (x, y, z, heading)

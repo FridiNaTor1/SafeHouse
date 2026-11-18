@@ -3,6 +3,7 @@
 // The world loader (orig 0x13DA18) and the global blocks of a world file.
 
 #include "sw.h"
+#include "editrec.h"
 #include "modworld.h"
 #include "worldparts.h"
 
@@ -357,8 +358,11 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
     MarkWorldPart(WPK_Nodes, -1, pbis->m_ib);
     LoadNodesFromBrx(psw, pbis);
     MarkWorldPart(WPK_Options, -1, pbis->m_ib);
+    if (g_peditrec) g_peditrec->iWorldOptList = 0;   // (PC: the map editor, editrec.h aworldopt)
     LoadOptionsFromBrx(psw->aoptSw, nullptr, pbis);
+    if (g_peditrec) g_peditrec->iWorldOptList = 1;
     LoadOptionsFromBrx(psw->aoptCm, nullptr, pbis);
+    if (g_peditrec) g_peditrec->iWorldOptList = -1;
     pbis->Align(16);
     // TODO(M3): 0x1FF7E8, 0x20E3C0, 0x20F1C8, the background colour (0x16F960), the load heaps
     ResetShaders();  // orig 0x1ED3A8 (the renderer's tables)

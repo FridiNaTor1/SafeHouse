@@ -418,7 +418,21 @@ bool Project::exportFolder(const fs::path& dest, std::string& error) const {
     if (!cane::mods::writeManifest(m, error)) return false;
     for (const auto& [rel, ab] : m_parts)
         if (!writeFile(out / cane::mods::kFilesFolder / pathOf(rel), ab)) { error = "cannot write " + utf8(out / pathOf(rel)); return false; }
+    // the project's prefabs (the map editor's: shared with the mod, listed by the editor from installed packages)
+    for (const auto& [name, ab] : prefabFiles())
+        if (!writeFile(out / "prefabs" / pathOf(name), ab)) { error = "cannot write " + utf8(out / "prefabs" / pathOf(name)); return false; }
     return true;
+}
+
+std::vector<std::pair<std::string, std::vector<uint8_t>>> Project::prefabFiles() const {
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> a;
+    std::error_code ec;
+    if (!fs::is_directory(dir / "prefabs", ec)) return a;
+    for (const auto& e : fs::directory_iterator(dir / "prefabs", ec)) {
+        std::vector<uint8_t> ab;
+        if (e.is_regular_file(ec) && readFile(e.path(), ab)) a.push_back({utf8(e.path().filename()), std::move(ab)});
+    }
+    return a;
 }
 
 bool Project::exportZip(const fs::path& zip, std::string& error) const {
@@ -433,6 +447,10 @@ bool Project::exportZip(const fs::path& zip, std::string& error) const {
     for (const auto& [rel, ab] : m_parts) {
         const std::string name = std::string(cane::mods::kFilesFolder) + "/" + rel;
         ok = ok && mz_zip_writer_add_mem(&z, name.c_str(), ab.data(), ab.size(), MZ_DEFAULT_COMPRESSION);
+    }
+    for (const auto& [name, ab] : prefabFiles()) {
+        const std::string n = "prefabs/" + name;
+        ok = ok && mz_zip_writer_add_mem(&z, n.c_str(), ab.data(), ab.size(), MZ_DEFAULT_COMPRESSION);
     }
     ok = mz_zip_writer_finalize_archive(&z) && ok;
     mz_zip_writer_end(&z);
@@ -455,7 +473,9 @@ nlohmann::json worldsOfParts(const Installation& inst, const std::vector<std::st
         if (!used) continue;
         WorldIndex wi;
         std::string error;
-        a.push_back({{"path", w.index}, {"record", w.record}, {"fnv64", wi.load(inst, w, error) ? wi.fnv64 : std::string()}});
+        // (a project's new world: by its name, its record depends on the packages loaded with it)
+        if (!w.indexBase.empty()) a.push_back({{"path", w.index}, {"new_world", w.name}});
+        else a.push_back({{"path", w.index}, {"record", w.record}, {"fnv64", wi.load(inst, w, error) ? wi.fnv64 : std::string()}});
     }
     return a;
 }

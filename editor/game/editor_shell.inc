@@ -15,6 +15,7 @@
 #if EDGAME_SLY2
 #include "splicenames.h"   // (the Scripts tab's scriptedit verb: the readable text kept)
 #include "editor_scriptdiag.h"   // (scriptdiag / scriptfix)
+#include "editor_names2.h"   // (the classes in words)
 #endif
 #include "editor_font.h"
 #include "texmod.h"
@@ -61,6 +62,7 @@ bool CEditor::FLoad(std::string& error)
     if (FHaveWorldLights()) ApplyLighting(m_scene, WorldLights());
     else ApproximateBakeLighting(m_scene);
     IndexObjects();
+    m_fWorldOptsRead = false;   // (the Lighting tab's fog read again from the new load's fields)
     m_fPhysReady = false;
     m_apsoeLevel.clear();
     return true;
@@ -282,12 +284,12 @@ bool CEditor::FRecordPlace(const PLACE& pl, const std::string& label)
 {
     std::string rel;
     std::size_t ib = 0;
-    if (!FLocate(pl.ibMat, 48, rel, ib)) { Status("this object's part is not a binary part"); return false; }
+    if (!FLocate(pl.ibMat, 48, rel, ib)) { Status(T("this object's part is not a binary part")); return false; }
     float a[12];
     glm::mat4 mStore = MatPlace(pl);
     if (!pl.fProxy)
         if (const auto it = m_mpLoadParent.find(pl.ploLive); it != m_mpLoadParent.end()) mStore = glm::inverse(it->second.P) * mStore;
-    if (!FBytesFromMat(mStore, a)) { Status("rejected: the transform has invalid numbers"); return false; }
+    if (!FBytesFromMat(mStore, a)) { Status(T("rejected: the transform has invalid numbers")); return false; }
     m_proj.begin(label);
     const bool fOk = m_proj.patch(rel, ib, a, sizeof(a));
     m_proj.end();
@@ -298,7 +300,7 @@ bool CEditor::FRecordLocal(LO* plo, const std::string& label)
 {
     PLACE pl;
     if (FPlace(plo, pl)) return FRecordPlace(pl, label);
-    Status("this object's transform is not stored in the world file (made at run time)");
+    Status(T("this object's transform is not stored in the world file (made at run time)"));
     return false;
 }
 
@@ -374,7 +376,7 @@ void CEditor::Reload(int oidSelect)
         BuildSceneGpu(m_scene);
         m_cam = cam;
         m_plSel = nullptr;
-        Status("the game's loader refused the edit" + std::string(ps ? " (" + ps->label + ")" : "") + ", undone: " + error);
+        Status(std::string(T("the game's loader refused the edit")) + std::string(ps ? " (" + ps->label + ")" : "") + ", undone: " + error);
         return;
     }
     BuildSceneGpu(m_scene);
@@ -414,11 +416,11 @@ void CEditor::Duplicate()
             Reload(oidNew);
             return;
         }
-    if (iobj < 0) { Status("only a group's top-level objects and placed instances can be duplicated"); return; }
+    if (iobj < 0) { Status(T("only a group's top-level objects and placed instances can be duplicated")); return; }
     const EDITOBJREC& r = m_rec.aobj[iobj];
     std::string rel;
     std::size_t ibRec = 0;
-    if (!FLocate(r.ibRecord, r.ibBody - r.ibRecord, rel, ibRec)) { Status("its record is not in a binary part"); return; }
+    if (!FLocate(r.ibRecord, r.ibBody - r.ibRecord, rel, ibRec)) { Status(T("its record is not in a binary part")); return; }
     const int oidNew = OidNew();
     std::string error;
     std::size_t ibNew = 0;
@@ -444,7 +446,7 @@ void CEditor::Duplicate()
     }
     m_proj.end();
     if (!fOk) { Status("duplicate: " + error); return; }
-    Status("duplicated " + std::string(SzClass(r.cid)) + " " + std::to_string(r.oid) + " as oid " + std::to_string(oidNew));
+    Status(Fmt(T("duplicated %s %d as oid %d"), SzClass(r.cid), r.oid, oidNew));
     Reload(oidNew);
     // (a duplicated proxy: select the instance it now places)
     if (!m_plSel)
@@ -467,24 +469,24 @@ void CEditor::Delete()
             std::string error;
             const std::string what = std::string(SzClass(m_plSel->Cid())) + " " + std::to_string(m_plSel->oid);
             if (!FDeleteNested(it->second.iobjrec, error)) { Status("delete: " + error); return; }
-            Status("deleted nested " + what);
+            Status(std::string(T("deleted nested")) + " " + what);
             Reload(0);
             return;
         }
     if (iobj < 0)
         if (LO* ptop = PloTopLevel(m_plSel)) iobj = m_mpobj.at(ptop).iobjrec;
-    if (iobj < 0) { Status("only objects stored in the world file can be deleted"); return; }
+    if (iobj < 0) { Status(T("only objects stored in the world file can be deleted")); return; }
     const EDITOBJREC& r = m_rec.aobj[iobj];
     std::string rel;
     std::size_t ibRec = 0;
-    if (!FLocate(r.ibRecord, r.ibBody - r.ibRecord, rel, ibRec)) { Status("its record is not in a binary part"); return; }
+    if (!FLocate(r.ibRecord, r.ibBody - r.ibRecord, rel, ibRec)) { Status(T("its record is not in a binary part")); return; }
     std::string error;
     const int oid = r.oid, cid = r.cid;
     m_proj.begin("Delete " + std::string(SzClass(cid)) + " " + std::to_string(oid), true);
     const bool fOk = m_proj.deleteRecord(rel, ibRec, error);
     m_proj.end();
     if (!fOk) { Status("delete: " + error); return; }
-    Status("deleted " + std::string(SzClass(cid)) + " " + std::to_string(oid) + " (scripts or objects that name it may now miss it)");
+    Status(Fmt(T("deleted %s %d (scripts or objects that name it may now miss it)"), SzClass(cid), oid));
     Reload(0);
 #endif
 }
@@ -543,10 +545,32 @@ bool CEditor::FSave()
     }
 #endif
     std::string error;
-    if (!m_proj.save(error)) { Status("save failed: " + error); return false; }
-    Status("saved " + std::to_string(m_proj.changedParts().size()) + " changed parts to " + ce::utf8(m_proj.dir) +
+    if (!m_proj.save(error)) { Status(std::string(T("save failed")) + ": " + error); return false; }
+    Status(Fmt(T("saved %d changed parts to %s"), int(m_proj.changedParts().size()), ce::utf8(m_proj.dir).c_str()) +
            (m_aproblem.empty() ? std::string() : " (" + std::to_string(m_aproblem.size()) + " problems)"));
     return true;
+}
+
+// a class in words (the user's language), else its code name
+const char* CEditor::ClassFriendlyName(int cid) const
+{
+#if EDGAME_SLY2
+    if (const char* sz = SzClassFriendly(cid)) return T(sz);
+    // (a class without a name of its own: its nearest named base class's, e.g. the guards' kinds)
+    int best = -1;
+    for (int b = 0; b < 0x90; ++b)
+        if (b != cid && SzClassFriendly(b) && FCidDerivedFrom(cid, b) && (best < 0 || FCidDerivedFrom(b, best))) best = b;
+    if (best >= 0) return T(SzClassFriendly(best));
+#endif
+    return SzClass(cid);
+}
+
+// a world on another process's command line: a disc world's record, a project's new world's name (its record depends on
+// the packages that process loads: the mods folder's first, the project last)
+std::string CEditor::WorldArg(int record) const
+{
+    const ce::WorldEntry* pe = m_inst.world(record);
+    return pe && !pe->indexBase.empty() ? pe->name : std::to_string(record);
 }
 
 void CEditor::PlayTestAt(int oidTask, const glm::vec3* ppos, float heading)
@@ -558,7 +582,7 @@ void CEditor::PlayTestAt(int oidTask, const glm::vec3* ppos, float heading)
     const auto exe = cane::executableDirectory() / EDGAME_EXE;
 #endif
     std::vector<std::string> args{"--data-dir", ce::utf8(m_inst.dir), "--user-dir", cane::utf8(cane::userDirectory()), "--mod-package",
-                                  ce::utf8(m_proj.dir), "--world", std::to_string(m_eo.record) + (oidTask > 0 ? ":" + std::to_string(oidTask) : std::string())};
+                                  ce::utf8(m_proj.dir), "--world", WorldArg(m_eo.record) + (oidTask > 0 ? ":" + std::to_string(oidTask) : std::string())};
     if (!m_playMapState.empty()) args.insert(args.end(), {"--map-state", m_playMapState});   // (the States tab's Play)
     if (ppos)
     {
@@ -573,9 +597,9 @@ void CEditor::PlayTestAt(int oidTask, const glm::vec3* ppos, float heading)
         std::printf("editor: play: %s\n", line.c_str());
         return;
     }
-    if (!ce::spawnDetached(exe, args)) Status("could not start " + ce::utf8(exe));
+    if (!ce::spawnDetached(exe, args)) Status(std::string(T("could not start")) + " " + ce::utf8(exe));
     else if (oidTask > 0) Status(std::string(T("play test started at task")) + " " + std::to_string(oidTask));
-    else Status("play test started (" + m_index.entry.name + " with this project loaded)");
+    else Status(Fmt(T("play test started (%s with this project loaded)"), m_index.entry.name.c_str()));
 }
 
 int CEditor::TaskToPlay(LO* plo) const
@@ -590,7 +614,7 @@ int CEditor::TaskToPlay(LO* plo) const
 void CEditor::PlayFromView()
 {
     // the ground below the point 600 ahead of the view (else that point), Sly facing the view's way
-    glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+    glm::vec3 p = m_cam.pos + DirPlace() * 600.0f, hit;
     if (FSnapDown(p, hit)) p = hit + glm::vec3(0, 0, 5);
     const glm::vec3 d = m_cam.Dir();
     PlayTestAt(-1, &p, std::atan2(d.y, d.x));
@@ -646,6 +670,22 @@ bool CEditor::FProject(const glm::vec3& p, ImVec2& s) const
     if (c.w <= 1e-3f) return false;
     s = ImVec2((c.x / c.w * 0.5f + 0.5f) * size.x, (0.5f - c.y / c.w * 0.5f) * size.y);
     return true;
+}
+
+// where new things go: the ray through the middle of the part of the view the panels leave visible (the bottom dock
+// covers the lower third: the camera's own middle would put them under it). Automated runs (--editor-do) keep the
+// camera's middle while their steps run, so the gates' coordinates stay as they were.
+glm::vec3 CEditor::DirPlace() const
+{
+    if (m_fScripted) return m_cam.Dir();   // (a script running)
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    if (size.x < 100 || size.y < 100) return m_cam.Dir();
+    const float top = ImGui::GetFrameHeight();
+    const float wRight = std::clamp(size.x * 0.25f, 330.0f, 470.0f);
+    float yBottom = size.y - 36;
+    if (m_fDockOpen) yBottom -= std::max(220.0f, (size.y - top) * ((m_tabCur == 3 || m_tabCur == 5 || m_tabCur == 10) ? 0.5f : 0.36f));
+    const float x = (64.0f + (size.x - wRight - 12.0f)) * 0.5f, y = (top + std::max(top + 50.0f, yBottom)) * 0.5f;
+    return RayDir(x, y);
 }
 
 glm::vec3 CEditor::RayDir(float x, float y) const
@@ -1001,18 +1041,19 @@ void CEditor::DrawMenu()
     if (ImGui::BeginMenu(T("Project")))
     {
         if (ImGui::MenuItem(T("Save"), "Ctrl+S")) FSave();
-        if (ImGui::MenuItem("Install into " EDGAME_NAME "'s mods folder"))
+        if (ImGui::MenuItem(T("Check level..."))) { m_fCheckOpen = true; CheckLevel(); }
+        if (ImGui::MenuItem(T("Install into the game's mods folder")))
         {
             std::string error;
-            if (FSave() && m_proj.install(cane::userDirectory() / "Mods", error)) Status("installed as Mods/Packages/" + m_proj.manifest.id);
-            else if (!error.empty()) Status("install failed: " + error);
+            if (FSave() && m_proj.install(cane::userDirectory() / "Mods", error)) Status(std::string(T("installed as")) + " Mods/Packages/" + m_proj.manifest.id);
+            else if (!error.empty()) Status(std::string(T("install failed")) + ": " + error);
         }
         if (ImGui::MenuItem(T("Export as .zip")))
         {
             std::string error;
             const auto zip = m_proj.dir.parent_path() / (m_proj.manifest.id + ".zip");
-            if (FSave() && m_proj.exportZip(zip, error)) Status("exported " + ce::utf8(zip));
-            else if (!error.empty()) Status("export failed: " + error);
+            if (FSave() && m_proj.exportZip(zip, error)) Status(std::string(T("exported")) + " " + ce::utf8(zip));
+            else if (!error.empty()) Status(std::string(T("export failed")) + ": " + error);
         }
         ImGui::Separator();
         if (ImGui::MenuItem(T("Import model as a new object...")))
@@ -1102,8 +1143,8 @@ void CEditor::DrawMenu()
         ImGui::EndMenu();
     }
     ImGui::Separator();
-    const char* amode[] = {"Move (W)", "Rotate (E)", "Scale (R)"};
-    static const char* const s_atip[] = {"Move the selection along the gizmo's arrows", "Turn it about the gizmo's rings", "Scale it along an axis (or all at once from the middle)"};
+    const char* amode[] = {T("Move (W)"), T("Rotate (E)"), T("Scale (R)")};
+    const char* const s_atip[] = {T("Move the selection along the gizmo's arrows"), T("Turn it about the gizmo's rings"), T("Scale it along an axis (or all at once from the middle)")};
     for (int i = 0; i < 3; ++i)
     {
         if (ImGui::RadioButton(amode[i], m_tool != 0 && m_gizmo == i)) { m_gizmo = i; m_tool = 1; }
@@ -1114,14 +1155,14 @@ void CEditor::DrawMenu()
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, st::vec(st::ctaHover));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, st::vec(st::ctaActive));
     ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::ctaText));
-    if (ImGui::SmallButton("  Play test  ")) PlayTest();
-    EdTip("Starts the game in this world with the project loaded (saved first); the editor stays open.");
+    if (ImGui::SmallButton((std::string("  ") + T("Play test") + "  ###playtest").c_str())) PlayTest();
+    EdTip(T("Starts the game in this world with the project loaded (saved first); the editor stays open."));
     ImGui::SameLine(0, 2);
     if (ImGui::SmallButton(" v ") || m_fOpenPlayMenu) { ImGui::OpenPopup("playmenu"); m_fOpenPlayMenu = false; }
     ImGui::PopStyleColor(4);
     EdTip(T("Play a job or one of its tasks, the selected job / task, or from the view's point"));
     DrawPlayMenu();
-    ImGui::TextColored(st::vec(st::muted), "  %s  |  %s%s", m_index.entry.name.c_str(), m_proj.manifest.name.c_str(), m_proj.dirty() ? " (unsaved)" : "");
+    ImGui::TextColored(st::vec(st::muted), "  %s  |  %s%s", m_index.entry.name.c_str(), m_proj.manifest.name.c_str(), m_proj.dirty() ? (std::string(" (") + T("unsaved") + ")").c_str() : "");
     ImGui::EndMainMenuBar();
 }
 
@@ -1176,7 +1217,7 @@ void CEditor::DrawTree()
             char label[128];
             std::snprintf(label, sizeof(label), "%s  %d##f%p", SzClass(plo->Cid()), plo->oid, static_cast<void*>(plo));
             if (ImGui::Selectable(label, plo == m_plSel)) m_plSel = plo;
-            if (++n >= 500) { ImGui::TextDisabled("(first 500)"); break; }
+            if (++n >= 500) { ImGui::TextDisabled("%s", T("(first 500)")); break; }
         }
     }
     else
@@ -1233,7 +1274,9 @@ void CEditor::DrawInspector()
         for (const auto& [ot, n] : mpType) types += (types.empty() ? "" : ", ") + std::to_string(n) + " " + T(InfoOfType(OBJTYPE(ot)).plural);
         ImGui::TextWrapped("%s", types.c_str());
         static float s_off[3] = {0, 0, 0};
-        ImGui::SetNextItemWidth(-90);
+        // (the button keeps its words whole in every language: the field takes what is left)
+        const float wButton = ImGui::CalcTextSize(T("Move all")).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetNextItemWidth(-(wButton + ImGui::CalcTextSize(T("Offset")).x + 24.0f));
         ImGui::InputFloat3(T("Offset"), s_off, "%.1f");
         ImGui::SameLine();
         if (ImGui::Button(T("Move all")))
@@ -1277,7 +1320,7 @@ void CEditor::DrawInspector()
         ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::cta));
         ImGui::TextUnformatted(NameOfObject(plo).c_str());
         ImGui::PopStyleColor();
-        ImGui::TextColored(st::vec(st::muted), "%s  -  %s 0x%X  -  oid %d", T(ti.name), SzClass(plo->Cid()), plo->Cid(), plo->oid);
+        ImGui::TextColored(st::vec(st::muted), "%s  -  %s (%s 0x%X)  -  oid %d", T(ti.name), ClassFriendlyName(plo->Cid()), SzClass(plo->Cid()), plo->Cid(), plo->oid);
         ImGui::EndGroup();
         ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + hIcon + 6));
     }
@@ -1300,13 +1343,13 @@ void CEditor::DrawInspector()
             ImGui::TextWrapped("%s", v.c_str());
         };
         std::string group = plo->igrp >= 0 && plo->igrp < int(m_index.groups.size()) ? m_index.groups[plo->igrp].name : std::string("-");
-        row("Group", group);
-        if (const GAMEAREA ga = AreaOfLo(plo); ga != GA_None) row("Area", SzArea(ga));
-        row("Parent", plo->paloParent ? std::string(SzClass(plo->paloParent->Cid())) + " " + std::to_string(plo->paloParent->oid) : std::string("(none)"));
+        row(T("Group"), group);
+        if (const GAMEAREA ga = AreaOfLo(plo); ga != GA_None) row(T("Area"), T(SzArea(ga)));
+        row(T("Parent"), plo->paloParent ? NameOfObject(plo->paloParent) : std::string(T("(none)")));
         LO* ptop = PloTopLevel(plo);
-        row("Record", ptop ? (ptop == plo ? std::string("top-level in ") : std::string("inside ") + std::to_string(ptop->oid) + ", ") +
+        row(T("Record"), ptop ? (ptop == plo ? std::string(T("top-level in")) + " " : std::string(T("inside")) + " " + std::to_string(ptop->oid) + ", ") +
                                  m_mpobj[ptop].relRecord.substr(m_mpobj[ptop].relRecord.find("/World/") + 1)
-                           : std::string("made at run time (not stored)"));
+                           : std::string(T("made at run time (not stored)")));
         ImGui::EndTable();
     }
     PLACE pl;
@@ -1315,10 +1358,10 @@ void CEditor::DrawInspector()
         if (pl.fProxy)
         {
             const std::string grp = pl.ploLive->igrp >= 0 && pl.ploLive->igrp < int(m_index.groups.size()) ? m_index.groups[pl.ploLive->igrp].name : std::string("?");
-            ImGui::SeparatorText("Placement (instance)");
-            ImGui::TextColored(st::vec(st::muted), "An instance of %s, placed by proxy %d", grp.c_str(), pl.oidProxy);
+            ImGui::SeparatorText(T("Placement (instance)"));
+            ImGui::TextColored(st::vec(st::muted), T("An instance of %s, placed by proxy %d"), grp.c_str(), pl.oidProxy);
         }
-        else ImGui::SeparatorText(pl.ploLive == plo ? "Transform (local)" : "Transform");
+        else ImGui::SeparatorText(pl.ploLive == plo ? T("Transform (local)") : T("Transform"));
         const glm::mat4 m = MatPlace(pl);
         glm::vec3 pos(m[3]);
         glm::vec3 sc(glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2])));
@@ -1328,13 +1371,13 @@ void CEditor::DrawInspector()
         glm::vec3 eul(glm::degrees(ex), glm::degrees(ey), glm::degrees(ez));
         bool fChanged = false, fDone = false;
         ImGui::SetNextItemWidth(-70);
-        fChanged |= ImGui::DragFloat3("Position", glm::value_ptr(pos), 5.0f, 0, 0, "%.1f");
+        fChanged |= ImGui::DragFloat3(TL("Position", "pos").c_str(), glm::value_ptr(pos), 5.0f, 0, 0, "%.1f");
         fDone |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SetNextItemWidth(-70);
-        fChanged |= ImGui::DragFloat3("Rotation", glm::value_ptr(eul), 0.5f, 0, 0, "%.1f");
+        fChanged |= ImGui::DragFloat3(TL("Rotation", "rot").c_str(), glm::value_ptr(eul), 0.5f, 0, 0, "%.1f");
         fDone |= ImGui::IsItemDeactivatedAfterEdit();
         ImGui::SetNextItemWidth(-70);
-        fChanged |= ImGui::DragFloat3("Scale", glm::value_ptr(sc), 0.01f, 0.01f, 100.0f, "%.3f");
+        fChanged |= ImGui::DragFloat3(TL("Scale", "scale").c_str(), glm::value_ptr(sc), 0.01f, 0.01f, 100.0f, "%.3f");
         fDone |= ImGui::IsItemDeactivatedAfterEdit();
         if (fChanged)
         {
@@ -1344,14 +1387,14 @@ void CEditor::DrawInspector()
         }
         if (fDone) FRecordPlace(pl, "Edit transform of " + std::string(SzClass(pl.ploLive->Cid())) + " " + std::to_string(pl.fProxy ? pl.oidProxy : pl.ploLive->oid));
         const glm::vec3 pw = PosWorld(plo);
-        ImGui::TextColored(st::vec(st::muted), "World position  %.1f, %.1f, %.1f", pw.x, pw.y, pw.z);
+        ImGui::TextColored(st::vec(st::muted), T("World position  %.1f, %.1f, %.1f"), pw.x, pw.y, pw.z);
     }
     else if (FHasMatrix(plo))
     {
-        ImGui::SeparatorText("Transform");
+        ImGui::SeparatorText(T("Transform"));
         const glm::vec3 pw = PosWorld(plo);
-        ImGui::TextColored(st::vec(st::muted), "World position  %.1f, %.1f, %.1f", pw.x, pw.y, pw.z);
-        ImGui::TextColored(st::vec(st::danger), "Placed at run time: not stored in the world file.");
+        ImGui::TextColored(st::vec(st::muted), T("World position  %.1f, %.1f, %.1f"), pw.x, pw.y, pw.z);
+        ImGui::TextColored(st::vec(st::danger), "%s", T("Placed at run time: not stored in the world file."));
     }
     DrawBrushProperties(plo);
     DrawGuardSection(plo);
@@ -1365,11 +1408,11 @@ void CEditor::DrawInspector()
         TASKLINKS tl;
         if (FTaskLinks(plo, tl))
         {
-            ImGui::SeparatorText("Task links");
+            ImGui::SeparatorText(T("Task links"));
             std::string pre, post;
             for (int o : tl.aoidPre) pre += (pre.empty() ? "" : ", ") + std::to_string(o);
             for (int o : tl.aoidPost) post += (post.empty() ? "" : ", ") + std::to_string(o);
-            ImGui::TextColored(st::vec(st::muted), "after: %s   next: %s  (edit in Missions)", pre.empty() ? "-" : pre.c_str(), post.empty() ? "-" : post.c_str());
+            ImGui::TextColored(st::vec(st::muted), T("after: %s   next: %s  (edit in Missions)"), pre.empty() ? "-" : pre.c_str(), post.empty() ? "-" : post.c_str());
         }
     }
 #endif
@@ -1379,14 +1422,14 @@ void CEditor::DrawInspector()
     if (ImGui::CollapsingHeader(TL("When it exists", "exists").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) DrawExistence(plo, po);
 #if EDFEAT_OPTIONS
     DrawLinks(plo, po);
-    ImGui::SeparatorText("Options");
+    ImGui::SeparatorText(T("Options"));
     DrawOptions(plo, po);
 #endif
     // (what this game's editor does not edit yet: the counts, read only)
     if (!EDFEAT_CURVES || !EDFEAT_MODELS || !EDFEAT_OPTIONS)
         if (po && ((!EDFEAT_CURVES && po->ipath >= 0) || (!EDFEAT_MODELS && po->iglobset >= 0) || !EDFEAT_OPTIONS))
         {
-            ImGui::SeparatorText("Recorded");
+            ImGui::SeparatorText(T("Recorded"));
             if (!EDFEAT_OPTIONS) ImGui::TextColored(st::vec(st::muted), "%zu options, %zu option lists", po->aiopt.size(), po->aiarr.size());
             ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted));
             if (!EDFEAT_CURVES && po->ipath >= 0) ImGui::TextWrapped("A curve (%s: its editing comes later).", EDGAME_NAME);
@@ -1395,22 +1438,22 @@ void CEditor::DrawInspector()
         }
     ImGui::Spacing();
 #if EDFEAT_STRUCT
-    if (ImGui::Button("Duplicate")) Duplicate();
+    if (ImGui::Button(T("Duplicate"))) Duplicate();
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, st::vec(st::danger, 0.75f));
-    if (ImGui::Button("Delete")) Delete();
+    if (ImGui::Button(T("Delete"))) Delete();
     ImGui::PopStyleColor();
     ImGui::SameLine();
 #endif
-    if (ImGui::Button("Frame")) FrameSelected();
+    if (ImGui::Button(T("Frame"))) FrameSelected();
     if (EDFEAT_STRUCT && (pl.fProxy || FPlace(plo, pl)))
         if (pl.fProxy)
         {
             ImGui::SameLine();
-            if (ImGui::Button("Make unique"))
+            if (ImGui::Button(T("Make unique")))
             {
                 std::string error;
-                if (!FMakeUnique(plo, error)) Status("make unique: " + error);
+                if (!FMakeUnique(plo, error)) Status(std::string(T("make unique")) + ": " + error);
             }
         }
     ImGui::End();
@@ -1451,6 +1494,8 @@ void CEditor::DrawWorldPanel()
         if (tab(T("Level"), 11)) { DrawLevelTab(); ImGui::EndTabItem(); }
 #endif
         if (tab(T("Assets"), 9)) { DrawAssets(); ImGui::EndTabItem(); }
+        if (tab(T("Lighting"), 12)) { DrawLightingTab(); ImGui::EndTabItem(); }
+        if (tab(T("Sound"), 13)) { DrawSoundTab(); ImGui::EndTabItem(); }
 #if EDFEAT_STRUCT
         if (tab(T("Create"), 6)) { DrawBrushTools(); DrawBuildPalette(); ImGui::SeparatorText(T("Copies of the world's objects")); DrawCreate(); if (m_dockScroll >= 0) { ImGui::SetScrollY(m_dockScroll); m_dockScroll = -1; } ImGui::EndTabItem(); }
 #endif
@@ -1473,7 +1518,7 @@ void CEditor::DrawWorldPanel()
                     char l2[96];
                     std::snprintf(l2, sizeof(l2), "%s##a%p", StrLo(plo).c_str(), static_cast<void*>(plo));
                     if (ImGui::Selectable(l2, plo == m_plSel)) { Select(plo); FrameSelected(); }
-                    if (++n >= 300) { ImGui::TextDisabled("(first 300)"); break; }
+                    if (++n >= 300) { ImGui::TextDisabled("%s", T("(first 300)")); break; }
                 }
                 ImGui::TreePop();
             }
@@ -1491,7 +1536,7 @@ void CEditor::DrawWorldPanel()
 #endif
         if (tab(T("Text"), 2))
         {
-            ImGui::TextColored(st::vec(st::muted), "%zu strings (%s)", m_atext.size(), m_textLanguage.c_str());
+            ImGui::TextColored(st::vec(st::muted), T("%zu strings (%s)"), m_atext.size(), m_textLanguage.c_str());
             ImGui::BeginChild("text");
             for (const ce::TextString& t : m_atext) ImGui::TextWrapped("%5d  %s", t.id, t.text.c_str());
             ImGui::EndChild();
@@ -1502,17 +1547,17 @@ void CEditor::DrawWorldPanel()
             const auto& ah = m_proj.history();
             for (std::size_t i = 0; i < ah.size(); ++i) ImGui::BulletText("%s%s", ah[i].label.c_str(), ah[i].structural ? "  *" : "");
             const auto& ar = m_proj.redoHistory();
-            for (auto it = ar.rbegin(); it != ar.rend(); ++it) ImGui::TextDisabled("   (undone) %s", it->label.c_str());
-            if (ah.empty() && ar.empty()) ImGui::TextDisabled("(no edits yet)");
-            ImGui::TextColored(st::vec(st::muted), "Kept with the project when it is saved.");
+            for (auto it = ar.rbegin(); it != ar.rend(); ++it) ImGui::TextDisabled("   (%s) %s", T("undone"), it->label.c_str());
+            if (ah.empty() && ar.empty()) ImGui::TextDisabled("%s", T("(no edits yet)"));
+            ImGui::TextColored(st::vec(st::muted), "%s", T("Kept with the project when it is saved."));
             ImGui::Separator();
-            if (ImGui::SmallButton("Check references now"))
+            if (ImGui::SmallButton(T("Check references now")))
             {
                 m_aproblem = Validate();
                 Status(std::to_string(m_aproblem.size()) + " problems found");
             }
             for (const PROBLEM& p : m_aproblem) ImGui::TextColored(st::vec(st::danger), "%s", p.text.c_str());
-            ImGui::TextColored(st::vec(st::muted), "Changed parts:");
+            ImGui::TextColored(st::vec(st::muted), "%s", T("Changed parts:"));
             for (const std::string& rel : m_proj.changedParts()) ImGui::TextWrapped("%s", rel.substr(rel.find("/World/") + 1).c_str());
             ImGui::EndTabItem();
         }
@@ -1533,14 +1578,15 @@ void CEditor::Screenshot(const std::string& path)
     const std::size_t row = std::size_t(w) * 4;
     for (int y = 0; y < h; ++y) std::memcpy(flip.data() + std::size_t(y) * row, ab.data() + std::size_t(h - 1 - y) * row, row);
     for (std::size_t i = 3; i < flip.size(); i += 4) flip[i] = 255;
-    if (stbi_write_png(path.c_str(), w, h, 4, flip.data(), int(row))) Status("wrote " + path);
-    else Status("could not write " + path);
+    if (stbi_write_png(path.c_str(), w, h, 4, flip.data(), int(row))) Status(std::string(T("wrote")) + " " + path);
+    else Status(std::string(T("could not write")) + " " + path);
 }
 
 // --editor-do: one step per frame once the world shows (tools/editorshots.sh)
 bool CEditor::FRunScript()
 {
-    if (m_iscript >= m_ascript.size()) return false;
+    if (m_iscript >= m_ascript.size()) { m_fScripted = false; return false; }
+    m_fScripted = true;
     if (m_waitScript > 0) { --m_waitScript; return true; }
     const SCRIPTCMD c = m_ascript[m_iscript++];
     m_waitScript = 1;
@@ -1954,11 +2000,11 @@ bool CEditor::FRunScript()
     else if (c.verb == "install")
     {
         std::string error;
-        if (!m_proj.install(c.arg.empty() ? cane::userDirectory() / "Mods" : ce::pathOf(c.arg), error)) Status("install failed: " + error);
+        if (!m_proj.install(c.arg.empty() ? cane::userDirectory() / "Mods" : ce::pathOf(c.arg), error)) Status(std::string(T("install failed")) + ": " + error);
         else Status("installed " + m_proj.manifest.id);
     }
     else if (c.verb == "zip") { std::string e; if (!m_proj.exportZip(ce::pathOf(c.arg), e)) Status("zip: " + e); }
-    else if (c.verb == "tab") m_tab = c.arg == "missions" ? 1 : c.arg == "text" ? 2 : c.arg == "scripts" ? 3 : c.arg == "history" ? 4 : c.arg == "dialogue" ? 5 : c.arg == "create" ? 6 : c.arg == "areas" ? 7 : c.arg == "models" ? 8 : 0;
+    else if (c.verb == "tab") m_tab = c.arg == "missions" ? 1 : c.arg == "text" ? 2 : c.arg == "scripts" ? 3 : c.arg == "history" ? 4 : c.arg == "dialogue" ? 5 : c.arg == "create" ? 6 : c.arg == "areas" ? 7 : c.arg == "models" ? 8 : c.arg == "lighting" ? 12 : c.arg == "sound" ? 13 : c.arg == "level" ? 11 : 0;
 #if EDGAME_SLY2
     else if (c.verb == "scriptnames") { m_fScriptReadable = c.arg != "0"; if (m_igroupScript >= 0) LoadScriptText(m_igroupScript); }   // scriptnames:0|1
     else if (c.verb == "scriptroundtrip")   // every group's scripts with names, back to the converter's text: the same text
@@ -2044,7 +2090,7 @@ bool CEditor::FRunScript()
             else
             {
                 for (const std::string& n : anew) Status("scriptedit: new symbol " + n);
-                Status("scripts of " + m_index.groups[std::size_t(m_igroupScript)].name + " applied");
+                Status(Fmt(T("scripts of %s applied"), m_index.groups[std::size_t(m_igroupScript)].name.c_str()));
                 const int ig = m_igroupScript;
                 Reload(m_plSel ? m_plSel->oid : 0);
                 LoadScriptText(ig);
@@ -2089,8 +2135,8 @@ bool CEditor::FRunScript()
             text.replace(i, from.size(), to);
             int line = 0;
             std::vector<PROBLEM> apb;
-            if (!FCheckScript(text, error, line, &apb, ig)) Status("script check failed: " + error);
-            else if (!FApplyScript(ig, text, error)) Status("script apply failed: " + error);
+            if (!FCheckScript(text, error, line, &apb, ig)) Status(std::string(T("script check failed")) + ": " + error);
+            else if (!FApplyScript(ig, text, error)) Status(std::string(T("script apply failed")) + ": " + error);
             else { for (const PROBLEM& p : apb) Status("script: " + p.text); Status("scripts of " + grp + " applied"); LoadScriptText(ig); Reload(m_plSel ? m_plSel->oid : 0); }
         }
     }
@@ -2126,7 +2172,7 @@ bool CEditor::FRunScript()
             else if (t.cb == 2) { const int16_t x = int16_t(v); FSetOption(ifield, &x, 2, label); }
             else { const int32_t x = int32_t(v); FSetOption(ifield, &x, 4, label); }
         }
-        Status("option " + StrOption(eopid) + " set: " + m_note);
+        Status(Fmt(T("option %s set: %s"), StrOption(eopid).c_str(), m_note.c_str()));
     }
     else if (c.verb == "opts")   // opts: the selection's options (and list options) printed
     {
@@ -2298,13 +2344,13 @@ bool CEditor::FRunScript()
         int iobj = -1;
         if (const auto it = m_mpoidProxy.find(oid); it != m_mpoidProxy.end()) iobj = it->second;
         else if (LO* plo = PloOid(oid)) iobj = IobjOfLo(PloTopLevel(plo));
-        glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+        glm::vec3 p = m_cam.pos + DirPlace() * 600.0f, hit;
         if (FSnapDown(p, hit)) p = hit;
         std::string error;
         const int igrp = CopyGroup();   // (Sly 2: the level group with scripts, so a copy's script modules come with it)
         if (iobj < 0 || !CopyRecord(iobj, igrp, &p, true, error)) Status("create: " + (error.empty() ? std::string("no record") : error));
     }
-    else if (c.verb == "unique") { std::string error; if (!FMakeUnique(m_plSel, error)) Status("make unique: " + error); }
+    else if (c.verb == "unique") { std::string error; if (!FMakeUnique(m_plSel, error)) Status(std::string(T("make unique")) + ": " + error); }
     else if (c.verb == "subtree")   // the selection's descendants: class, oid, position, option numbers
     {
         auto walk = [&](auto&& self, LO* plo, int depth) -> void {
@@ -2437,6 +2483,13 @@ int CEditor::Run()
 #if EDGAME_SLY2
     RegisterProjectWorlds(m_inst, m_eo.project);   // (the project's new worlds: records 44.. (Sly2-Release/editor_newworld.h))
 #endif
+    if (!m_eo.world.empty())   // (--editor NAME: a world's name, a project's new world's name or "@id")
+    {
+        const std::string id = m_eo.world[0] == '@' ? m_eo.world.substr(1) : m_eo.world;
+        for (const ce::WorldEntry& we : m_inst.worlds)
+            if (we.name == m_eo.world || (!we.indexBase.empty() && we.code == id)) m_eo.record = we.record;
+        if (m_eo.record < 0) { std::fprintf(stderr, "editor: no world named %s\n", m_eo.world.c_str()); return 1; }
+    }
     if (m_eo.record < 0) m_eo.record = EDGAME_DEFAULT_WORLD;
     const ce::WorldEntry* pe = m_inst.world(m_eo.record);
     if (!pe) { std::fprintf(stderr, "editor: no world record %d in this installation\n", m_eo.record); return 1; }
@@ -2507,12 +2560,16 @@ int CEditor::Run()
     io.IniFilename = nullptr;
     ImFontConfig fc;
     fc.FontDataOwnedByAtlas = false;
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(cane_font), int(sizeof(cane_font)), 17.0f, &fc);
+    // (Latin-1 and the Windows-1252 marks the games' text has: ’ “ ” … – — € œ ...; ImGui's default stops at U+00FF)
+    static const ImWchar s_aranges[] = {0x0020, 0x00FF, 0x0152, 0x0153, 0x0160, 0x0161, 0x0178, 0x0178, 0x017D, 0x017E, 0x0192, 0x0192, 0x02C6, 0x02C6,
+                                        0x02DC, 0x02DC, 0x2013, 0x2014, 0x2018, 0x201E, 0x2020, 0x2022, 0x2026, 0x2026, 0x2030, 0x2030, 0x2039, 0x203A,
+                                        0x20AC, 0x20AC, 0x2122, 0x2122, 0};
+    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(cane_font), int(sizeof(cane_font)), 17.0f, &fc, s_aranges);
     AddEditorLanguageFonts(io, 17.0f);
     st::apply(1.0f);
     ImGui_ImplGlfw_InitForOpenGL(g_gl.window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
-    Status("ready: " + std::to_string(m_psw->aploAll.size()) + " objects. Right mouse + WASD flies, click picks, W / E / R move / rotate / scale.");
+    Status(Fmt(T("ready: %d objects. Right mouse + WASD flies, click picks, W / E / R move / rotate / scale."), int(m_psw->aploAll.size())));
 
     double tLast = glfwGetTime();
     while (!m_fQuit && !glfwWindowShouldClose(g_gl.window))
@@ -2542,6 +2599,7 @@ int CEditor::Run()
 #endif
         DrawStatusBar();
         DrawProblems();
+        DrawCheckPanel();
         DrawFileDialogs();
         DrawHelp();
         DrawMarkers();
@@ -2549,6 +2607,7 @@ int CEditor::Run()
         DrawPatrols();
 #if EDGAME_SLY2
         DrawEntries();
+        DrawGuests();
 #endif
         DrawBrushEdit();
         DrawCameraPanel();
@@ -2587,6 +2646,7 @@ int CEditor::Run()
         RenderPendingThumbs();
         PollOtherLevel();
         PollState();
+        ApplyStatePoses();
         RenderCameraPreview();
         RenderScene(m_scene, m_cam, m_opts);
         g_gl.Present();
@@ -2627,6 +2687,11 @@ int CEditor::Run()
 #include "editor_build.inc"
 #include "editor_states.inc"
 #include "editor_newlevel.inc"
+#include "editor_guests.inc"
+#include "editor_prefab.inc"
+#include "editor_lighting.inc"
+#include "editor_sound.inc"
+#include "editor_check.inc"
 #include "editor_everything.inc"
 #include "editor_brushedit.inc"
 

@@ -23,6 +23,8 @@ enum EDITFK : int
                          // count, S32 oids, the name)
     EDITFK_Globset,      // an ALO's glob set (its model, LoadGlobsetFromBrx): [ib, ibEnd)
     EDITFK_Soes,         // an ALO's collision entries (S16 count, the SOEs, then mass + inertia when any): [ib, ibEnd)
+    EDITFK_Aseg,         // an animation's (ASEG, cid 0x6D) data (LoadAsegFromBrx: tMax, channels, their tracks' keys, the
+                         // second channels, the three event lists), before its options: [ib, ibEnd)
 };
 
 struct EDITOBJREC
@@ -54,6 +56,11 @@ struct EDITRECORDER
     std::vector<EDITFIELD> afield;
     int depth = 0;
     std::size_t ibProxyMatrix = 0;   // (LoadProxyFromBrx: its matrix, kept until it makes its object)
+    // the world's own option lists (sw.cpp: 0 the SW's, 1 the camera's: fog, clip, field of view): each option (plo null,
+    // i the list, ib its value, ibEnd after it) and where each list starts (its first S16; an option inserted there)
+    std::vector<EDITFIELD> aworldopt;
+    std::size_t aibWorldOptList[2] = {0, 0};
+    int iWorldOptList = -1;          // (set by sw.cpp while a list loads)
 };
 
 extern EDITRECORDER* g_peditrec;

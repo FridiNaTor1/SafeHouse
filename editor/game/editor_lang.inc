@@ -10,6 +10,9 @@
 #define CANE_EDITOR3D_HAS_L10N 1
 #endif
 
+#include <cstdarg>
+#include <cstdio>
+
 namespace edimpl
 {
 
@@ -63,6 +66,16 @@ const char* T(const char* szEnglish)
 }
 
 std::string TL(const char* szEnglish, const char* id) { return std::string(T(szEnglish)) + "###" + id; }
+
+std::string Fmt(const char* fmt, ...)
+{
+    char sz[1024];
+    va_list va;
+    va_start(va, fmt);
+    std::vsnprintf(sz, sizeof(sz), fmt, va);
+    va_end(va);
+    return sz;
+}
 
 // the active language's letters the editor's font lacks, merged from the Noto subsets (call after the main font)
 void AddEditorLanguageFonts(ImGuiIO& io, float pixels)

@@ -12,6 +12,9 @@
 
 // a task listed by a loaded package for the current world: *pn its kept state (-1: none kept yet); false: not listed
 bool FModTaskState(int oid, int* pn);
+// (the cutscene rules' "once") a package's script of a world seen in this save / marked seen
+bool FModSceneSeen(const std::string& idPackage, const std::string& world, int oid);
+void SetModSceneSeen(const std::string& idPackage, const std::string& world, int oid);
 // a listed task's state kept (false: not listed)
 bool FSetModTaskState(int oid, int n);
 

@@ -88,9 +88,9 @@ public:
                                       trf("%zu groups (%zu level), %zu top-level objects, %zu script modules", m_index.groups.size(), clevel, cobj, cscript);
             caption(facts.c_str());
             gap(4);
-            if (button(tr("Open in 3D editor"), Tone::Cta, {0, 0}, Icon::ChevronRight)) start3d(e.record, projectFor(e));
+            if (button(tr("Open in 3D editor"), Tone::Cta, {0, 0}, Icon::ChevronRight)) start3d(std::to_string(e.record), projectFor(e));
             ImGui::SameLine(0, px(8));
-            if (button(tr("Play unmodified"), Tone::Secondary)) playTest(e.record, {});
+            if (button(tr("Play unmodified"), Tone::Secondary)) playTest(std::to_string(e.record), {});
             if (sly3()) {
                 ImGui::SameLine(0, px(8));
                 const char* const kViews[] = {tr("Groups"), tr("Gameplay data")};
@@ -167,9 +167,10 @@ private:
             ImGui::Separator();
             text(p.name.c_str(), fonts().tab);
             ImGui::SameLine();
-            const std::string info = "  " + p.id + "  |  " + trf("%zu changed parts", p.parts) + (p.world >= 0 ? "  |  " + trf("world %d", p.world) : std::string());
+            const std::string info = "  " + p.id + "  |  " + trf("%zu changed parts", p.parts) + (p.world >= 0 ? "  |  " + trf("world %d", p.world) : !p.worldName.empty() ? "  |  " + p.worldName : std::string());
             ImGui::TextColored(vec(color::muted), "%s", info.c_str());
-            const int world = p.world >= 0 ? p.world : m_world >= 0 ? m_inst.worlds[std::size_t(m_world)].record : sly3() ? 3 : 2;
+            const std::string world = !p.worldName.empty() && p.world < 0 ? p.worldName
+                                      : std::to_string(p.world >= 0 ? p.world : m_world >= 0 ? m_inst.worlds[std::size_t(m_world)].record : sly3() ? 3 : 2);
             if (button(tr("Edit##project"), Tone::Primary, {0, px(32)})) start3d(world, p.dir);
             ImGui::SameLine(0, px(6));
             if (button(tr("Play test"), Tone::Cta, {0, px(32)})) playTest(world, p.dir);
@@ -266,6 +267,7 @@ private:
     struct Proj {
         std::string dir, name, id;
         int world = -1;
+        std::string worldName;   // (a project's own new world: named, its record depends on the packages loaded)
         std::size_t parts = 0;
     };
     struct Pkg {
@@ -325,6 +327,7 @@ private:
             p.id = m.id;
             if (m.extra.contains("editor")) p.world = m.extra["editor"].value("world", -1);
             if (p.world < 0 && !m.worlds.empty()) p.world = m.worlds[0].value("record", -1);
+            if (p.world < 0 && !m.worlds.empty()) p.worldName = m.worlds[0].value("new_world", std::string());
             for (const auto& f : fs::recursive_directory_iterator(e.path() / cane::mods::kFilesFolder, ec))
                 if (f.is_regular_file()) ++p.parts;
             m_projects.push_back(p);
@@ -359,9 +362,9 @@ private:
                 utf8(m_backend.languagesDir(m_game))};
     }
 
-    void start3d(int record, const std::string& project) {
+    void start3d(const std::string& world, const std::string& project) {
         std::vector<std::string> a = baseArgs();
-        a.insert(a.end(), {"--editor", std::to_string(record), "--editor-project", project});
+        a.insert(a.end(), {"--editor", world, "--editor-project", project});
         a.insert(a.end(), {"--editor-language", l10n::current()});   // (the 3D editor's strings in the launcher's language)
         std::error_code ec;
         fs::create_directories(projectsDir(), ec);
@@ -370,10 +373,10 @@ private:
         m_loaded = false;   // (its projects again when it is closed and this page shown)
     }
 
-    void playTest(int record, const std::string& project) {
+    void playTest(const std::string& world, const std::string& project) {
         std::vector<std::string> a = baseArgs();
         if (!project.empty()) a.insert(a.end(), {"--mod-package", project});
-        a.insert(a.end(), {"--world", std::to_string(record)});
+        a.insert(a.end(), {"--world", world});
         const std::string name = sly3() ? "Sly 3" : "Sly 2";
         if (!cane::editor::spawnDetached(m_backend.binary(cane::game(m_game).runtime), a)) m_status = trf("%s did not start.", name.c_str());
         else m_status = project.empty() ? trf("%s is starting.", name.c_str()) : trf("%s is starting with the project loaded.", name.c_str());

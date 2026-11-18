@@ -389,11 +389,27 @@ bool FEditorApplyOption(LO* plo, int eopid, const void* pv, std::size_t cb, cons
 void LoadOptionsFromBrx(std::vector<OPT>& aopt, LO* plo, CBinaryInputStream* pbis)
 {
     LOADFN(0x13F810);
+    // (PC: the map editor records the world's own lists, editrec.h aworldopt)
+    const int iList = g_peditrec && !plo ? g_peditrec->iWorldOptList : -1;
+    if (iList >= 0 && iList < 2) g_peditrec->aibWorldOptList[iList] = pbis->m_ib;
     for (int n; (n = pbis->S16Read()) >= 0;)
     {
         const int grf = static_cast<int>(g_disc.U32Elf(VA_AEOPID + static_cast<uint32_t>(n) * CB_EOPID + 4)) & 0x2580;
         OPT opt;
+        const std::size_t ibValue = pbis->m_ib;
         LoadOptionFromBrx(opt, plo, n, grf, pbis);
+        if (iList >= 0 && iList < 2)
+        {
+            EDITFIELD f;
+            f.plo = nullptr;
+            f.fk = EDITFK_Option;
+            f.i = iList;
+            f.eopid = n;
+            f.k = static_cast<int>(g_disc.U32Elf(VA_AEOPID + static_cast<uint32_t>(n) * CB_EOPID));
+            f.ib = ibValue;
+            f.ibEnd = pbis->m_ib;
+            g_peditrec->aworldopt.push_back(f);
+        }
         aopt.push_back(std::move(opt));
     }
 }

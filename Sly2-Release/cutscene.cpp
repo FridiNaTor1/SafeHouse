@@ -1,6 +1,10 @@
 // cutscene.cpp: the map editor's cutscene editor, game side (cutscene.h): the commands' catalogue and the game-run
 // tools (the trace of a script, the play from the editor's playhead, the play session recording).
 #include "cutscene.h"
+#include "textmod.h"
+#include "task.h"
+#include "modsave.h"
+#include "disc.h"
 
 #include "actor.h"
 #include "activate.h"
@@ -38,6 +42,7 @@
 #include <unordered_map>
 
 int IdDialogCur();   // sound.cpp
+extern int g_frameJoy;   // (joy.cpp: the step's frame)
 
 namespace cut
 {
@@ -52,20 +57,20 @@ const char* SzEase(int icurve)
     case 3: return "ease in / out";
     case 4: return "overshoot (4)";
     case 5: return "snap (5)";
-    case 6: return "ease out";
+    case ICURVE_EASEOUT: return "ease out";
     default: return "snap (5)";
     }
 }
 float SEase(int icurve, float u)
 {
     static const float s_a[7][3] = {{0, 0, 1}, {-1, 2, 0}, {-1, -1, 1}, {-2, 3, 0}, {5, 0, 0.5f}, {2000, 0, 1}, {0, -1, 2}};
-    const float* k = s_a[icurve == 6 ? 6 : std::clamp(icurve, 0, 5)];
+    const float* k = s_a[icurve == ICURVE_EASEOUT ? 6 : std::clamp(icurve, 0, 5)];
     return u * u * u * k[0] + u * u * k[1] + u * k[2];
 }
 
 const char* SzTrack(TRACKK tk)
 {
-    static const char* s_a[] = {"Flow", "Camera", "Characters", "Dialogue", "Sound", "Effects", "Events"};
+    static const char* s_a[] = {"Flow", "Camera", "Characters", "Dialogue", "Sound", "Effects", "Events", "Presentation"};
     return tk >= 0 && tk < TK_Max ? s_a[tk] : "?";
 }
 
@@ -106,11 +111,11 @@ std::vector<CMDDESC> MakeCatalogue()
     add(0x0D, "State machine", "state-machine", TK_Events, 0x10, 1,
         {{0x10, "object", PK_Object, ""}, {0x14, "machine", PK_Object, "-1: any of the object's"}, {0x18, "state", PK_Object, "the state to go to"}, {0x1C, "at once", PK_Bool, "snapped (no transition)"}, noWait},
         "Sends an object's state machine to a state (waits until it is there unless \"don't wait\")");
-    add(0x0E, "Show screen", "screen", TK_Effects, -1, 1, {{0x10, "screen", PK_Object, "a screen object (cid 0x7E)"}, {0x14, "part", PK_Int, ""}, noWait}, "Shows a screen object (a picture over the game)");
-    add(0x0F, "Hide screen", "hide-screen", TK_Effects, -1, 0, {{0x10, "screen", PK_Object, ""}}, "Hides a screen object");
+    add(0x0E, "Show screen", "screen", TK_Present, -1, 1, {{0x10, "screen", PK_Object, "a screen object (cid 0x7E)"}, {0x14, "part", PK_Int, ""}, noWait}, "Shows a screen object (a picture over the game)");
+    add(0x0F, "Hide screen", "hide-screen", TK_Present, -1, 0, {{0x10, "screen", PK_Object, ""}}, "Hides a screen object");
     add(0x10, "Time scale", "time-scale", TK_Flow, -1, 0, {{0x10, "scale", PK_Float, "1 normal; 0: the script runs on the real clock (while the game is paused)"}}, "The game's speed while the script runs");
     add(0x11, "Set task state", "task", TK_Events, -1, 0, {{0x10, "task", PK_Task, ""}, {0x14, "state", PK_TaskState, "0 unavailable, 1 available, 2 done, 3 ..."}}, "Sets a task's state (jobs, progress)");
-    add(0x12, "Pause game", "pause", TK_Flow, -1, 0, {{0x10, "on", PK_Bool, ""}, {0x14, "what", PK_Flags, "the pause's kinds (1: the pad locked, 2: the HUD hidden / letterbox ...)"}},
+    add(0x12, "Pause game", "pause", TK_Present, -1, 0, {{0x10, "on", PK_Bool, ""}, {0x14, "what", PK_Flags, "the pause's kinds (the pad is always locked; 1: the subtitle box with the letterbox bars, 2: the HUD hidden)"}},
         "Pauses the game around the scene (the pad locked, the letterbox, the HUD hidden): what makes it a cutscene");
     add(0x13, "Label", "label", TK_Flow, -1, 0, {{0x10, "label", PK_Label, ""}}, "A place to jump to");
     add(0x14, "Go to label", "goto", TK_Flow, -1, 0, {{0x10, "label", PK_Label, ""}}, "Jumps to a label of this track (a loop)");
@@ -155,7 +160,7 @@ std::vector<CMDDESC> MakeCatalogue()
         "Plays a sound effect");
     add(0x37, "Stop sound", "stop-sound", TK_Sound, -1, 0, {{0x10, "sound", PK_Sound, "-1: the track's looping sound"}}, "Stops the track's looping sound");
     add(0x38, "Camera move", "camera", TK_Camera, -1, 0,
-        {{0x10, "from", PK_Pos, "the camera's position at the start (0 0 0: where it is)"}, {0x20, "angles", PK_Angles, "pan / tilt / roll in degrees (0 0 0: as it is)"}, {0x30, "fov", PK_Fov, "the field of view (radians; 0: as it is)"}, {0x40, "seconds", PK_Seconds, "the move's length (0: the commands' up to its end)"}, {0x44, "curve", PK_Int, "the easing curve"}},
+        {{0x10, "from", PK_Pos, "the camera's position at the start (0 0 0: where it is)"}, {0x20, "angles", PK_Angles, "pan / tilt / roll in degrees (0 0 0: as it is)"}, {0x30, "fov", PK_Fov, "the field of view (radians; 0: as it is)"}, {0x40, "seconds", PK_Seconds, "the move's length (0: the commands' up to its end)"}, {0x44, "easing", PK_Ease, "how the move starts and ends: 0 linear, 1 ease in, 3 ease in / out, 1000 ease out (SafeHouse's)"}},
         "A camera shot: the camera moves from this view to the one at its end (\"Camera move end\") over its seconds");
     add(0x39, "Camera move end", "camera-end", TK_Camera, -1, 2,
         {{0x10, "to", PK_Pos, ""}, {0x20, "angles", PK_Angles, ""}, {0x30, "fov", PK_Fov, ""}, {0x40, "release", PK_Bool, "the camera given back at the end"}, {0x44, "cut back", PK_Bool, "cut (not blended) back"}},
@@ -170,7 +175,7 @@ std::vector<CMDDESC> MakeCatalogue()
     add(0x41, "Camera snap", "snap", TK_Camera, -1, 0, {}, "The free camera jumps to its target");
     add(0x42, "Wait for button", "wait-button", TK_Flow, -1, 2, {{0x10, "button", PK_Button, ""}, {0x14, "player", PK_Object, ""}}, "Waits for a button press");
     add(0x43, "Wait for character", "wait-actor", TK_Actor, 0x14, 2, {{0x10, "state", PK_Int, "its jump kind (0: standing)"}, {0x14, "actor", PK_Actor, ""}}, "Waits until a character is in a state (e.g. standing)");
-    add(0x44, "Title card", "title", TK_Effects, -1, 2, {}, "Shows the title card (waits until it is gone)");
+    add(0x44, "Title card", "title", TK_Present, -1, 2, {}, "Shows the title card (waits until it is gone)");
     add(0x45, "Line", "line", TK_Dialog, -1, 1, {{0x10, "line", PK_Line, "the dialogue line (voice, subtitle, speaker)"}, {0x14, "kind", PK_Int, ""}, noWait}, "A line of dialogue (its voice and subtitle)");
     add(0x46, "Clear subtitles", "clear-subtitles", TK_Dialog, -1, 0, {}, "Takes the subtitle away");
     add(0x47, "Hold face", "hold-face", TK_Actor, 0x10, 0, {{0x10, "object", PK_Actor, ""}, {0x14, "what", PK_Flags, ""}, {0x18, "value", PK_Int, ""}}, "A character's talking face held");
@@ -185,8 +190,8 @@ std::vector<CMDDESC> MakeCatalogue()
     add(0x50, "Bentley's ability", "bentley-on", TK_Actor, 0x10, 2, {{0x10, "Bentley", PK_Actor, ""}}, "Bentley's ability held (until he uses it)");
     add(0x51, "Bentley's ability off", "bentley-off", TK_Actor, 0x10, 2, {{0x10, "Bentley", PK_Actor, ""}}, "Bentley's ability let go");
     add(0x52, "Wait for line", "wait-line", TK_Dialog, -1, 2, {{0x10, "at most", PK_Seconds, "-1: to the line's end"}}, "Waits for the track's dialogue line to end (or for a time into it)");
-    add(0x53, "Hint", "hint", TK_Effects, -1, 1, {{0x10, "text", PK_Text, ""}, {0x14, "seconds", PK_Seconds, ""}, noWait}, "A hint box on the screen");
-    add(0x54, "Hint off", "hint-off", TK_Effects, -1, 0, {{0x10, "text", PK_Text, ""}}, "Takes a hint box away");
+    add(0x53, "Hint", "hint", TK_Present, -1, 1, {{0x10, "text", PK_Text, ""}, {0x14, "seconds", PK_Seconds, ""}, noWait}, "A hint box on the screen");
+    add(0x54, "Hint off", "hint-off", TK_Present, -1, 0, {{0x10, "text", PK_Text, ""}}, "Takes a hint box away");
     add(0x55, "Guard commands", "guard", TK_Actor, 0x10, 1, {{0x10, "guard", PK_Actor, ""}, {0x14, "commands", PK_Object, "a command list"}, noWait}, "A guard runs a command list");
     add(0x56, "Guard commands off", "guard-off", TK_Actor, 0x10, 0, {{0x10, "guard", PK_Actor, ""}, {0x14, "commands", PK_Object, ""}}, "A guard stops a command list");
     add(0x57, "Murray's toss", "murray-toss", TK_Actor, 0x10, 0, {{0x10, "Murray", PK_Actor, ""}}, "Murray's Bentley toss");
@@ -551,6 +556,74 @@ void RecordStep(SW* psw, int frame)
     t.arec.push_back(std::move(r));
 }
 }  // namespace
+
+// ---- the cutscene rules
+
+namespace
+{
+int s_frameSkipStop = -100;
+const cane::mods::CutsceneRule* PruleOf(LO* pscpt, std::string* pid = nullptr, std::string* pworld = nullptr)
+{
+    if (!pscpt || !g_disc.FCutsceneRules()) return nullptr;
+    const std::string world = g_disc.SzWorldName(g_isectorWorldLoading);
+    if (pworld) *pworld = world;
+    return world.empty() ? nullptr : g_disc.PcutsceneRule(world, pscpt->oid, pid);
+}
+}  // namespace
+
+bool FCutsceneMayStart(LO* pscpt)
+{
+    std::string id, world;
+    const cane::mods::CutsceneRule* pr = PruleOf(pscpt, &id, &world);
+    static const bool s_fDbg = std::getenv("SLY2N_CUTRULE") != nullptr;   // (debug: each start and its rule)
+    if (s_fDbg) std::printf("cutscene: start %d in %s: rule %s\n", pscpt ? pscpt->oid : -1, world.c_str(), pr ? id.c_str() : "none");
+    if (!pr) return true;
+    // (the editor's measurements and plays start the scene as it is)
+    if (Tools().oidTrace || Tools().oidPlay) return true;
+    if (pr->task >= 0)
+    {
+        bool fDone = false;
+        const int n = NTaskStateOid(pr->task, &fDone);
+        if (std::find(pr->states.begin(), pr->states.end(), n) == pr->states.end())
+        {
+            std::printf("cutscene: script %d not started (task %d is %d)\n", pscpt->oid, pr->task, n);
+            return false;
+        }
+    }
+    if (pr->once)
+    {
+        if (FModSceneSeen(id, world, pscpt->oid))
+        {
+            std::printf("cutscene: script %d not started (seen before)\n", pscpt->oid);
+            return false;
+        }
+        SetModSceneSeen(id, world, pscpt->oid);
+    }
+    return true;
+}
+
+int SkipKindByRule(LO* pscpt, int k)
+{
+    const cane::mods::CutsceneRule* pr = PruleOf(pscpt);
+    if (!pr || pr->skip == "auto") return k;
+    if (pr->skip == "never") return 0;
+    return k ? k : 2;   // (always: a cinematic when the game's own rule finds none)
+}
+
+bool FCutsceneNeverSkip(LO* pscpt)
+{
+    const cane::mods::CutsceneRule* pr = PruleOf(pscpt);
+    return pr && pr->skip == "never";
+}
+
+void NoteScptLabel(LO* pscpt, int n)
+{
+    const cane::mods::CutsceneRule* pr = PruleOf(pscpt);
+    if (std::getenv("SLY2N_CUTRULE")) std::printf("cutscene: script %d at label %d (rule %d)\n", pscpt ? pscpt->oid : -1, n, pr ? pr->skipToLabel : -2);
+    if (pr && pr->skipToLabel >= 0 && pr->skipToLabel == n) s_frameSkipStop = g_frameJoy;
+}
+
+bool FCutsceneSkipStops() { return g_frameJoy - s_frameSkipStop <= 2; }
 
 bool FCutsceneArg(int argc, char** argv, int& i)
 {

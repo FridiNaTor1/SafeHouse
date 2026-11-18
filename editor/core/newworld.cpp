@@ -100,11 +100,34 @@ bool addNewWorld(Project& proj, const Installation& inst, const NewWorldSpec& sp
                 n["hex"] = "0000000000000000";
                 n["aligns"] = nlohmann::json::array({nlohmann::json::array({0, 0})});
             } else if (kind == "objects" && g == groupMain && p.contains("file")) {
-                n["size"] = 2;
+                // its own Objects part: the template's lights and skies (every level group's: the level lit as the
+                // template is, under its sky), nothing else
+                std::vector<uint8_t> ab{0, 0};
+                nlohmann::json aobj = nlohmann::json::array();
+                if (spec.keepLighting) {
+                    int c = 0;
+                    for (const auto& q : tpl.at("parts")) {
+                        if (q.value("kind", "") != "objects" || !setLevel.count(q.value("group", -1)) || !q.contains("file")) continue;
+                        std::vector<uint8_t> abTpl;
+                        std::vector<ObjRecord> arec;
+                        std::string e2;
+                        const std::string relTpl = relDirTpl + "/" + q["file"].get<std::string>();
+                        if (!proj.readPart(relTpl, abTpl) || !parseObjects(abTpl.data(), abTpl.size(), arec, e2)) continue;
+                        for (const ObjRecord& r : arec) {
+                            if ((r.cid != 0x04 && r.cid != 0x61) || r.k != 0 || c >= 32767) continue;
+                            aobj.push_back({{"oid", r.oid}, {"cid", r.cid}, {"class", r.cid == 0x04 ? "LIGHT (0x04)" : "SKY (0x61)"}, {"offset", ab.size()}, {"size", r.cb}});
+                            ab.insert(ab.end(), abTpl.begin() + std::ptrdiff_t(r.ib), abTpl.begin() + std::ptrdiff_t(r.ib + r.cb));
+                            ++c;
+                        }
+                    }
+                    ab[0] = uint8_t(c);
+                    ab[1] = uint8_t(c >> 8);
+                }
+                n["size"] = ab.size();
                 n["file"] = p["file"];
                 n["aligns"] = nlohmann::json::array({nlohmann::json::array({0, 0})});
-                n["objects"] = nlohmann::json::array();
-                aown.emplace_back(relDir + "/" + p["file"].get<std::string>(), std::vector<uint8_t>{0, 0});
+                n["objects"] = aobj;
+                aown.emplace_back(relDir + "/" + p["file"].get<std::string>(), std::move(ab));
             } else if (kind == "objects") {
                 n["size"] = 2;
                 n["hex"] = "0000";

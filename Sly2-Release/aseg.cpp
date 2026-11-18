@@ -3,6 +3,7 @@
 #include "aseg.h"
 
 #include "bis.h"
+#include "editrec.h"
 #include "loadtrace.h"
 
 void (*g_pfnLoadOptionsFromBrx)(void* pv, CBinaryInputStream* pbis) = nullptr;
@@ -205,6 +206,7 @@ void LoadAsegEventsFromBrx(std::vector<ASEGEV>* paev, int fTime, CBinaryInputStr
 // orig: 0x0012F2A8 LoadAsegFromBrx
 void LoadAsegFromBrx(ASEGD* pasegd, void* pvOptions, CBinaryInputStream* pbis)
 {
+    const std::size_t ibEdit = pbis->m_ib;   // (PC: the map editor's animation keys, editrec.h)
     {
         LOAD_SCOPE(0x12F2A8, pbis);
         pasegd->tMax = pbis->F32Read();
@@ -250,6 +252,8 @@ void LoadAsegFromBrx(ASEGD* pasegd, void* pvOptions, CBinaryInputStream* pbis)
         LoadAsegEventsFromBrx(&pasegd->aaev[1], 1, pbis);
         LoadAsegEventsFromBrx(&pasegd->aaev[2], 0, pbis);
     }
+    if (g_peditrec)
+        if (LO* plo = PloLoading()) g_peditrec->afield.push_back({plo, EDITFK_Aseg, 0, -1, -1, ibEdit, pbis->m_ib});
     if (g_pfnLoadOptionsFromBrx != nullptr)
         g_pfnLoadOptionsFromBrx(pvOptions, pbis);
 }

@@ -298,13 +298,16 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
         };
         m_aidPackage.clear();
         m_mpCustomTask.clear();
+        m_mpCutsceneRule.clear();
         m_amodworld.clear();
         m_amapstate.clear();
         m_aentry.clear();
+        m_aguest.erase(std::remove_if(m_aguest.begin(), m_aguest.end(), [](const cane::mods::Guest& g) { return g.id.rfind("cli-", 0) != 0; }), m_aguest.end());
         std::vector<cane::mods::Manifest> apkgWorlds;   // (their new worlds, map states and entries: after the files)
         auto addTasks = [&](const cane::mods::Manifest& pkg) {
             for (const cane::mods::CustomTasks& ct : cane::mods::customTasks(pkg))
                 for (int oid : ct.tasks) m_mpCustomTask[{ct.world, oid}] = pkg.id;   // (a later package's listing wins)
+            for (const cane::mods::CutsceneRule& r : cane::mods::cutsceneRules(pkg)) m_mpCutsceneRule[{r.world, r.script}] = {pkg.id, r};
         };
         const std::string region = m.value("region", "");
         const int filesFormat = m.value("format_version", 0);
@@ -485,6 +488,7 @@ void CDisc::AddPackageWorlds(const cane::mods::Manifest& m)
     std::vector<std::string> aerr;
     for (const cane::mods::MapState& st : cane::mods::mapStates(m, &aerr)) m_amapstate.emplace_back(m.id, st);
     for (const cane::mods::Entry& e : cane::mods::entries(m, &aerr)) m_aentry.push_back(e);
+    for (const cane::mods::Guest& g : cane::mods::guests(m, &aerr)) m_aguest.push_back(g);
     for (const cane::mods::NewWorld& w : cane::mods::newWorlds(m, &aerr))
     {
         if (IsectorOfWorldName(w.name))
@@ -495,7 +499,10 @@ void CDisc::AddPackageWorlds(const cane::mods::Manifest& m)
         MODWORLD mw;
         mw.package = m.id;
         mw.w = w;
-        mw.isector = ISECTOR_MODWORLD + uint32_t(m_amodworld.size());
+        // (its sector and key from the package's id and the world's: the same whatever other packages load before it,
+        // so a key kept anywhere (a save, an exit's redirect) names this world; numbered after the disc's records in the
+        // packages' order, a world is addressed by name outside the process: --world NAME, --editor NAME)
+        mw.isector = IsectorModWorldOf(m.id, w.id);
         FILEENT ent;
         ent.fParts = true;
         ent.fMod = true;
@@ -508,6 +515,20 @@ void CDisc::AddPackageWorlds(const cane::mods::Manifest& m)
         m_amodworld.push_back(std::move(mw));
     }
     for (const std::string& e : aerr) std::fprintf(stderr, "mods: package %s\n", e.c_str());
+}
+
+uint32_t CDisc::IsectorModWorldOf(const std::string& package, const std::string& id) const
+{
+    // FNV-1a of "package/id" into 2^19 slots from ISECTOR_MODWORLD (a slot taken by another world: the next free one)
+    uint32_t h = 2166136261u;
+    for (const char ch : package + "/" + id) h = (h ^ uint8_t(ch)) * 16777619u;
+    uint32_t slot = h & 0x7FFFFu;
+    for (;;)
+    {
+        const uint32_t isector = ISECTOR_MODWORLD + slot;
+        if (std::none_of(m_amodworld.begin(), m_amodworld.end(), [&](const MODWORLD& w) { return w.isector == isector; })) return isector;
+        slot = (slot + 1) & 0x7FFFFu;
+    }
 }
 
 uint32_t CDisc::IsectorOfWorldName(const std::string& name) const

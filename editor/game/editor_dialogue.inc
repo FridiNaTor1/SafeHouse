@@ -9,8 +9,69 @@
 
 #include <set>
 
+#if EDGAME_SLY2
+#include "textmod.h"   // (CpOfCp1252 / ByteOfCp1252: the discs' typographic marks)
+#endif
+
 namespace edimpl
 {
+
+#if EDGAME_SLY2
+namespace
+{
+// Sly 2's Text.json keeps the disc's bytes as Latin-1 code points (worldparts.cpp StrRead: byte-exact), so the English
+// text's 0x92 apostrophes and 0x85 ellipses are the C1 controls U+0092 / U+0085 there, which no font draws ("?"). The
+// editor shows them as the Windows-1252 marks they are (textmod.cpp's decoding, as the game and the launcher's
+// localisation tool read them) and stores typed marks back as those bytes.
+void AppendUtf8(std::string& out, uint32_t cp)
+{
+    if (cp < 0x80) out += char(cp);
+    else if (cp < 0x800) { out += char(0xC0 | (cp >> 6)); out += char(0x80 | (cp & 0x3F)); }
+    else { out += char(0xE0 | (cp >> 12)); out += char(0x80 | ((cp >> 6) & 0x3F)); out += char(0x80 | (cp & 0x3F)); }
+}
+}  // namespace
+#endif
+
+std::string GameTextShown(const std::string& s)
+{
+#if EDGAME_SLY2
+    if (s.find('\xC2') == std::string::npos) return s;
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ++i)
+    {
+        const auto b = static_cast<unsigned char>(s[i]);
+        const auto b2 = i + 1 < s.size() ? static_cast<unsigned char>(s[i + 1]) : 0;
+        if (b == 0xC2 && b2 >= 0x80 && b2 < 0xA0) { AppendUtf8(out, CpOfCp1252(b2)); ++i; }
+        else out += s[i];
+    }
+    return out;
+#else
+    return s;
+#endif
+}
+
+std::string GameTextStored(const std::string& s)
+{
+#if EDGAME_SLY2
+    std::string out;
+    for (std::size_t i = 0; i < s.size();)
+    {
+        const auto c = static_cast<unsigned char>(s[i]);
+        uint32_t cp = c;
+        int n = 1;
+        if (c >= 0xF0) { cp = c & 7; n = 4; }
+        else if (c >= 0xE0) { cp = c & 15; n = 3; }
+        else if (c >= 0xC0) { cp = c & 31; n = 2; }
+        for (int k = 1; k < n && i + std::size_t(k) < s.size(); ++k) cp = (cp << 6) | (static_cast<unsigned char>(s[i + std::size_t(k)]) & 63);
+        if (const int b = cp >= 0x100 ? ByteOfCp1252(cp) : -1; b >= 0) AppendUtf8(out, uint32_t(b));
+        else out.append(s, i, std::size_t(n));
+        i += std::size_t(n);
+    }
+    return out;
+#else
+    return s;
+#endif
+}
 
 bool CEditor::FParseDialogue(std::vector<DLGLINE>& a, std::vector<std::string>& alang, std::string& error) const
 {
@@ -71,10 +132,12 @@ void CEditor::ReloadText()
     std::vector<uint8_t> ab;
     std::string error;
     if (!m_index.textPart.empty() && m_proj.readPart(m_index.textPart, ab)) ce::readTextStrings(ab, m_atext, m_textLanguage, error);
+    for (ce::TextString& t : m_atext) t.text = GameTextShown(t.text);
 }
 
-bool CEditor::FSetText(int id, const std::string& text, std::string& error)
+bool CEditor::FSetText(int id, const std::string& textShown, std::string& error)
 {
+    const std::string text = GameTextStored(textShown);   // (the marks as the disc's bytes)
     std::vector<uint8_t> ab;
     if (m_index.textPart.empty() || !m_proj.readPart(m_index.textPart, ab)) { error = "no Text.json"; return false; }
     nlohmann::json j = nlohmann::json::parse(ab.begin(), ab.end(), nullptr, false);
@@ -134,7 +197,7 @@ void CEditor::DrawDialogue()
             int sp = l.oidSpeaker;
             if (ImGui::InputInt("##sp", &sp, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
             {
-                if (sp < -32768 || sp > 32767) Status("rejected: a speaker oid is 16-bit");
+                if (sp < -32768 || sp > 32767) Status(T("rejected: a speaker oid is 16-bit"));
                 else { const int16_t s = int16_t(sp); m_proj.begin("Speaker of line " + std::to_string(l.id)); m_proj.patch(relSound, l.ibId + 2, &s, 2); m_proj.end(); }
             }
             if (ImGui::IsItemHovered())
@@ -144,7 +207,7 @@ void CEditor::DrawDialogue()
             float t = l.atLength.empty() ? 0.0f : l.atLength[0];
             if (ImGui::InputFloat("##t", &t, 0, 0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue))
             {
-                if (!std::isfinite(t) || t <= 0 || t > 600) Status("rejected: a length is 0..600 seconds");
+                if (!std::isfinite(t) || t <= 0 || t > 600) Status(T("rejected: a length is 0..600 seconds"));
                 else
                 {
                     m_proj.begin("Length of line " + std::to_string(l.id));
@@ -160,7 +223,7 @@ void CEditor::DrawDialogue()
             if (ImGui::InputText("##tx", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue))
             {
                 std::string e2;
-                if (FSetText(l.id, buf, e2)) Status("text of line " + std::to_string(l.id) + " changed");
+                if (FSetText(l.id, buf, e2)) Status(Fmt(T("text of line %d changed"), l.id));
                 else Status("text: " + e2);
             }
             // the speaker's events (S16 delay in 1/60 s, S16 target 0..5, S32 value: a float for target 3)
@@ -169,11 +232,11 @@ void CEditor::DrawDialogue()
             std::snprintf(lbl, sizeof(lbl), "%d##ev", l.cevent);
             if (l.cevent > 0 && ImGui::SmallButton(lbl)) ImGui::OpenPopup("events");
             else if (l.cevent == 0) ImGui::TextDisabled("-");
-            EdTip("The speaker's animation events during the line: delay after the previous one (1/60 s), target (0..5), value.");
+            EdTip(T("The speaker's animation events during the line: delay after the previous one (1/60 s), target (0..5), value."));
             if (ImGui::BeginPopup("events"))
             {
                 const std::vector<uint8_t>* pab = m_proj.partRef(relSound);
-                ImGui::TextColored(st::vec(st::muted), "Line %d: delay (1/60 s), target, value", l.id);
+                ImGui::TextColored(st::vec(st::muted), T("Line %d: delay (1/60 s), target, value"), l.id);
                 for (int k = 0; pab && k < l.cevent; ++k)
                 {
                     const std::size_t ib = l.ibEvents + std::size_t(k) * 8;

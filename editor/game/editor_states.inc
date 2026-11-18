@@ -8,6 +8,7 @@
 // objects it adds / removes (the selection) and the state machines it sets. Sly 2 only; Sly 3 says "not yet".
 #if EDGAME_SLY2
 #include "mapstates.h"
+#include <regex>
 #include "../../editor/core/newworld.h"
 #endif
 
@@ -36,6 +37,54 @@ const char* SzTaskStateWord(int n)
 }  // namespace
 #endif
 
+#if EDGAME_SLY2
+namespace
+{
+// a translated template with %s filled in order
+std::string StrFill(const char* szTemplate, std::initializer_list<std::string> aval)
+{
+    std::string out, t = szTemplate;
+    auto it = aval.begin();
+    for (std::size_t i = 0; i < t.size(); ++i)
+    {
+        if (t[i] == '%' && i + 1 < t.size() && t[i + 1] == 's' && it != aval.end()) { out += *it++; ++i; }
+        else out += t[i];
+    }
+    return out;
+}
+// the game's state names and triggers (English, mapstates.cpp) in the user's language
+template <class ROW> void TranslateStateRow(ROW& r)
+{
+    static const std::regex s_reFirst(R"(first task (.*)\)$)"), s_reLast(R"(its last task (.*) done, and every task before it\)$)");
+    std::smatch m;
+    if (r.id == "start")
+    {
+        r.name = T("Start of the episode");
+        r.trigger = r.trigger.rfind("a fresh save", 0) == 0 ? T("a fresh save (no task of this world done)") : T("before any job (a fresh episode: no task done)");
+    }
+    else if (r.id == "complete")
+    {
+        r.name = T("Episode complete");
+        r.trigger = T("once every task of the episode is done");
+    }
+    else if (r.id.rfind("during:", 0) == 0 && r.name.rfind("Playing ", 0) == 0)
+    {
+        const std::string job = r.name.substr(8);
+        const std::string task = std::regex_search(r.trigger, m, s_reFirst) ? m[1].str() : std::string("?");
+        r.name = StrFill(T("Playing %s"), {job});
+        r.trigger = StrFill(T("while the job %s is played (the game started at its first task %s)"), {job, task});
+    }
+    else if (r.id.rfind("after:", 0) == 0 && r.name.rfind("After ", 0) == 0)
+    {
+        const std::string job = r.name.substr(6);
+        const std::string task = std::regex_search(r.trigger, m, s_reLast) ? m[1].str() : std::string("?");
+        r.name = StrFill(T("After %s"), {job});
+        r.trigger = StrFill(T("once the job %s is done (its last task %s done, and every task before it)"), {job, task});
+    }
+}
+}  // namespace
+#endif
+
 void CEditor::BuildStates()
 {
     m_astate.clear();
@@ -55,6 +104,7 @@ void CEditor::BuildStates()
             r.oidTaskStart = s.oidTaskStart;
             r.from = s.after;
             for (const auto& [oid, n] : s.atask) r.atask.push_back({int(oid), n});
+            TranslateStateRow(r);
             m_astate.push_back(r);
         }
     m_astateWhy = alines;
@@ -100,6 +150,9 @@ std::string CEditor::StrStateWhen(const cane::mods::MapState& s) const
 void CEditor::ShowState(int istate)
 {
 #if EDGAME_SLY2
+    RestoreStatePoses();
+    m_astatePose.clear();
+    m_astateSm.clear();
     if (istate < 0 || istate >= int(m_astate.size()))
     {
         m_istateShown = -1;
@@ -119,7 +172,7 @@ void CEditor::ShowState(int istate)
     std::error_code ec;
     cane::fs::create_directories(dir, ec);
     const std::string file = ce::utf8(dir / ("presence_" + std::to_string(m_eo.record) + "_" + std::to_string(std::rand() % 1000000) + ".json"));
-    std::string world = std::to_string(m_eo.record), state = r.id;
+    std::string world = WorldArg(m_eo.record), state = r.id;
     if (r.kind == "job" && r.oidTaskStart > 0)
     {
         world += ":" + std::to_string(r.oidTaskStart);
@@ -132,7 +185,7 @@ void CEditor::ShowState(int istate)
     m_istateShown = istate;
     m_statePending = file;
     if (m_fPlayDry) { std::printf("editor: state show: --world %s --map-state %s\n", world.c_str(), state.c_str()); return; }
-    if (!ce::spawnDetached(exe, args)) { Status("could not start " + ce::utf8(exe)); m_statePending.clear(); return; }
+    if (!ce::spawnDetached(exe, args)) { Status(std::string(T("could not start")) + " " + ce::utf8(exe)); m_statePending.clear(); return; }
     Status(std::string(T("loading the state")) + " " + r.name + " ...");
 #else
     (void)istate;
@@ -163,6 +216,26 @@ void CEditor::PollState()
     m_astateTask.clear();
     if (j.contains("tasks"))
         for (const auto& t : j["tasks"]) m_astateTask.push_back({t.value("task", 0), t.value("state", 0)});
+    // the state machines' states and the poses they give
+    RestoreStatePoses();
+    m_astatePose.clear();
+    m_astateSm.clear();
+    if (j.contains("sm") && j["sm"].is_array())
+        for (const auto& o : j["sm"]) m_astateSm.push_back({o.value("object", 0), o.value("sm", 0), o.value("state", -1)});
+    if (j.contains("poses") && j["poses"].is_array())
+        for (const auto& o : j["poses"])
+            if (o.contains("xf") && o["xf"].is_array())
+                for (const auto& x : o["xf"])
+                {
+                    if (!x.contains("mat") || !x["mat"].is_array() || x["mat"].size() != 16) continue;
+                    STATEPOSE sp;
+                    sp.oid = o.value("oid", 0);
+                    sp.order = o.value("order", 0);
+                    sp.ixf = x.value("i", 0);
+                    for (int c = 0; c < 4; ++c)
+                        for (int r = 0; r < 4; ++r) sp.mat[c][r] = x["mat"][std::size_t(c * 4 + r)].get<float>();
+                    m_astatePose.push_back(sp);
+                }
     std::error_code ec;
     cane::fs::remove(ce::pathOf(m_statePending), ec);
     m_statePending.clear();
@@ -170,6 +243,52 @@ void CEditor::PollState()
     const std::string name = m_istateShown >= 0 && m_istateShown < int(m_astate.size()) ? m_astate[std::size_t(m_istateShown)].name : std::string();
     Status(std::string(T("state")) + " " + name + ": " + std::to_string(m_setStateOut.size()) + " " + T("objects not in the world (hidden)"));
 #endif
+}
+
+// the shown state's poses onto the live objects' records (each frame: cheap once applied; again after a reload)
+void CEditor::ApplyStatePoses()
+{
+#if EDGAME_SLY2
+    if (m_pswPosed && m_pswPosed != m_psw.get()) { m_mpPoseOrig.clear(); m_pswPosed = nullptr; }   // (reloaded: the records are new)
+    if (m_astatePose.empty() || !m_fStatePose || m_axisDrag >= 0) { RestoreStatePoses(); return; }
+    if (m_pswPosed == m_psw.get()) return;
+    std::map<int, std::vector<LO*>> mpaplo;
+    for (const auto& up : m_psw->aploAll) mpaplo[up->oid].push_back(up.get());
+    int c = 0;
+    for (const STATEPOSE& sp : m_astatePose)
+    {
+        const auto it = mpaplo.find(sp.oid);
+        if (it == mpaplo.end() || sp.order >= int(it->second.size())) continue;
+        LO* plo = it->second[std::size_t(sp.order)];
+        if (!FIsLoDerivedFrom(plo, EDCID(0x30))) continue;
+        ALO* palo = static_cast<ALO*>(plo);
+        if (sp.ixf < 0 || sp.ixf >= int(palo->axf.size()) || !palo->axf[std::size_t(sp.ixf)]) continue;
+        XF* pxf = palo->axf[std::size_t(sp.ixf)].get();
+        if (!m_mpPoseOrig.count(pxf)) m_mpPoseOrig[pxf] = {palo, pxf->mat};
+        pxf->mat = sp.mat;
+        UpdateAloHierarchyWorlds(palo);
+        ++c;
+    }
+    m_pswPosed = m_psw.get();
+    if (c) UpdateSceneFromSw(m_scene, m_apalo);
+#endif
+}
+
+void CEditor::RestoreStatePoses()
+{
+#if EDGAME_SLY2
+    if (!m_mpPoseOrig.empty() && m_pswPosed == m_psw.get())
+    {
+        for (auto& [pxf, o] : m_mpPoseOrig)
+        {
+            pxf->mat = o.second;
+            UpdateAloHierarchyWorlds(o.first);
+        }
+        UpdateSceneFromSw(m_scene, m_apalo);
+    }
+#endif
+    m_mpPoseOrig.clear();
+    m_pswPosed = nullptr;
 }
 
 bool CEditor::FStateHides(const LO* plo) const { return m_fStateHide && !m_setStateOut.empty() && plo && m_setStateOut.count(plo->oid) != 0; }
@@ -204,6 +323,9 @@ void CEditor::DrawStates()
     ImGui::Checkbox(T("Hide what is not there in the shown state"), &m_fStateHide);
     if (ImGui::IsItemEdited()) InvalidateVis();
     ImGui::SameLine();
+    ImGui::Checkbox(T("Pose its state machines"), &m_fStatePose);
+    EdTip(T("Objects moved by a state machine (a sign that has fallen, a broken fountain) are shown as they are in the shown state. Moving one puts it back to its loaded pose while you drag."));
+    ImGui::SameLine();
     if (ImGui::SmallButton(T("Show every object"))) ShowState(-1);
     ImGui::SameLine();
     if (ImGui::SmallButton(T("Refresh"))) BuildStates();
@@ -214,8 +336,10 @@ void CEditor::DrawStates()
     {
         ImGui::TableSetupColumn(T("State"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn(T("When"), ImGuiTableColumnFlags_WidthStretch, 1.6f);
-        ImGui::TableSetupColumn("##show", ImGuiTableColumnFlags_WidthFixed, 50);
-        ImGui::TableSetupColumn("##play", ImGuiTableColumnFlags_WidthFixed, 44);
+        // (the buttons' columns as wide as their words in the user's language)
+        const float pad = ImGui::GetStyle().FramePadding.x * 2.0f + 6.0f;
+        ImGui::TableSetupColumn("##show", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize(T("Show")).x + pad);
+        ImGui::TableSetupColumn("##play", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize(T("Play")).x + pad);
         ImGui::TableHeadersRow();
         for (std::size_t i = 0; i < m_astate.size(); ++i)
         {
@@ -453,7 +577,23 @@ bool CEditor::FStatesVerb(const std::string& verb, const std::string& arg)
             int cHidden = 0;
             for (const auto& up : m_psw->aploAll) cHidden += FStateHides(up.get());
             std::printf("editor: state hides %d objects in the view\n", cHidden);
+            std::printf("editor: state poses %zu records (%zu state machines)\n", m_astatePose.size(), m_astateSm.size());
         }
+        return true;
+    }
+    if (verb == "statepos")   // statepos:OID: the object's place in the view (with the shown state's pose)
+    {
+        ApplyStatePoses();
+        if (LO* p = PloOid(std::atoi(arg.c_str())))
+        {
+            const glm::vec3 v = PosWorld(p);
+            std::printf("editor: state pos %s %.1f %.1f %.1f\n", arg.c_str(), v.x, v.y, v.z);
+        }
+        return true;
+    }
+    if (verb == "statesm")   // the shown state's state machines (object, machine, state)
+    {
+        for (const auto& a : m_astateSm) std::printf("editor: state sm object %d machine %d state %d\n", a[0], a[1], a[2]);
         return true;
     }
     if (verb == "stateisout")   // stateisout:OID

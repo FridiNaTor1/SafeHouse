@@ -204,7 +204,7 @@ int CEditor::CopyRecord(int iobjrec, int igrpDest, const glm::vec3* ppos, bool f
     m_proj.end();
     m_proj.end();
     if (!fOk) { if (m_proj.canUndo() && m_proj.history().back().label == label) m_proj.undo(); return 0; }
-    Status("created " + std::string(SzClass(r.cid)) + " " + std::to_string(oidNew) + " in " + m_index.groups[igrpDest].name +
+    Status(Fmt(T("created %s %d in %s"), SzClass(r.cid), oidNew, m_index.groups[igrpDest].name.c_str()) +
            (m_noteCopy.empty() ? std::string() : " (" + m_noteCopy + ")"));
     Reload(fSelect ? oidNew : 0);
     if (fSelect && fProxy)
@@ -342,11 +342,11 @@ void CEditor::DrawCreate()
     if (ImGui::BeginCombo("##into", cur.c_str()))
     {
         for (const ce::GroupInfo& g : m_index.groups)
-            if (!g.objectsPart.empty() && ImGui::Selectable((g.name + (g.level ? "  [level]" : "")).c_str(), g.index == m_igrpCreate)) m_igrpCreate = g.index;
+            if (!g.objectsPart.empty() && ImGui::Selectable((g.name + (g.level ? T("  [level]") : "")).c_str(), g.index == m_igrpCreate)) m_igrpCreate = g.index;
         ImGui::EndCombo();
     }
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##pf", "Filter: class, area or group", m_filterCreate, sizeof(m_filterCreate));
+    ImGui::InputTextWithHint("##pf", T("Filter: class, area or group"), m_filterCreate, sizeof(m_filterCreate));
     std::string filter = m_filterCreate;
     for (char& ch : filter) ch = char(std::tolower(static_cast<unsigned char>(ch)));
     // one example per class (placed, own record) and per shared group (a proxy)
@@ -390,15 +390,15 @@ void CEditor::DrawCreate()
         std::string lower = e.name + " " + SzArea(e.ga);
         for (char& ch : lower) ch = char(std::tolower(static_cast<unsigned char>(ch)));
         if (!filter.empty() && lower.find(filter) == std::string::npos) continue;
-        if (e.ga != gaPrev) { ImGui::SeparatorText(SzArea(e.ga)); gaPrev = e.ga; }
+        if (e.ga != gaPrev) { ImGui::SeparatorText(T(SzArea(e.ga))); gaPrev = e.ga; }
         ImGui::PushID(e.iobj);
         if (ImGui::Selectable(e.name.c_str(), m_iobjPalette == e.iobj)) m_iobjPalette = e.iobj;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("example: oid %d", m_rec.aobj[std::size_t(e.iobj)].oid);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(T("example: oid %d"), m_rec.aobj[std::size_t(e.iobj)].oid);
         ImGui::PopID();
     }
     ImGui::EndChild();
     ImGui::BeginDisabled(m_iobjPalette < 0);
-    if (ImGui::Button("Place in front of the camera"))
+    if (ImGui::Button(T("Place in front of the camera")))
     {
         glm::vec3 p = m_cam.pos + m_cam.Dir() * 800.0f, hit;
         if (FSnapDown(p, hit)) p = hit;
@@ -408,10 +408,10 @@ void CEditor::DrawCreate()
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!m_plSel);
-    if (ImGui::Button("Make unique"))
+    if (ImGui::Button(T("Make unique")))
     {
         std::string error;
-        if (!FMakeUnique(m_plSel, error)) Status("make unique: " + error);
+        if (!FMakeUnique(m_plSel, error)) Status(std::string(T("make unique")) + ": " + error);
     }
     ImGui::EndDisabled();
 }

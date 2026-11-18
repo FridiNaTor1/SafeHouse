@@ -51,7 +51,10 @@ extern void (*g_pfnScptTrace)(LO* pscpt, const void* prun, int ev, int ic, const
 
 namespace cut
 {
-// The camera moves' easing curves (cplcy.cpp CPTIMED: s(u) = a u^3 + b u^2 + c u; 6 a PC addition)
+// The camera moves' easing curves (cplcy.cpp CPTIMED: s(u) = a u^3 + b u^2 + c u). ICURVE_EASEOUT is the PC's ease
+// out, a value the original's data never uses (its 3075 camera moves: 0..3; the original takes every value past 5 as
+// 5, and so does the port for all but this one)
+constexpr int ICURVE_EASEOUT = 1000;
 const char* SzEase(int icurve);
 float SEase(int icurve, float u);
 
@@ -65,6 +68,8 @@ enum TRACKK : int
     TK_Sound,     // sounds and music
     TK_Effects,   // shown / hidden objects, fades, screens, rumble, explosions, hints
     TK_Events,    // tasks, scripts, state machines, splice events
+    TK_Present,   // the presentation: the letterbox (the game paused with the subtitle box), title cards, captions
+                  // (hints), screens, fades (a fade object started by the script's event)
     TK_Max
 };
 const char* SzTrack(TRACKK tk);
@@ -87,7 +92,7 @@ enum PARK : int
     PK_Alarm, PK_Label, PK_Button, PK_Flags,
     PK_Pos,        // a vector (x, y, z)
     PK_Angles,     // a vector of angles (degrees in the record)
-    PK_Ease,       // a camera move's easing curve (cplcy.cpp's timed curves: 0 linear, 1 ease in, 3 ease in / out, 6 ease out)
+    PK_Ease,       // a camera move's easing curve (cplcy.cpp's timed curves: 0 linear, 1 ease in, 3 ease in / out; 1000 ease out)
     PK_Max
 };
 
@@ -128,6 +133,19 @@ const std::vector<BUILDER>& Builders();
 const BUILDER* PbuilderOfEopid(int eopid);
 // (0x24's two builders: variant 0 walks (+0x24 = 1), 1 runs)
 const BUILDER* PbuilderOfKind(int kind, int variant = 0);
+
+// ---- the cutscene rules of the loaded mod packages (mod.json "cutscenes", platform/mod_package.h)
+// scpt.cpp StartScpt: false: the script does not start now (its once / task condition); a script that starts with a
+// "once" rule is marked seen in the save's side file (modsave.h)
+bool FCutsceneMayStart(LO* pscpt);
+// scpt.cpp SceneSkipKind: the rule's skip choice over the game's own class k (SKIPK_*)
+int SkipKindByRule(LO* pscpt, int k);
+// scpt.cpp IdScptCutscene: the script's rule says never skippable (the scenes it starts neither)
+bool FCutsceneNeverSkip(LO* pscpt);
+// scpt.cpp: a runner reached label n (command 0x13): a skip stops there when the script's rule says so
+void NoteScptLabel(LO* pscpt, int n);
+// skipcut.cpp: a skip should stop now (a rule's label reached within the last steps)
+bool FCutsceneSkipStops();
 
 // ---- the game-run tools (main.cpp / game.cpp)
 // main.cpp: the tools' flags (consumes argv[i] and its value: true when it was one of them)

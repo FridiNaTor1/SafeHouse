@@ -139,6 +139,44 @@ void CEditor::DrawOptionTools(LO* plo, const EDOBJ* po)
 // --editor-do verbs
 bool CEditor::FEverythingVerb(const std::string& verb, const std::string& arg)
 {
+    if (verb == "optnamesel")   // optnamesel: the selection's options with the names the Properties show
+    {
+        for (const EDITFIELD& f : m_rec.afield)
+            if (f.fk == EDITFK_Option && f.plo == m_plSel)
+                std::printf("editor: option %d of %d: %s\n", f.eopid, m_plSel->oid, SzOptionOf(m_plSel, f.eopid) ? SzOptionOf(m_plSel, f.eopid) : "(raw)");
+        return true;
+    }
+    if (verb == "optnames")   // optnames[:N]: the loaded options' names (the editor's, the scripts', none) counted; the N commonest unnamed
+    {
+        int cOwn = 0, cScript = 0, cRaw = 0;
+        std::map<std::pair<int, int>, int> mpRaw;   // (class, option) -> uses
+        for (const EDITFIELD& f : m_rec.afield)
+        {
+            if (f.fk != EDITFK_Option || !f.plo) continue;
+            if (SzOptionName(f.eopid)) ++cOwn;
+            else if (SzOptionOf(f.plo, f.eopid)) ++cScript;
+            else { ++cRaw; ++mpRaw[{f.plo->Cid(), f.eopid}]; }
+        }
+        const int c = std::max(1, cOwn + cScript + cRaw);
+        std::printf("editor: option names: %d of %d by the editor's names, %d by the decomp's or the scripts' names, %d without (%.1f%% named)\n", cOwn, c, cScript, cRaw,
+                    100.0 * double(cOwn + cScript) / double(c));
+        std::vector<std::pair<int, std::pair<int, int>>> a;
+        for (const auto& [k, n] : mpRaw) a.push_back({n, k});
+        std::sort(a.rbegin(), a.rend());
+        for (int i = 0; i < int(a.size()) && i < (arg.empty() ? 12 : std::atoi(arg.c_str())); ++i)
+        {
+            const int e = a[size_t(i)].second.second;
+#if EDGAME_SLY2
+            const uint32_t va = 0x2AC880u + uint32_t(e) * 0x28u;
+            std::printf("editor: unnamed option %d of class 0x%X (%s): %d uses (kind %u grf 0x%X field +0x%X set 0x%X get 0x%X)\n", e, a[size_t(i)].second.first,
+                        SzClass(a[size_t(i)].second.first), a[size_t(i)].first, g_disc.U32Elf(va), g_disc.U32Elf(va + 4), g_disc.U32Elf(va + 0x18),
+                        g_disc.U32Elf(va + 0x1C), g_disc.U32Elf(va + 0x24));
+#else
+            std::printf("editor: unnamed option %d of class 0x%X (%s): %d uses\n", e, a[size_t(i)].second.first, SzClass(a[size_t(i)].second.first), a[size_t(i)].first);
+#endif
+        }
+        return true;
+    }
     if (verb == "addopt")   // addopt:EOPID:V1,V2..: an option added to the selection
     {
         const auto c = arg.find(':');

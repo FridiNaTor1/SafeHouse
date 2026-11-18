@@ -615,7 +615,12 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--world-unpack") && i + 2 < argc) { command = "world-unpack"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--world-pack") && i + 2 < argc) { command = "world-pack"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--world-check")) command = "world-check";
-        else if (!std::strcmp(argv[i], "--editor") && i + 1 < argc) { command = "editor"; eo.record = std::atoi(argv[++i]); }
+        else if (!std::strcmp(argv[i], "--editor") && i + 1 < argc) {
+            command = "editor";
+            const std::string w = argv[++i];
+            if (!w.empty() && w.find_first_not_of("0123456789") == std::string::npos) eo.record = std::atoi(w.c_str());
+            else eo.world = w;   // (a world by its name: the editor looks it up)
+        }
         else if (!std::strcmp(argv[i], "--editor-project") && i + 1 < argc) eo.project = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-do") && i + 1 < argc) eo.script = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-hidden")) eo.fHidden = true;

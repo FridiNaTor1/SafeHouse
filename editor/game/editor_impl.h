@@ -53,6 +53,7 @@
 #include <cmath>
 #include <cstring>
 #include <climits>
+#include <array>
 #include <map>
 #include <set>
 #include <memory>
@@ -303,9 +304,15 @@ struct SCRIPTCMD
 const char* T(const char* szEnglish);
 // "Text###id": a translated label with a fixed ImGui id
 std::string TL(const char* szEnglish, const char* id);
+// printf into a string (its format already translated with T())
+std::string Fmt(const char* fmt, ...);
 bool FSetEditorLanguage(const std::string& code);   // (editor_lang.inc) "": SAFEHOUSE_LANGUAGE, else English
 const std::string& EditorLanguage();
 void AddEditorLanguageFonts(ImGuiIO& io, float pixels);
+// (editor_dialogue.inc) the game's text as shown (Sly 2: the disc's 0x80..0x9F bytes as the Windows-1252 marks they
+// are, e.g. ’ and …) and as stored back (typed marks as those bytes)
+std::string GameTextShown(const std::string& s);
+std::string GameTextStored(const std::string& s);
 
 // ---- object types and vis groups: editor_objtypes.h (included above), editor_types.inc
 // a stable key for an object across reloads (its oid and the proxy that placed its instance)
@@ -346,6 +353,9 @@ private:
     void PlayTest() { PlayTestAt(-1, nullptr, 0.0f); }
     // the game with the project: at a task (its job started there: --world W:TASK) and / or Sly at a point (--start-pos)
     void PlayTestAt(int oidTask, const glm::vec3* ppos, float heading);
+    std::string WorldArg(int record) const;
+    glm::vec3 DirPlace() const;   // the direction new objects are placed along (the visible view's middle)
+    const char* ClassFriendlyName(int cid) const;
     void PlayFromView();                 // Sly on the ground below the view's middle, facing the view's way
     int TaskToPlay(LO* plo) const;       // a job's first task, a task's own oid (0: none)
     void DrawPlayMenu();
@@ -466,6 +476,9 @@ private:
     bool FCheckScript(const std::string& text, std::string& error, int& line, std::vector<PROBLEM>* papb, int igroup = -1);
     bool FApplyScript(int igroup, const std::string& text, std::string& error);
     int AppendScriptModule(int igroup, const std::string& body, std::string& error);   // its index (-1: failed)
+    bool FWriteSceneStarter(int oidScene, LO* ptask, int state, std::vector<std::string>& adiag, std::string& error);   // (Sly 2: editor_scriptdiag.inc)
+    bool FWriteObjectHandler(LO* pobj, const std::string& handler, const std::vector<std::string>& aparam, const std::string& form,
+                             const std::vector<std::pair<std::string, int>>& anames, std::vector<std::string>& adiag, std::string& error, bool fMakeModule);   // (Sly 2)
     // ---- editor_scriptnames.inc (Sly 2): the Scripts tab's names (kept in the part when Names is on: the game
     // compiles them), "when it exists" in plain words
     bool m_fScriptReadable = true;
@@ -552,6 +565,7 @@ private:
     char m_filter[64] = "";
     std::string m_status;
     std::vector<SCRIPTCMD> m_ascript;
+    bool m_fScripted = false;     // (--editor-do steps still running)
     std::size_t m_iscript = 0;
     int m_waitScript = 2;
     std::string m_shotPending;
@@ -660,7 +674,14 @@ private:
     uint32_t GrfPlayersOf(LO* plo, std::string* apszWhy, int* peopidMask, bool* pfKnown) const;
     bool FSetPlayers(LO* plo, uint32_t grf);
     int BuildCrawlSpace(std::string& error);           // a crawl space: its entries and a low ceiling (brushes)
-    int BuildKey(LO* pguard, std::string& error);      // a key (a prize with its task) in a guard's pocket
+    int ImportRecordOfClass(int cid, const glm::vec3& pos, std::string& from, std::string& error);
+    int BuildKey(LO* pguard, std::string& error, int mode = 0);   // a key (a prize with its own task) in a guard's pocket (a shared guard: 0 refused, 1 made unique, 2 every one's)
+    bool FKeyLock(int oidTask, const std::vector<LO*>& alock, std::string& error);
+    void KeyButton(LO* pguard);
+    void DrawKeyUniquePopup();
+    int m_oidKeyLast = 0, m_oidKeyTask = 0, m_oidKeyGuard = 0;
+    bool m_fKeyUniqueAsk = false, m_fKeyProxy = false;
+    int m_cKeyShared = 0;
     std::vector<std::string> PocketWords(LO* plo) const;
     std::string StrExitTo(LO* plo) const;              // an exit's destination in words
     bool FSetExitTo(LO* plo, LO* pother);              // an exit made to lead where another one leads
@@ -693,6 +714,16 @@ private:
     int m_istateShown = -1, m_istateEdit = -1, m_statePoll = 0;
     bool m_fStatesBuilt = false, m_fStateHide = true, m_fStateNewOpen = false;
     cane::mods::MapState m_stateNew;
+    // the shown state's poses (its state machines' records, as the game left them: Paris's fallen sign), applied to the
+    // live objects' records while it is shown (restored for a drag, again after a reload, gone when hidden)
+    struct STATEPOSE { int oid = 0, order = 0, ixf = 0; glm::mat4 mat{1.0f}; };
+    std::vector<STATEPOSE> m_astatePose;
+    std::vector<std::array<int, 3>> m_astateSm;          // (object, state machine, state) in the shown state
+    std::map<XF*, std::pair<ALO*, glm::mat4>> m_mpPoseOrig;
+    const SW* m_pswPosed = nullptr;
+    bool m_fStatePose = true;
+    void ApplyStatePoses();
+    void RestoreStatePoses();
     // ---- editor_brushedit.inc: brush faces / edges / points (step 13)
     bool FBrushMakeEditable(BRUSH& b, std::string& error);
     void BrushFixMats(BRUSH& b);
@@ -725,8 +756,84 @@ private:
     bool FLevelVerb(const std::string& verb, const std::string& arg);
     std::string m_nlName = "My Level";
     int m_nlTemplate = 16, m_nlEntryWorld = -1, m_nlMadeRecord = -1;
-    bool m_nlKeepLevel = false, m_nlReturn = true, m_fNewLevelOpen = false, m_nlFloor = true;
+    bool m_nlKeepLevel = false, m_nlReturn = true, m_fNewLevelOpen = false, m_nlFloor = true, m_nlLights = true;
     float m_nlSpawn[4] = {0, 0, 200, 0}, m_nlEntryAt[4] = {0, 0, 0, 120}, m_nlReturnAt[4] = {0, 1500, 100, 150};
+    // ---- editor_guests.inc: characters from other levels with their behaviour (mod.json "guests")
+    std::string GuestWorldName() const;
+    std::vector<cane::mods::Guest> GuestsHere() const;
+    void PutGuests(const std::vector<cane::mods::Guest>& aHere);
+    bool FAddGuest(int record, const std::string& group, std::string& error);
+    void DrawGuests();
+    void DrawGuestsPanel();
+    bool FGuestVerb(const std::string& verb, const std::string& arg);
+    int m_iguest = -1;
+    // ---- editor_prefab.inc: prefabs (several objects saved as one piece, placed in any level)
+    struct PREFAB { std::string name, path, from, where, thumb; int c = 0; };
+    std::string PrefabLibraryDir() const;
+    bool FSavePrefab(const std::string& name, std::string& path, std::string& error);
+    bool FModuleInner(const std::string& text, int n, std::string& inner) const;
+    int PlacePrefab(const std::string& path, const glm::vec3& pos, std::string& error);
+    void ListPrefabs();
+    void DrawPrefabs(float tile, int ccol, const std::function<bool(const std::string&, const std::string&)>& match);
+    bool FPrefabVerb(const std::string& verb, const std::string& arg);
+    std::vector<PREFAB> m_aprefab;
+    bool m_fPrefabsListed = false;
+    char m_szPrefabName[96] = "My prefab";
+    // ---- editor_lighting.inc: lights, fog and skies (the Lighting tab)
+#if EDGAME_SLY2
+    const EDITFIELD* PworldOpt(int iList, int eopid) const;
+    bool FWorldOptFloat(int eopid, float& g, int iList = 1, int iFloat = 0) const;
+    bool FSetWorldOpt(int eopid, const void* pv, std::size_t cb, std::string& error, int iList = 1);
+    void ReloadWorldOpts();
+    void ApplyFogPreview();
+    void SetLightOption(LO* pl, int eopid, const void* pv, std::size_t cb);
+    void RelightView();
+    void MoveLightTo(LO* pl, const glm::vec3& pos);
+    int AddLight(const glm::vec3& pos);
+#endif
+    bool FLightValues(LO* plo, glm::vec3& hsv, float& strength, glm::vec2& falloff) const;
+    void DrawLightingTab();
+    bool FLightingVerb(const std::string& verb, const std::string& arg);
+    bool m_fWorldOptsRead = false, m_fFogPreview = false;
+    float m_fogNear = 500.0f, m_fogFar = 20000.0f, m_fogMax = 0.5f;
+    uint32_t m_rgbaFog = 0x80303030u;
+    // ---- editor_sound.inc: ambient sounds and music (the Sound tab)
+    struct MUSICTRACK { int id = -1; std::string name, path; float seconds = 0; };
+#if EDGAME_SLY2
+    bool FPlayPreview(const std::string& path);
+    void ReadSoundManifest();
+    std::string SampleOfSound(int sfxid);
+    bool FMusicEntries(const std::vector<uint8_t>& ab, std::vector<std::size_t>& aib) const;
+    std::string SoundPart() const;
+    bool FMusicKey(int id, uint8_t key[64]);
+    void ReadMusicKeys();
+    int TrackOfMusicEntry(int i);
+    bool FReplaceMusic(int i, int idNew, std::string& error);
+    std::vector<int> MusicOfLevel();
+    std::string MusicFile(int id);
+    void MoveObjectTo(LO* plo, const glm::vec3& pos);
+    int AddSoundEmitter(const glm::vec3& pos);
+#endif
+    void StopPreview();
+    void DrawSoundTab();
+    bool FSoundVerb(const std::string& verb, const std::string& arg);
+    bool m_fSoundManifest = false;
+    std::vector<MUSICTRACK> m_amusicAll;
+    std::map<int, std::string> m_mpsoundSample;
+    std::map<int, std::vector<uint8_t>> m_mpMusicKey;   // (a track's file key, from the installed levels)
+    bool m_fMusicKeys = false;   // (this level's bank sound -> its first sample's WAV)
+    // ---- editor_check.inc: Check level (problems, warnings, jump to, quick fixes)
+    enum { CF_None, CF_RemoveOption, CF_DropLinks, CF_FloorUnder, CF_SpawnDown, CF_RemoveEntry, CF_RemoveGuest, CF_GuestNoPatrol, CF_MoveToView };
+    struct CHECK { int sev = 1; std::string cat, text; int oid = 0, fix = 0, ifield = -1, arg = 0; glm::vec3 pos{0.0f}; };
+    bool FGroundBelow(const glm::vec3& w, glm::vec3& hit);
+    void CheckLevel();
+    std::vector<PLACE> PlacesOfAll();
+    bool FApplyCheckFix(int i);
+    void DrawCheckPanel();
+    bool FCheckVerb(const std::string& verb, const std::string& arg);
+    std::vector<CHECK> m_acheck;
+    std::vector<SOE*> m_apsoeAll;
+    bool m_fCheckSoes = false, m_fCheckOpen = false;
     // ---- editor_guard.inc: guards' patrols
     std::string StrCommand(const void* pcmd, LO** pploRef) const;
     LO* PatrolOf(LO* plo) const;                    // its patrol's command list (null: none)
@@ -749,7 +856,7 @@ private:
         bool fModel = false, fWanted = false, fTried = false;
         unsigned tex = 0;
     };
-    struct OTHERASSET { std::string group, name, types, thumb; int instances = 0; };
+    struct OTHERASSET { std::string group, name, types, thumb; int instances = 0; bool fCharacter = false; };
     std::vector<int> EntriesOfGroup(int igrp) const;
     bool FRenderThumb(const std::vector<int>& aentry, unsigned& tex, std::vector<uint8_t>* prgba);
     void BuildAssets();
@@ -757,6 +864,7 @@ private:
     void WriteThumbs(const std::string& dir);
     void PlaceAsset(const ASSET& a);
     std::string AssetsDirOf(int record) const;
+    void MarkOtherCharacters();
     void StartOtherLevelEditor(int record, const std::string& steps);
     void LoadOtherLevel(int record);
     void PollOtherLevel();

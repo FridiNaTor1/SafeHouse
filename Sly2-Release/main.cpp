@@ -352,6 +352,9 @@ static int GlSelfTestCommand(const std::string& out)
 #define SLY2_LEAVE_TOOL(rc) std::_Exit(rc)
 #endif
 
+#include "modguests.h"
+static std::vector<std::string> s_aguestArg;   // --guest (modguests.h)
+
 int main(int argc, char** argv)
 {
 #if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
@@ -494,6 +497,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--save") && i + 1 < argc) go.save = argv[++i];
         else if (!std::strcmp(argv[i], "--print-progress") && i + 1 < argc) { go.aprintProgress.push_back(argv[++i]); fGame = true; }
         else if (!std::strcmp(argv[i], "--frame-dump") && i + 1 < argc) { go.frameDump = argv[++i]; fGame = true; }
+        else if (!std::strcmp(argv[i], "--guest") && i + 1 < argc) { s_aguestArg.push_back(argv[++i]); fGame = true; }   // (modguests.h)
         else if (!std::strcmp(argv[i], "--start-pos") && i + 1 < argc)
         {
             // X,Y,Z[,H]: Sly put there a second into the game (heading H in radians; the map editor's "play from here"),
@@ -539,7 +543,12 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--cm-free")) fCmFree = true;
         else if (!std::strcmp(argv[i], "--crv-check") && i + 1 < argc) { command = "crv-check"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--actor-check") && i + 1 < argc) { command = "actor-check"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--editor") && i + 1 < argc) { command = "editor"; eo.record = std::atoi(argv[++i]); }
+        else if (!std::strcmp(argv[i], "--editor") && i + 1 < argc) {
+            command = "editor";
+            const std::string w = argv[++i];
+            if (!w.empty() && w.find_first_not_of("0123456789") == std::string::npos) eo.record = std::atoi(w.c_str());
+            else eo.world = w;   // (a world by its name: the editor looks it up)
+        }
         else if (!std::strcmp(argv[i], "--editor-project") && i + 1 < argc) eo.project = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-do") && i + 1 < argc) eo.script = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-hidden")) eo.fHidden = true;
@@ -795,6 +804,8 @@ int main(int argc, char** argv)
     }
     g_disc.SetLanguagesDirectory(languagesDir);
     if (!g_disc.FOpen(DiscPath(disc), error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    for (const std::string& a : s_aguestArg)
+        if (!FAddGuestArg(a)) std::fprintf(stderr, "--guest %s: FROM:OBJECT@X,Y,Z[,HEADING][:PATROL]\n", a.c_str());
     InitLanguageStore();   // (langstore.h: the other regions' languages, imports, mods)
     InitLanguage();   // (region.h: the disc's languages, the PC's language)
     if (command && !std::strcmp(command, "list-languages")) return ListLanguagesCommand();
