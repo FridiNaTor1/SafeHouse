@@ -16,8 +16,11 @@
 #include "breakable.h"
 #include "nav.h"
 #include "skipcut.h"
+#include "cutscene.h"
 #include "menu.h"
 #include "debugmenu.h"
+#include "debugvis.h"
+#include "modnotice.h"
 #include "remappage.h"
 #include "pccharacter.h"
 #include "glob.h"
@@ -741,6 +744,7 @@ int RunGame(const GAMEOPTS& go)
     {
         const double t0 = now();
         if (fWindow && glfwWindowShouldClose(g_gl.window)) break;
+        if (cut::FCutsceneToolsDone()) break;   // (cutscene.h: the trace written)
         if (vr::FExitRequested()) break;   // (the headset's system menu: Quit)
         // (debug: SLY2N_HEAPCHECK=N: every N frames the heap's free lists consolidated (glibc checks their links), with a
         // stderr mark: heap corruption shows near the frame that caused it instead of at exit)
@@ -1647,6 +1651,7 @@ int RunGame(const GAMEOPTS& go)
         g_iframeHarness = frame;
         UpdateSw(psw.get());
         UpdateModEntries(psw.get());   // (mod packages: a new world's entry walked into, modworld.h)
+        cut::UpdateCutsceneTools(psw.get(), frame);   // (the map editor's cutscene trace / play / recording, cutscene.h)
         // orig 0x1D9648 (the HUD's update, hudwidget.h; its wipe 0x22B198 here first)
         // (its start: the load's pad lock 8 lifted once the new world's clock passes 0.1 s at its rate)
         if ((g_grfjoyLock & 8) && g_clock.rDt != 0.0f && 0.1f < g_clock.t / g_clock.rDt) UnlockJoy(8);
@@ -1798,6 +1803,17 @@ int RunGame(const GAMEOPTS& go)
             const bool fBoostSkip = FSkipCutFastForward();
             if (fBoostSkip) CaneSwitch::BeginLoadingBoost();
 #endif
+            // (cutscene.h --play-scpt: the script fast-forwarded to the map editor's playhead, as a skip runs it)
+            while (cut::FCutsceneSeeking() && (go.cframe < 0 || frame + 1 < go.cframe))
+            {
+                ++frame;
+                fSkipped = true;
+                const float dtFixedSave = g_dtFixedStep;
+                g_dtFixedStep = DT_FRAME_NTSC;
+                stepSim(frame);
+                g_dtFixedStep = dtFixedSave;
+                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
+            }
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
                 // (a step that waits for a drawn frame: an animated overlay's capture (overlay.h: the job's end screen
@@ -2114,7 +2130,9 @@ int RunGame(const GAMEOPTS& go)
                 if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
                 if (!fEyes && !(fVr && vr::FUnfocused())) RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
                 DrawRemapOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (remappage.h: the Remap page over the pause menu)
+                NoteDebugVisCamera(cam, !fEyes && !fVr);   // (debugvis.h: the overlays' projection, this frame's camera)
                 DrawDebugOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (debugmenu.h: the debug menu over all; Debug keys only)
+                DrawModNotices(g_gl.renderWidth, g_gl.renderHeight);     // (modnotice.h: a mod that could not be used, a few seconds)
                 g_fHudAlphaLayer = false;
                 if (FGpuMarks()) GpuMark("overlay capture");
                 g_gl.RememberOverlaySourceFrame();
@@ -2173,6 +2191,7 @@ int RunGame(const GAMEOPTS& go)
         msUpdate += t1 - t0;
         msRender += t2 - t1;
         msSwap += now() - t2;
+        NoteDebugVisFrameTimes(t1 - t0, t2 - t1, now() - t2);   // (debugvis.h: the Stats overlay)
         if (fWindow && vr::FActive())
         {
             static double s_msScenePrev = 0;
@@ -2242,6 +2261,7 @@ int RunGame(const GAMEOPTS& go)
     if (fWindow) cane::gl::HandoffLeaving();   // (the Collection Style Launcher comes back while the world unloads)
     if (pfDump) std::fclose(pfDump);
     WritePresenceIfRequested(psw.get());   // (--dump-presence: mapstates.h)
+    cut::FinishCutsceneTools(psw.get());     // (cutscene.h: the trace / the play session written)
     // debug: SLY2N_DUMPSAVE=file: the save block (orig 0x3D4A60) at the end (tools/savedump.py prints / diffs it)
     if (const char* sz = std::getenv("SLY2N_DUMPSAVE"))
     {

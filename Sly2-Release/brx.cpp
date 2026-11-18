@@ -340,6 +340,16 @@ bool FEditorOptionInfo(int eopid, int& k, int& grf)
     return true;
 }
 
+bool FEditorOptionMethod(int eopid, uint32_t& pfnArray, int& cArgs)
+{
+    if (eopid < 0 || eopid >= 4096) return false;
+    const EOPID e = EopidFromIndex(eopid);
+    if (!(e.grf & 0x401)) return false;
+    pfnArray = e.pfnArray;
+    cArgs = e.c18;
+    return true;
+}
+
 bool FEditorApplyOption(LO* plo, int eopid, const void* pv, std::size_t cb, const char** pwhy)
 {
     const char* why = nullptr;

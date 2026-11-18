@@ -109,6 +109,7 @@ bool CEditor::FImportModel(const std::string&, LO*, bool, std::string& error) { 
 bool CEditor::FImportTexture(const std::string&, LO*, int, int, std::string& error) { return FNotYet(error); }
 bool CEditor::FSetMaterial(LO*, int, int, int, const uint32_t[3], int, std::string& error) { return FNotYet(error); }
 bool CEditor::FExportGlb(LO*, int, const std::string&, std::string& error) { return FNotYet(error); }
+bool CEditor::FPoseDump(LO*, int, float, bool, const std::string&, std::string& error) { return FNotYet(error); }
 void CEditor::DrawModels() {}
 void CEditor::DrawModelSection(LO*) {}
 void CEditor::ApplyProjectTextures() {}

@@ -2,6 +2,7 @@
 // Development commands for now; the game loop comes with milestone M2/M3.
 
 #include "mapstates.h"
+#include "cutscene.h"
 #include "editor_newworld.h"
 #include "renderer.h"
 #include "editor.h"
@@ -32,6 +33,7 @@
 #include "sound.h"
 #include "splicecheck.h"
 #include "splicedump.h"
+#include "modnotice.h"
 #include "animtest.h"
 #include "../platform/platform.h"
 #include "../platform/safe_paths.h"
@@ -473,6 +475,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--load-trace") && i + 1 < argc) trace = argv[++i];
         else if (!std::strcmp(argv[i], "--dump-splice") && i + 1 < argc) dumpSplice = argv[++i];
         else if (!std::strcmp(argv[i], "--splice-names-check") && i + 1 < argc) { command = "splice-names-check"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--splice-compile") && i + 1 < argc) { command = "splice-compile"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-xf") && i + 1 < argc) dumpXf = argv[++i];
         else if (!std::strcmp(argv[i], "--world") && i + 1 < argc)
         {
@@ -504,6 +507,8 @@ int main(int argc, char** argv)
                 setenv("SLY2N_TELEPORT", sz, 1);
                 extern bool g_fEditorStartPos;   // (transition.cpp: Sly, not the safe house, at the first world's start)
                 g_fEditorStartPos = true;
+                extern bool g_fEditorStartTeleport;   // (sly.cpp: the teleport ends a scripted state the start left him in)
+                g_fEditorStartTeleport = true;
             }
         }
         else if (!std::strcmp(argv[i], "--sly-start") && i + 1 < argc) { go.slyStart = argv[++i]; fGame = true; }
@@ -538,6 +543,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--editor-project") && i + 1 < argc) eo.project = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-do") && i + 1 < argc) eo.script = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-hidden")) eo.fHidden = true;
+        else if (!std::strcmp(argv[i], "--editor-language") && i + 1 < argc) eo.language = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-size") && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &eo.width, &eo.height);
         else if (!std::strcmp(argv[i], "--view-world") && i + 1 < argc) { command = "view-world"; vo.iworld = std::atoi(argv[++i]); }
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) vo.screenshot = argv[++i];
@@ -581,6 +587,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--map-states-selftest")) command = "map-states-selftest";
         else if (!std::strcmp(argv[i], "--map-state") && i + 1 < argc) SetMapStateRequest(argv[++i]);
         else if (!std::strcmp(argv[i], "--dump-presence") && i + 1 < argc) SetPresenceDump(argv[++i]);
+        // (cutscene.h: the map editor's cutscene trace, play from the playhead, play session recording)
+        else if (cut::FCutsceneArg(argc, argv, i)) fGame = true;
         // (editor_newworld.h: a new world in a project)
         else if (!std::strcmp(argv[i], "--new-world") && i + 1 < argc) { command = "new-world"; g_newworldopts.project = argv[++i]; }
         else if (!std::strcmp(argv[i], "--nw-name") && i + 1 < argc) g_newworldopts.name = argv[++i];
@@ -645,6 +653,7 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "splice-selftest")) return SpliceSelfTestCommand();
     if (command && !std::strcmp(command, "map-states-selftest")) return MapStatesSelfTest();
     if (command && !std::strcmp(command, "splice-names-check")) return SpliceNamesCheck(arg);
+    if (command && !std::strcmp(command, "splice-compile")) return SpliceCompileCommand(arg);
     // (worldparts.h: a world's parts packed into one file: no game data needed)
     if (command && !std::strcmp(command, "world-pack")) return WorldPackCommand(arg, arg2);
     if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
@@ -963,6 +972,7 @@ int main(int argc, char** argv)
             std::size_t cframe = 0;
             for (const auto& plo : psw->aploAll) cframe += plo->pframe != nullptr;
             std::fprintf(stderr, "%zu objects with a splice frame\n", cframe);
+            if (const int c = CModNoticesPosted()) std::fprintf(stderr, "mod notices: %d\n", c);
         }
         if (const char* pszOid = std::getenv("SLY2_OWNER_OF"))
         {
@@ -1029,7 +1039,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
                  "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]] [--dump-splice DIR]\n"
-                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --splice-names-check DATA-DIR | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --splice-names-check DATA-DIR | --splice-compile FILE | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n"

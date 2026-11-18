@@ -20,6 +20,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -489,6 +490,7 @@ bool loadFbx(const fs::path& path, Scene& sc, std::string& error)
 struct GlbBuilder {
     nlohmann::json j = nlohmann::json::object();
     std::vector<uint8_t> bin;
+    std::map<std::string, int> mpacc;   // (accessorShared: the same contents and form once)
     int view(const void* pv, std::size_t cb, int target)
     {
         while (bin.size() % 4) bin.push_back(0);
@@ -516,6 +518,17 @@ struct GlbBuilder {
         }
         j["accessors"].push_back(a);
         return int(j["accessors"].size()) - 1;
+    }
+    // an accessor of float data written once for the same contents (the animations' key times and constant values)
+    int accessorShared(const float* pf, std::size_t count, const char* type, int ncomp, bool minmax)
+    {
+        std::string key(type);
+        key += minmax ? "+" : "-";
+        key.append(reinterpret_cast<const char*>(pf), count * std::size_t(ncomp) * sizeof(float));
+        if (const auto it = mpacc.find(key); it != mpacc.end()) return it->second;
+        const int i = accessor(pf, count, 5126, type, ncomp, 0, minmax);
+        mpacc.emplace(std::move(key), i);
+        return i;
     }
 };
 
@@ -592,8 +605,23 @@ bool saveGlb(const fs::path& path, const Scene& sc, std::string& error)
     for (const Joint& jt : sc.joints)
     {
         nlohmann::json n = {{"name", jt.name}};
-        std::vector<float> m(glm::value_ptr(jt.local), glm::value_ptr(jt.local) + 16);
-        if (jt.local != glm::mat4(1.0f)) n["matrix"] = m;
+        if (jt.local != glm::mat4(1.0f))
+        {
+            // (TRS: glTF forbids a matrix on an animated node; a mirrored frame keeps its sign in the x scale)
+            glm::vec3 s(glm::length(glm::vec3(jt.local[0])), glm::length(glm::vec3(jt.local[1])), glm::length(glm::vec3(jt.local[2])));
+            if (glm::determinant(glm::mat3(jt.local)) < 0) s.x = -s.x;
+            glm::mat3 r(glm::vec3(jt.local[0]) / s.x, glm::vec3(jt.local[1]) / s.y, glm::vec3(jt.local[2]) / s.z);
+            const glm::quat q = glm::normalize(glm::quat_cast(r));
+            const glm::vec3 t(jt.local[3]);
+            if (t != glm::vec3(0.0f)) n["translation"] = {t.x, t.y, t.z};
+            if (std::fabs(q.w) < 1.0f - 1e-7f) n["rotation"] = {q.x, q.y, q.z, q.w};
+            if (glm::any(glm::greaterThan(glm::abs(s - glm::vec3(1.0f)), glm::vec3(1e-6f)))) n["scale"] = {s.x, s.y, s.z};
+        }
+        if (!jt.extras.empty())
+        {
+            nlohmann::json e = nlohmann::json::parse(jt.extras, nullptr, false);
+            if (e.is_object()) n["extras"] = e;
+        }
         b.j["nodes"].push_back(n);
     }
     for (std::size_t i = 0; i < sc.joints.size(); ++i)
@@ -612,7 +640,11 @@ bool saveGlb(const fs::path& path, const Scene& sc, std::string& error)
             joints.push_back(ijointNode0 + int(i));
         }
         const int acc = b.accessor(aibm.data(), sc.joints.size(), 5126, "MAT4", 16, 0);
-        b.j["skins"].push_back({{"joints", joints}, {"inverseBindMatrices", acc}});
+        nlohmann::json skin = {{"joints", joints}, {"inverseBindMatrices", acc}};
+        int croot = 0, iroot = -1;
+        for (std::size_t i = 0; i < sc.joints.size(); ++i) if (sc.joints[i].parent < 0) { ++croot; iroot = int(i); }
+        if (croot == 1) skin["skeleton"] = ijointNode0 + iroot;
+        b.j["skins"].push_back(skin);
         fSkin = true;
     }
     for (const Mesh& mesh : sc.meshes)
@@ -648,11 +680,14 @@ bool saveGlb(const fs::path& path, const Scene& sc, std::string& error)
         for (const Channel& ch : an.ch)
         {
             if (ch.t.empty() || ch.t.size() != ch.v.size() || ch.joint < 0 || std::size_t(ch.joint) >= sc.joints.size()) continue;
-            const int in = b.accessor(ch.t.data(), ch.t.size(), 5126, "SCALAR", 1, 0, true);
+            const int in = b.accessorShared(ch.t.data(), ch.t.size(), "SCALAR", 1, true);
             std::vector<float> av;
             for (const glm::vec4& v : ch.v)
-                for (int c = 0; c < (ch.path == 1 ? 4 : 3); ++c) av.push_back(v[c]);
-            const int out = b.accessor(av.data(), ch.v.size(), 5126, ch.path == 1 ? "VEC4" : "VEC3", ch.path == 1 ? 4 : 3, 0);
+            {
+                const glm::vec4 u = ch.path == 1 && glm::length(v) > 0 ? glm::normalize(v) : v;   // (unit quaternions)
+                for (int c = 0; c < (ch.path == 1 ? 4 : 3); ++c) av.push_back(u[c]);
+            }
+            const int out = b.accessorShared(av.data(), ch.v.size(), ch.path == 1 ? "VEC4" : "VEC3", ch.path == 1 ? 4 : 3, false);
             ja["samplers"].push_back({{"input", in}, {"output", out}, {"interpolation", "LINEAR"}});
             ja["channels"].push_back({{"sampler", int(ja["samplers"].size()) - 1},
                                       {"target", {{"node", ijointNode0 + ch.joint}, {"path", ch.path == 0 ? "translation" : ch.path == 1 ? "rotation" : "scale"}}}});

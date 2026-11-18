@@ -12,6 +12,7 @@ struct EDITOROPTS
     std::string script;          // --editor-do "cmd;cmd;...": automated steps (tools/editorshots.sh)
     bool fHidden = false;        // --editor-hidden: no window shown (automated runs)
     int width = 1600, height = 900;
+    std::string language;        // --editor-language CODE (the launcher's; "": SAFEHOUSE_LANGUAGE, else English)
 };
 
 // The editor (0: closed normally). Without the game's editor: a message and 2.

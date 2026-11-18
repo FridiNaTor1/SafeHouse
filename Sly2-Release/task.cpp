@@ -1279,6 +1279,7 @@ void InitTasks(SW* psw)
         p->nMode = NField(p, 0xF0, 0);
         p->ploContext = PloFind(NField(p, 0xF4, -1));
         p->ploCC = PloFind(NField(p, 0xCC, -1));
+        p->vec9C = {GField(p, 0x9C, 480.0f), GField(p, 0xA0, 720.0f)};   // (1257: the suck's ramp, UpdateJobTimer)
         p->prD0 = PrFromOption(p, 1262);
         p->prD8 = PrFromOption(p, 1263);
         p->prE0 = PrFromOption(p, 1260);
@@ -1496,7 +1497,9 @@ void RequestLoTaskState(LO* plo, int n, LO* ploContext)
 }
 
 // orig: 0x00161478 func_00161478 (its end): SW +0x3B0C's +0xA4 += dt while (float)JOY +0x1020 < 10; past +0x9C the
-// suck history's progress (0x154D88 on 0x2DE578 with dt / (+0xA0 - +0x9C): TODO(world), the suck history)
+// suck rises by dt / (+0xA0 - +0x9C) (0x154D88 on 0x2DE578: GSuck + d, limited to 0 .. 1 by 0x154DC8): a job played
+// past 480 s gets easier, up to +1 by 720 s. Reference (round4 card, 32:3234, job 3191 at 782 s): m7_heist's
+// suck_value 0.6 -> 0.6135 in its first seconds of play (bif 103 reads it: Bison's hops)
 void UpdateJobTimer(float dt)
 {
     if (!g_psw) return;
@@ -1504,6 +1507,11 @@ void UpdateJobTimer(float dt)
     if (!p) return;
     if (!(static_cast<float>(g_joyps2.dtIdle) < 10.0f)) return;   // (0x2E0C20: the first pad's JOY +0x1020)
     p->gA4 = p->gA4 + dt;
+    if (p->vec9C.x < p->gA4)
+    {
+        s_psw = g_psw;
+        SetSuck(GSuck() + dt / (p->vec9C.y - p->vec9C.x));
+    }
 }
 
 // (for the task counters, screenrt.cpp 0x211F90) a task by oid: its state +0x54 (-2 none) and done (0x164030)

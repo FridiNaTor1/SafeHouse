@@ -255,6 +255,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
         lists();
         ImGui::TreePop();
     }
+    DrawOptionTools(plo, po);   // (editor_everything.inc: add / remove any option)
     if (!m_note.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted)); ImGui::TextWrapped("Last option edit: %s.", m_note.c_str()); ImGui::PopStyleColor(); }
 }
 

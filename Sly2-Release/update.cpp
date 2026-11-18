@@ -3,6 +3,7 @@
 #include "worldglobals.h"
 #include "update.h"
 #include "debugmenu.h"
+#include "debugvis.h"
 #include "rope.h"
 #include "dance.h"
 #include "turret.h"
@@ -331,6 +332,7 @@ void HandleLoSpliceEvent(LO* plo, uint32_t symid, bool fDeferred, int carg, CRef
     if (!plo->pframe) return;
     CRef* pref = plo->pframe->PrefFindBinding(symid, 1);
     if (!pref) return;
+    if (g_pfnDebugVisSpliceEvent) g_pfnDebugVisSpliceEvent(plo, symid, fDeferred);   // (debugvis.h: the Mission overlay; reads only)
     static const bool s_fPrint = SLY2N_ENV("SLY2N_EVENTPRINT") != nullptr;  // (debug: the bound events fired)
     if (s_fPrint && symid != 1)
     {

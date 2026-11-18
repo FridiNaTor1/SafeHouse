@@ -512,9 +512,30 @@ format each in a file of its own, so you can change one part without touching th
   Sly, `245 murray` Murray, `147 npc_dimitri` Dimitri, the groups named after the level are the level itself). They
   are the game's compiled scripts written as S-expressions: `(define sym1049 #obj:0)`, `(<seto!> sym1053 178 #t)`.
   `symN` is a variable (its number: the names are not on the disc), `<name>` a built-in function, numbers with a
-  `.` are floats. Edit, save in Mods at the same path, and the game compiles the text when the level loads. A file
-  that does not compile is reported in the log (`mods: ... line 8: unknown word ...`) and the level loads without
-  your mods. Comments start with `;`.
+  `.` are floats. Edit, save in Mods at the same path, and the game compiles the text when the level loads. Comments
+  start with `;`.
+  **With names:** the map editor's Scripts tab (or `Sly2-Release --data-dir <installation> --load-world 2 --dump-splice
+  DIR`) shows the scripts with readable names: `on-start` (an engine event), `self`, `.position` (an option),
+  `$npc-dimitri` (an object), `<rumble>` (a built-in), `~rumble-3` (an animation's event word), `%player-down` (a job
+  event), variables named by what they hold. A script kept this way (the editor's Apply with **Names** on, or any text
+  with the `;= name=number` lines at its end) is a mod as it is: the game compiles the names when the level loads. A
+  name of your own becomes a new symbol whose number is the same everywhere you use that name. Old mods with numbers
+  keep working. `Sly2-Release --splice-compile FILE` prints what a scripts file compiles to and its problems.
+  Every name has a meaning: a name that starts with `?` is a guess from how the scripts use the thing (what it is
+  and where it lives: `?flag-in-on-activate`, `.?oid-of-safe-house`, `$?bentley-sm-state-5526`), the others are
+  traced from the engine or what the thing holds; `&guard` is a class (`(<find-objects> &guard self)`: every guard).
+  `--dump-splice` also writes `names.tsv`: every name with its number and how sure it is (fixed / traced / use /
+  guess). Rename a `?` name freely in your copy (the `;=` line ties it to its number).
+  Two functions the original's scripts call are defined nowhere in the game: `on-aim-setup-failed` (a guard's aim
+  manager, when its guard, launcher or aim point is missing) and `on-guard-knocked-out` (the final job's, when a guard
+  is knocked out). The calls do nothing; define one in that module (`(define on-guard-knocked-out (lambda #none ...))`)
+  to make it do something.
+  **Problems:** a scripts file that does not compile (a misspelt `.option`, a missing `)` ...) is reported in the log
+  with the mod, the file, the line and why (`mods: the mods folder: .../Scripts.splice: line 19:37: unknown option
+  name '.shwo'`) and for a few seconds over the game; that file loads as installed, your other files stay. The editor
+  checks the text as you type: errors and warnings underlined, the problems list below the text (unknown names and
+  functions, argument counts, options the object does not have, objects not in the level, unreachable code ...), with
+  a **Fix** where the fix is obvious.
 - `Graphics.bin`, `Objects.bin`, `Collision.bin` and the `World/*.bin` blocks are binary, as on the disc. The index
   lists each group's objects (number, class, offset, size) for tools.
 - A whole level file still works: `Mods/Worlds/<N> <Episode>/<Level>/<Level>.brx` (uncompressed) loads instead of
@@ -568,18 +589,57 @@ The window is laid out like other level editors: a tool strip on the left, the *
 - **Brushes** (Create tab): blocks, ramps, stairs, cylinders and floors made into new objects with real collision
   (Sly can stand on them, walk up the ramp and the stairs), with a grid texture of a colour or another object's
   texture. Select one later to change its size: it is made again.
+- **Edit a brush's faces / edges / points** (its Properties, **Edit faces / edges / points**): the brush becomes a
+  mesh of convex pieces. Click a face of it in the view (Face mode), or its nearest edge or point (Edge / Point); then
+  **Push / pull face** (along its normal), **Extrude face** (a new piece on it), **Move point / edge** (the piece made
+  convex again), **Split** a piece across x / y / z through its middle, **Merge with piece** (their convex hull),
+  **Delete piece**, and the face's texture (the brush's, another object's: Ctrl+click it first, or a colour). The
+  collision follows the pieces.
 - **Traversal and interactive objects** (Create tab): ledges, pipes and poles, rails / beams / wires, hang points,
   spires, swing poles, ropes and paths; buttons / uses, Murray's heavy uses, exits, barriers, pads, vaults, loot,
   hiding spots, breakables, coins, clue bottles, lasers, detectors, checkpoints, warps, job markers. Each is a copy of a
   working one in the level (curves are laid out along the view; shape them with their points). The Properties say
   who can use it (Sly's own target list; a use's character, which you can set to everyone / Sly / Bentley / Murray).
+- **Who can use it:** the Properties of a traversal or interactive object list Sly, Bentley and Murray, each with why
+  or why not, by the game's own rules: the kinds each one looks for (Sly everything; Bentley ledges, walls, uses,
+  crawl spaces, pipes and swings; Murray the same without crawl spaces) and the object's **players' mask** (pipes are
+  Sly's by default; **Let in** sets it: everyone, Sly, Bentley, Murray, Sly and Bentley).
+- **Crawl spaces** (Create tab, **Presets**): **Crawl space** makes a tunnel brush (walls and a low ceiling, its
+  height and width editable) with a crawl entry at each end, along the view; in a level whose crawl spaces are inside
+  a prop (Paris's tables) it places that prop. Sly and Bentley crawl in with Circle; Murray never crawls.
+- **Keys and pockets:** a guard's Properties show what is in his pocket (Sly pickpockets it); **Put a key in this
+  pocket** copies the level's key into it (it opens what that key's task opens: a door or use waiting for the task).
+- **Exits:** where each exit leads in words (a level, the safe house) and **Lead to** another place this level's
+  exits go to. **Vaults:** their combination.
+- **Every class in this level** (Create tab): any object class the level has, made as a copy of a working one.
+- **States** tab: the level's map states (the start, before and after each job, the episode complete, a job being
+  played, your own), each with what triggers it in words, and what decides them in the level (the tasks' object and
+  state machine lists, scripts, filters). **Show** hides in the view what is not in the level in that state (the game
+  works it out, hidden, in a second); **Play** starts the game in it (no save is written). **New state** (or **New
+  state from this one**) makes a state of your own: its trigger (a task's states, a job done or not, a progress
+  value), the objects it adds or removes (**Add the selection**) and state machines it sets; saved in the project's
+  `mod.json` (see Map states below). State machine poses (Paris's fallen peacock sign) show in Play, not in the view.
+- **Add or remove options** (Properties, below the options): any option the game knows, found by name or number,
+  with its value by its kind (numbers, a vector, a list's values); any of the object's options removed. Options are
+  read when the level loads, so the editor loads it again at once.
+- **Level** tab: your own levels. **New level...** asks for a name, a template level (empty: its characters, effects,
+  HUD and textures; or the whole template as a copy to change), where the player starts, the way in (a sphere in
+  another level, at the view's point) and a way back; **Make it**, then **Open it** (a new editor on the new level,
+  with a floor under the spawn). The tab lists this level's ways in and out (drawn in the view as rings with their
+  destination: move them to the view, change their radius) and a new level's spawn (**Put it at the view's point**).
+  New levels have no sky or lights of their own yet (the template's level group is left out): keep the whole
+  template for those.
 - **Assets** tab: the level's props, characters and pickups as pictures, with how often each is used (select them in
   the map) and **Place**; another level's assets (their pictures are made once by a hidden editor) can be imported
   as models (characters come as statues: their behaviour needs their own level's data).
 - **Guards:** a guard's **Patrol** reads as words (waits, walk along a path, loop); the path is drawn in the view with
   its direction; click it to move its points.
 - **Missions / Scripts / Dialogue / Text / History** (the bottom panel): the world's jobs, tasks and markers, each
-  group's scripts (readable names, editable), the dialogue, the text, the edits made and the parts they changed.
+  group's scripts (readable names, editable, checked as you type: errors / warnings underlined and listed), the dialogue, the text, the edits made and the parts they changed.
+- **Language:** the 3D editor speaks the launcher's language (the launcher passes it; `--editor-language CODE` when
+  started by hand): its menus, tabs, panels and messages in all 15 languages (editor/lang/<code>.json; Japanese, Korean
+  and Russian letters from the launcher's Noto fonts). Some field labels and the game's own words (state names, class
+  names) stay English.
 - **Undo / Redo:** Ctrl+Z / Ctrl+Y. **Save:** Ctrl+S. **Help:** **Getting started** (F1) and the **Keyboard shortcuts**.
 
 #### Models and textures
@@ -594,11 +654,26 @@ The window is laid out like other level editors: a tool strip on the left, the *
   props; **cel outline** makes the black border along its silhouette; **collision** keeps the replaced object's, removes
   it, or makes a box around the new model.
 - **Export GLB** (the Inspector, or the Models tab): the object (with its children), its whole group (a world part), or
-  a character with its skeleton and animations (each animation sampled at 30 frames a second). Textures are the
-  game's (or a texture pack's replacement, when there is one).
-- **Characters:** a character exported here keeps its joints' names (`MURRAY#9.31`: object 9, record 31) and each
-  part's name ends in `@<show id>,<draw order>,<hidden>`. Edit the mesh in Blender, keep the armature and the names,
-  import it back in place of the character's model: it stays skinned (up to four bones a triangle) and animated.
+  a character with its skeleton and animations. Textures are the game's (or a texture pack's replacement, when there
+  is one).
+- **Character animations** (the options under the export kind): **as in the game** (default) plays every clip through
+  the game's own update and bakes each joint per game step (60 keys a second, or 30), so Blender shows what the game
+  shows: the arms and legs are solved by the game's two-bone joints (the clip only moves the hands / feet), linked
+  parts follow, tails and ropes swing (a cycle is played twice first, so they swing as in a looping play), squash and
+  stretch is kept. **Fewer keys** drops keys while every joint stays within 0.5 mm of the game's pose. **Clip channels
+  only (no IK)** writes the clips' keys without the game's solvers (the limbs stay at rest while the hands / feet move)
+  and adds each limb's target as a joint; the root bone's custom property `safehouse_ik` lists each limb's joints
+  (target, upper, lower, end), to rebuild them with IK constraints. Not part of a clip and so not exported: a head
+  turning toward the player, and what the characters' own code does at run time (feet on uneven ground, Sly's cane
+  reach, a guard's arm aimed by its AI, held objects).
+- **Characters:** a character exported here keeps its joints' names (`MURRAY#9.31`: object 9, record 31; a limb's
+  joints add their part and side, `_thigh_L`, `_shin_L`, `_foot_L`, `_upperarm_R`...) and each part's name ends in
+  `@<show id>,<draw order>,<hidden>`. In Blender the bones point at their child and a limb's knee / elbow bends about
+  the bone's X axis. A joint the game squashes or shears (a non-uniform scale under rotated children, which a bone
+  cannot inherit) gets two small bones under it, `..._deform_scale` and `..._deform`, that carry it, and its skin
+  moves to them. 1 unit = 1 m, glTF's Y up (Blender's import turns it to Z up), the root bone is the character's
+  placement. Edit the mesh in Blender, keep the armature and the names, import it back in place of the character's
+  model: it stays skinned (up to four bones a triangle) and animated.
 - **Textures:** each material's **Texture...** puts a PNG / JPEG on it. **Texture pack** (default): the picture at its
   own size under the texture's name in the package's `Textures/` (every model drawing that texture changes; the
   game's own data is untouched). **Game data**: the picture re-encoded into the bitmap and its palettes at their
@@ -765,6 +840,74 @@ player ground to stand on. The smallest level is just that: the template's chara
 
 New levels load on every platform. Not there yet: the episode menu does not list them (they are reached by an entry or
 `--world`), and a save made in a new level does not bring the player back to it (the game resumes in the episode's own levels).
+
+### Cutscenes
+
+Sly 2's cutscenes are **scripts**: script objects whose commands the level file lists (a camera shot, a line of
+dialogue, "walk to", an animation, a wait, show / hide an object, set a task's state ...). Commands run one after the
+other on a **track**; a command waits until it is done (the line spoken, the character arrived) unless it is set not
+to wait; a **block** inside a script is a track of its own that runs beside the others; "wait for tracks" and alarms
+bring them together again. The game pauses itself around a scene (the letterbox, the pad locked) with the "Pause the
+game" command.
+
+The map editor's **View > Cutscene timeline** shows any script of the level as a video editor would:
+
+- **Choose a cutscene** (the list: the scripts with lines, camera shots or a pause; the first line's subtitle names
+  them). Its commands are **clips** on tracks: the camera, the dialogue, one track per character, effects, sound,
+  events and the flow (waits, tracks, alarms); clips that overlap stack. **By script track** shows the script's own
+  tracks (its blocks) instead. Hover a clip for what it does; the "~" ones are estimated.
+- **Measured times:** opening a cutscene plays it in a hidden game (a second or two) and measures when each command
+  starts and ends, the camera, where the characters and objects go, the animations and lines (after every edit too).
+  It starts the script in the level as it is: **Measure from its starter** plays the script that starts it first
+  (the characters placed as the game places them) and **at task** starts the level at a job's task. A scene that
+  waits for gameplay (a guard reaching a spot) is shown as far as it got.
+- **Scrub** (drag the ruler or click an empty spot; Space plays, the arrows step a frame, Shift + drag on the ruler
+  sets a loop range): **Camera** looks through the cutscene's camera, **Scene** puts the characters and moved objects
+  where they are at that moment, **Poses** poses each character with the animation playing on it at that moment (as
+  the game poses it: its walk, run, idle or the scene's own animation), **Ghosts** draws each character's path with a
+  dot every half second and its pose (a skeleton) half a second and a second before (blue) and after (orange) the
+  playhead.
+- **Edit:** select a clip to see its arguments by name (objects with **selection** to take the one selected in the 3D
+  view, lines with their subtitle and length, tasks with their states). **Drag a clip** to move it later or earlier
+  (the wait before it grows or shrinks; a wait is added when there is none); **drag its right edge** to change its own
+  length (waits, fades, rumble, hints, a shot's seconds). **Add before / after** (by track kind), **Delete** (a block
+  with its commands), **Set from the view** for a camera shot's start / end (fly there first). Undo / redo as usual.
+- **New** makes a cutscene of your own: the game paused, a 3 second camera shot from the view, the camera given back;
+  add lines, walks and animations to it. Start it from a button / use (its **Links**: "starts a script"), from another
+  script (**Start script**), or try it with **Play in game**.
+- **Animations' keys**: select an animation clip and its channels show below it as sub-tracks (each object it moves,
+  a diamond at each key; its timed events: sounds, effects); click a key to put the playhead there.
+- **Camera keys** (no clip selected, **Camera key**): fly the view where the camera should be (Camera off to fly
+  freely), set how long the **move** takes and its **easing** (linear, ease in, ease out, ease in / out), then **Camera
+  key at the playhead from the view**: the camera moves there from wherever it is, arriving at the playhead, and stays
+  until the scene's next shot. Select a key (a shot's end) to change the move's easing and length, or **Set from the
+  view** again; Camera on looks through it while scrubbing.
+- **Character paths** (no clip selected, **Character path**): choose a character, **walk** or run, a speed (how far
+  its stick is pushed: 1 its own walk / run speed), **curved** (a smooth curve through the points) and **face at the
+  end** (degrees, or the view's direction), an animation on arrival; **New path from the playhead** makes a track of its own where the character (its
+  ghost at the playhead) goes along a new path in the view's direction from that moment. Select its clip and **Edit
+  its points in the view** (drag them with the gizmo; the last point, where it ends, is selected), **Add a point**,
+  **Remove the last**. Sly (the player) is steered from point to point as the game's scenes steer him (a marker at
+  each point); the other characters follow a path object. The new track does not hold up the scene's own.
+- **Record a play session**: the game starts in this level; play what the character should do (walk, run, stop),
+  then close it. **Make a track from it** turns the recording into the chosen character's track from the playhead:
+  placed at its start, its stops as waits, each stretch of moving a path (or Sly's points), walk or run by its speed,
+  each jump a "Jump to" where it landed, each action while standing (an attack, a crouch: a button and its animation)
+  that animation.
+- **Play in game** plays the cutscene in the game from the playhead (the project saved first; the game runs the
+  scene to that moment first).
+- **Started by / What it does** (no clip selected): what starts it (objects, other scripts, the splice scripts that
+  name it) and what it changes (tasks, scripts, shown / hidden objects, state machines, music, a warp).
+
+The edits are the level's own bytes (the script's record), so the game plays an edited or new cutscene exactly as it
+plays its own, on every platform. Scripts the editor cannot match to their record (built by splice code) are shown
+read only.
+
+For tools: `Sly2-Release --data-dir D --world W[:TASK] --headless --fixed-dt --frames 40000 --cutscene-trace OID
+--cutscene-out F.json [--cutscene-focus OID2]` writes a measurement (`sly2-cutscene-trace`: each command's start per
+track, the camera each step, the objects' keys, lines, animations); `--play-scpt OID[@SECONDS]` plays a script from a
+time; `--record-session F.json` records a play session (the player's position, heading, speed, state, animation and
+pad each step).
 
 ### What is safe to change
 

@@ -68,6 +68,18 @@ def identify(extractor, iso):
     return json.loads(result.stdout.decode().strip().splitlines()[-1])
 
 
+def real_runtime(launcher, bin_dir, name):
+    """Before a real install: the extractor runs the game beside it as its converter (Sly 2's data, Sly 3's worlds),
+    so the stand-in runtime of the --play checks is replaced by the real build beside the launcher, or removed."""
+    target = bin_dir / name
+    target.unlink(missing_ok=True)
+    for suffix in ("", ".exe"):
+        real = launcher.parent / (name + suffix)
+        if real.is_file():
+            shutil.copy2(real, bin_dir / real.name)
+            return
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("launcher", type=pathlib.Path)
@@ -358,6 +370,7 @@ def main():
             assert result.returncode == 0, "Sly 3 disc not routed to its installer by default"
             if a.extract:
                 shutil.copy2(extractor, bin_dir / extractor.name)
+                real_runtime(launcher, bin_dir, "Sly3-Release")
                 shutil.rmtree(sly3)
                 result = run([copied, "--install", a.sly3_iso], env=env, timeout=3600)
                 assert result.returncode == 0, result.stderr[-2000:]
@@ -380,13 +393,17 @@ def main():
             if a.extract:
                 shutil.rmtree(sly2)
                 shutil.copy2(extractor, bin_dir / extractor.name)
+                real_runtime(launcher, bin_dir, "Sly2-Release")
                 result = run([copied, "--install", a.sly2_iso], env=env, timeout=3600)
                 assert result.returncode == 0, result.stderr[-2000:]
                 manifest = json.loads((sly2 / "installation.json").read_text())
-                assert manifest["game"] == "sly2" and manifest["image"]["sectors"] == 1408272, manifest
-                assert (sly2 / "disc.iso").stat().st_size == a.sly2_iso.stat().st_size == manifest["image"]["size"]
-                for name in ("SYSTEM.CNF", "SCUS_973.16", "IOPRP300.IMG"):
-                    assert (sly2 / name).is_file(), name
+                # (Sly 2 installs the converter's files, no image copy: File Extractor converterTool)
+                summary = {k: v for k, v in manifest.items() if k != "files"}
+                assert (manifest["game"], manifest["layout"], manifest["disc"]) == ("sly2", "files", "SCUS_973.16"), summary
+                listed = {f["path"] for f in manifest["files"]}
+                for name in ("SYSTEM.CNF", "SCUS_973.16", "extraction_manifest.json"):
+                    assert (sly2 / name).is_file() and name in listed, name
+                assert (sly2 / "Worlds").is_dir() and not (sly2 / "disc.iso").exists(), summary
                 assert b"de2af92a54de71e33edc8a160c31c0337a95e6f5" in (sly2 / "installation.json").read_bytes()
                 result = run([copied, "--verify", "sly2"], env=env, timeout=3600)
                 assert result.returncode == 0 and b"Installation verified" in result.stdout, result

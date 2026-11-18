@@ -60,6 +60,10 @@ CRef RefEvalSymbol(CPair* ppair, CFrame* pframe)
         char ach[64];
         std::snprintf(ach, sizeof(ach), "unbound symbol %u", ppair->m_ref.m_symid);
         g_splicediag.Note(ach);
+        // (debug: SLY2N_SPLICEUNBOUND=1: each evaluation of a symbol no frame binds, e.g. the original's two undefined
+        // calls: the aim managers' sym1533, the blimp's sym1407; notes/SCRIPTNAMES3_2026-11-18.md)
+        static const bool s_fPrint = SLY2N_ENV("SLY2N_SPLICEUNBOUND") != nullptr;
+        if (s_fPrint) std::fprintf(stderr, "splice: unbound symbol %u evaluated (nothing defines it: its value is nothing)\n", ppair->m_ref.m_symid);
     }
     return ref;
 }

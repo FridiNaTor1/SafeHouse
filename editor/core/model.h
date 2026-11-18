@@ -53,6 +53,7 @@ struct Joint {
     int parent = -1;
     glm::mat4 local{1.0f};          // the rest pose relative to the parent
     glm::mat4 inverseBind{1.0f};    // world -> joint at the bind pose
+    std::string extras;             // optional: a JSON object written as the node's "extras" (Blender: custom properties)
 };
 
 struct Channel {
@@ -81,7 +82,8 @@ struct Scene {
 // .glb / .gltf / .fbx by the extension. Images referenced by the file are decoded (PNG / JPEG, embedded or beside it).
 bool load(const fs::path& path, Scene& scene, std::string& error);
 // A binary glTF 2.0 file: every mesh as one node (skinned meshes with the skeleton's joints), materials with their
-// images as PNG, the animations as joint channels.
+// images as PNG, the animations as joint channels. Joints are written as translation / rotation / scale (animated nodes
+// may not carry a matrix); a skeleton with one root joint names it as the skin's "skeleton".
 bool saveGlb(const fs::path& path, const Scene& scene, std::string& error);
 
 // PNG / JPEG file -> RGBA8 top-down

@@ -61,7 +61,7 @@ void CEditor::RenumberCopy(std::vector<uint8_t>& rec, int iobjrecSrc, std::size_
     if (fCarry)
     {
         std::vector<uint8_t> ab;
-        if (m_proj.readPart(m_index.groups[size_t(igrpSrc)].scriptsPart, ab)) textSrc.assign(ab.begin(), ab.end());
+        if (m_proj.readPart(m_index.groups[size_t(igrpSrc)].scriptsPart, ab)) textSrc = ScriptTextRaw(std::string(ab.begin(), ab.end()));
         if (m_proj.readPart(pgDst->scriptsPart, ab)) textDst.assign(ab.begin(), ab.end());
     }
     std::map<int, int> mpmodule;

@@ -27,29 +27,56 @@ void CEditor::LoadScriptText(int igroup)
         m_proj.readPart(m_index.groups[igroup].scriptsPart, ab);
         m_scriptText.assign(ab.begin(), ab.end());
 #if EDGAME_SLY2
-        // (names: display only, editor_scriptnames.inc)
-        if (m_fScriptReadable) m_scriptText = ScriptReadable(igroup, m_scriptText);
+        // (names, editor_scriptnames.inc: a part kept readable is shown as it is, with its own names; the converter's
+        // text gets the port's names)
+        if (FSpliceTextReadable(m_scriptText)) { if (!m_fScriptReadable) m_scriptText = ScriptTextRaw(m_scriptText); }
+        else if (m_fScriptReadable) m_scriptText = ScriptReadable(igroup, m_scriptText);
 #endif
     }
     m_scriptEdit = m_scriptText;
     m_scriptError.clear();
     m_scriptErrorLine = 0;
     m_fScriptDirty = false;
+#if EDGAME_SLY2
+    RunScriptDiagnostics();
+#endif
+}
+
+std::string CEditor::ScriptTextRaw(const std::string& text)
+{
+#if EDGAME_SLY2
+    if (!FSpliceTextReadable(text)) return text;
+    std::string raw, error;
+    std::vector<uint8_t> ab;
+    if (!FSpliceRaw(text, raw, error) || !FSpliceFromText(raw, ab, error)) return text;
+    std::string title = text.substr(0, text.find('\n'));
+    title = title.rfind("; ", 0) == 0 ? title.substr(2) : std::string();
+    std::string out;
+    return FSpliceToText(ab.data(), ab.size(), title, out, error) ? out : text;
+#else
+    return text;
+#endif
 }
 
 std::set<int> OidsLookedUp(const std::string& text);
 
-bool CEditor::FCheckScript(const std::string& text, std::string& error, int& line, std::vector<PROBLEM>* papb, int igroup)
+bool CEditor::FCheckScript(const std::string& textIn, std::string& error, int& line, std::vector<PROBLEM>* papb, int igroup)
 {
     line = 0;
     std::vector<uint8_t> ab;
-    if (!FSpliceFromText(text, ab, error))
+#if EDGAME_SLY2
+    // (a readable text: its names compiled, splicenames.h)
+    if (!FSpliceTextToBytes(textIn, ab, error))
+#else
+    if (!FSpliceFromText(textIn, ab, error))
+#endif
     {
         const auto i = error.find("line ");
         if (i != std::string::npos) line = std::atoi(error.c_str() + i + 5);
         return false;
     }
     if (!papb) return true;
+    const std::string text = ScriptTextRaw(textIn);
     // the literal oids of (<find-object> N ...), (<find-object-kind-4> N ...), (<find-objects-of-names> (quote (N ...)))
     std::set<int> setOid;
     for (const auto& up : m_psw->aploAll) setOid.insert(up->oid);
@@ -184,10 +211,11 @@ void CEditor::DrawScripts()
         else m_scriptError = error;
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", T("Names for the scripts' numbers (display only: the game keeps the numbers).\n"
+        ImGui::SetTooltip("%s", T("Names for the scripts' numbers. Applied with Names on, the scripts keep their names\n"
+                                  "(the game compiles them when it loads the mod); off, the converter's numbers.\n"
                                   "self: the object the handler runs for; on-...: the engine's events; .name: an option;\n"
-                                  "$name: an object; <name>: a built-in. The \";=\" lines at the top map each name to its number;\n"
-                                  "a new name you write becomes a new symbol."));
+                                  "$name: an object; <name>: a built-in; ~name: an animation event word. The \";=\" lines\n"
+                                  "at the end map each name to its number; a new name you write becomes a new symbol."));
     std::vector<std::string> anew;
     if ((fCheck || fApply) && FSpliceTextReadable(m_scriptEdit))
     {
@@ -195,10 +223,17 @@ void CEditor::DrawScripts()
         if (!FSpliceRaw(m_scriptEdit, textCheck, error, &anew)) { m_scriptError = error; textCheck.clear(); }
     }
 #endif
+#if EDGAME_SLY2
+    if (fCheck || fApply) RunScriptDiagnostics();
+#endif
     if ((fCheck || fApply) && !textCheck.empty())
     {
         std::vector<PROBLEM> apb;
         if (!FCheckScript(textCheck, m_scriptError, m_scriptErrorLine, &apb, m_igroupScript)) {}
+#if EDGAME_SLY2
+        // (the problems list below the text has them all)
+        else if (const std::string sum = ScriptDiagSummary(); !sum.empty()) { m_scriptError = "compiles; " + sum + " (below)"; m_scriptErrorLine = 0; }
+#endif
         else if (!apb.empty()) { m_scriptError = apb.front().text + (apb.size() > 1 ? " (+" + std::to_string(apb.size() - 1) + " more)" : ""); m_scriptErrorLine = 0; }
         else m_scriptError = "ok: compiles back to the game's format";
 #if EDGAME_SLY2
@@ -209,8 +244,10 @@ void CEditor::DrawScripts()
             std::string error;
             std::string textApply = m_scriptEdit;
 #if EDGAME_SLY2
-            // (the converter's own print of what the text compiles to)
-            if (!FScriptToRaw(m_scriptEdit, textApply, error)) textApply.clear();
+            // with Names: the readable text kept (its table made again: the game compiles the names); without: the
+            // converter's own print of what the text compiles to
+            if (m_fScriptReadable && FSpliceTextReadable(m_scriptEdit)) { if (!FSpliceNormalize(m_scriptEdit, textApply, error)) textApply.clear(); }
+            else if (!FScriptToRaw(m_scriptEdit, textApply, error)) textApply.clear();
 #endif
             if (!textApply.empty() && FApplyScript(m_igroupScript, textApply, error))
             {
@@ -227,8 +264,19 @@ void CEditor::DrawScripts()
         ImGui::SameLine();
         ImGui::TextColored(st::vec(m_scriptError.rfind("ok", 0) == 0 ? st::success : st::danger), "%s", m_scriptError.c_str());
     }
-    if (ImGui::InputTextMultiline("##src", m_scriptEdit.data(), m_scriptEdit.capacity() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, ResizeCallback, &m_scriptEdit))
+#if EDGAME_SLY2
+    ScriptDiagnosticsTick();
+    const float hPanel = ScriptDiagPanelHeight();
+#else
+    const float hPanel = 0.0f;
+#endif
+    if (ImGui::InputTextMultiline("##src", m_scriptEdit.data(), m_scriptEdit.capacity() + 1, ImVec2(-1, hPanel > 0.0f ? -hPanel : -1.0f),
+                                  ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, ResizeCallback, &m_scriptEdit))
         m_fScriptDirty = m_scriptEdit != m_scriptText;
+#if EDGAME_SLY2
+    DrawScriptDiagUnderlines();
+    DrawScriptDiagPanel();
+#endif
 }
 
 // ---- dialogue

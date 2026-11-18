@@ -34,7 +34,7 @@
 
 bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& error);   // sw.cpp
 void InitClasses();                                                                  // cls.cpp
-std::string SpliceObjectName(const SW* psw, int oid);                                // splicedump.cpp
+std::string SpliceObjectName(const SW* psw, int oid, bool fOtherEpisodes = true);    // splicedump.cpp
 void InstallSpliceDumpReader(std::map<int, std::string>* pmptext);                   // splicedump.cpp
 
 namespace

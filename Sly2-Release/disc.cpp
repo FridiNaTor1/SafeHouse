@@ -1,4 +1,7 @@
 #include "disc.h"
+#include "modnotice.h"
+#include "splicediag.h"
+#include "splicenames.h"
 #include "worldparts.h"
 #include "bis.h"
 #include "cls.h"
@@ -736,6 +739,59 @@ std::vector<uint8_t> CDisc::ReadWorldReduced(const FK& fk) const
     return ReadWorldParts(fk, !s_fFull);
 }
 
+// which mod a modded file is ("package <id>": a package's file; else the mods folder's)
+std::string CDisc::ModOfPath(const std::string& path) const
+{
+    const std::string pkg = std::string("/") + cane::mods::kPackagesFolder + "/";
+    std::string p = path;
+    for (char& c : p) if (c == '\\') c = '/';
+    if (const std::size_t i = p.find(pkg); i != std::string::npos)
+    {
+        const std::size_t i0 = i + pkg.size();
+        return "package " + p.substr(i0, p.find('/', i0) - i0);
+    }
+    return "the mods folder";
+}
+
+void CDisc::ReportModPartError(const std::string& pathMod, const std::string& rel, const std::string& why) const
+{
+    // why: "line N:C: ..." for a script
+    std::fprintf(stderr, "mods: %s: %s: %s (the installed part is used instead)\n", ModOfPath(pathMod).c_str(), pathMod.c_str(), why.c_str());
+    std::string file = rel;
+    if (const std::size_t w = file.rfind("World/"); w != std::string::npos) file = file.substr(w + 6);
+    PostModNotice("Mod error (" + ModOfPath(pathMod) + "): " + file + " " + why.substr(0, 110));
+}
+
+void CDisc::ReportModScriptWarnings(const std::vector<std::string>& arelScripts, const std::set<std::string>& setSkip) const
+{
+    // the modded scripts of the world: their diagnostics (no world: names, calls, counts) in the log, once each
+    static std::set<std::string> s_setDone;
+    static std::mutex s_mutex;
+    for (const std::string& rel : arelScripts)
+    {
+        const std::string key = RelCanonical(rel);
+        if (setSkip.count(key)) continue;
+        const auto it = m_mpModPath.find(key);
+        if (it == m_mpModPath.end()) continue;
+        {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            if (!s_setDone.insert(it->second).second) continue;
+        }
+        std::ifstream in(cane::paths::ioPath(cane::path(it->second)), std::ios::binary);
+        if (!in) continue;
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        SPLICEDIAGCTX ctx;
+        std::vector<SPLICEISSUE> adiag;
+        SpliceDiagnose(text, ctx, adiag);
+        int ce = 0, cw = 0, ch = 0;
+        CountSpliceDiags(adiag, ce, cw, ch);
+        std::printf("mods: %s: %s: scripts loaded%s (%d errors, %d warnings)\n", ModOfPath(it->second).c_str(), it->second.c_str(),
+                    FSpliceTextReadable(text) ? " with their names" : "", ce, cw);
+        for (const SPLICEISSUE& d : adiag)
+            if (d.sev != SPLICESEV_Hint) std::printf("mods:   %s\n", StrSpliceDiag(d).c_str());
+    }
+}
+
 std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
 {
     // (format 3) a world's parts put back together (worldparts.h): each part the mods folder's, else the installed one
@@ -771,17 +827,42 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
                 throw std::runtime_error(pent->rel + ": " + error);
             return ab;
         }
+        std::set<std::string> setSkip;   // the mods' parts left out (they did not compile)
         auto ravel = [&](bool fMods) {
             return FRavelWorld(index, relDir, [&](const std::string& rel) {
-                if (fMods) if (const auto it = m_mpModPath.find(RelCanonical(rel)); it != m_mpModPath.end()) return it->second;
+                const std::string key = RelCanonical(rel);
+                if (fMods && !setSkip.count(key))
+                    if (const auto it = m_mpModPath.find(key); it != m_mpModPath.end()) return it->second;
                 return cane::utf8(root / cane::path(rel));
             }, ab, error, pfnKeep, setDrop.empty() ? nullptr : &setDrop);
         };
-        if (!ravel(true))
+        bool fOk = ravel(true);
+        // (a mod's part that does not compile, a script's typo: said (the mod, the file, the line and why) in the log
+        // and over the game, and that part loads as installed; the mod's other parts stay)
+        for (int ctry = 0; !fOk && ctry < 32; ++ctry)
         {
-            // (a mod's part that does not compile, a script's typo: said, and the world loads as installed)
+            const std::string relBad = error.substr(0, error.find(": "));
+            const std::string key = RelCanonical(relBad);
+            const auto it = m_mpModPath.find(key);
+            if (it == m_mpModPath.end() || setSkip.count(key)) break;
+            setSkip.insert(key);
+            ReportModPartError(it->second, relBad, error.size() > relBad.size() + 2 ? error.substr(relBad.size() + 2) : error);
+            fOk = ravel(true);
+        }
+        if (!fOk)
+        {
             std::fprintf(stderr, "mods: %s: %s: the world loads without its mods\n", pent->rel.c_str(), error.c_str());
+            PostModNotice("A mod of " + pent->rel.substr(pent->rel.rfind('/') + 1) + " did not load: " + error.substr(0, 90));
             if (!ravel(false)) throw std::runtime_error(pent->rel + ": " + error);
+        }
+        if (std::getenv("SLY2N_WORLDHASH")) std::fprintf(stderr, "world bytes: %s %zu fnv %s\n", pent->rel.c_str(), ab.size(), StrFnv64(ab.data(), ab.size()).c_str());
+        if (fOk)
+        {
+            std::vector<std::string> arel;
+            const std::string prefix = relDir.empty() ? std::string() : relDir + "/";
+            for (const auto& p : index.at("parts"))
+                if (p.value("format", "") == "splice-text" && p.contains("file")) arel.push_back(prefix + p.at("file").get<std::string>());
+            ReportModScriptWarnings(arel, setSkip);
         }
         return ab;
     }

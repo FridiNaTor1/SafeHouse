@@ -7,6 +7,7 @@
 //   - ExistenceFacts: where the object is loaded (the record's world filters), whether it starts in the world, which
 //     tasks / jobs add or remove it in which states, which scripts add / remove / place it (their event, conditions)
 #include "splicenames.h"
+#include "splicedump.h"
 #include "splicemap.h"
 #include "task.h"
 #include "convert.h"
@@ -98,6 +99,7 @@ struct EXISTCACHE
     };
     std::vector<ACT> aact;
     std::map<const CFrame*, std::pair<int, int>> mpframe;   // a module's frame -> (group, module)
+    std::function<std::string(int)> pfnEventWord;             // where an event word comes from (its clip)
     SPLICEWORLDNAMES world;                                  // the names the world's scripts give (splicenames.h)
 };
 
@@ -136,6 +138,7 @@ std::string CEditor::ScriptReadable(int igroup, const std::string& raw, std::str
     ctx.pworld = m_pexist ? &m_pexist->world : nullptr;
     ctx.title = igroup >= 0 && igroup < int(m_index.groups.size()) ? "group " + std::to_string(igroup) + " " + m_index.groups[std::size_t(igroup)].name : std::string();
     ctx.pfnObject = [this](int oid) { return ScriptObjectName(oid); };
+    if (m_pexist) ctx.pfnEventWord = m_pexist->pfnEventWord;
     std::string rd, err;
     if (!FSpliceReadable(raw, ctx, rd, err))
     {
@@ -187,13 +190,16 @@ void CEditor::BuildExistCache()
                 if (pt->asplc[i].pframe) m_pexist->mpframe[pt->asplc[i].pframe.get()] = {igroup, int(i)};
         }
     std::vector<std::pair<int, std::string>> atext;
+    m_pexist->pfnEventWord = SpliceEventWordSource(m_psw.get());   // (the clips' script events: the words' sources)
     for (const ce::GroupInfo& g : m_index.groups)
     {
         if (g.scriptsPart.empty()) continue;
         std::vector<uint8_t> ab;
         if (!m_proj.readPart(g.scriptsPart, ab)) continue;
-        atext.emplace_back(g.index, std::string(ab.begin(), ab.end()));
+        atext.emplace_back(g.index, ScriptTextRaw(std::string(ab.begin(), ab.end())));
         SPLICENAMECTX ctx;
+        ctx.title = "group " + std::to_string(g.index) + " " + g.name;   // (the same names as the shown text's)
+        ctx.pfnEventWord = m_pexist->pfnEventWord;
         ctx.pfnObject = [this](int oid) { return ScriptObjectName(oid); };
         SpliceCollectNames(atext.back().second, ctx, m_pexist->world);
     }

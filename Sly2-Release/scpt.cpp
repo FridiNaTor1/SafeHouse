@@ -2,6 +2,7 @@
 // 0x1DFAD8..0x1E5D80, the wrappers 0x106A80..0x10A438) and the reference's m_1DFB10_p3.cpp (0x1E3890) and
 // m_1E1E30_p3.cpp (0x1E1E30).
 #include "scpt.h"
+#include "cutscene.h"
 #include "worldglobals.h"
 #include "transition.h"
 #include "rumble.h"
@@ -78,6 +79,9 @@ bool FFloatsNear(float g1, float g2, float gEpsilon);  // xfmath.h (0x11D4D0; it
 #include <vector>
 
 std::unordered_map<int, int> g_mpoidcScptStart;   // (debug, route.cpp waitscpt: each script's starts)
+// (PC addition, the map editor's cutscene trace, cutscene.h: ev 0 a runner made (ic: its block), 1 a command executed,
+// 2 a runner retired)
+void (*g_pfnScptTrace)(LO* pscpt, const void* prun, int ev, int ic, const void* prunParent) = nullptr;
 
 
 void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
@@ -442,6 +446,7 @@ PRUN PrunNew(LO* pscptLo, int ic, RUN* pParent)
     ps->arun.insert(ps->arun.begin(), p);
     for (DLI* pdli : Adli())
         if (pdli->pscpt == ps && pdli->i > 0) ++pdli->i;
+    if (g_pfnScptTrace) g_pfnScptTrace(pscptLo, p.get(), 0, ic, pParent);
     return p;
 }
 
@@ -464,6 +469,7 @@ void RetireRun(const PRUN& prun)
                 break;
             }
     p->fRetired = true;
+    if (g_pfnScptTrace) g_pfnScptTrace(p->pscptLo, p, 2, p->icCur, nullptr);
     // 0x1E5370: the animation (+0x4C), and the actor's script animation of a command 0xA (+0x54) ended (0x143FF8:
     // e.g. SCPT 1674's runner 152631 retired by command 55 lets Bentley out of clip 7627 for his walk)
     if (p->pasega)
@@ -760,6 +766,7 @@ void ExecuteRun(const PRUN& prun)
     SCPT* ps = PscptOf(p->pscptLo);
     const int ic = ++p->icCur;
     if (p->icLast < ic) return;
+    if (g_pfnScptTrace) g_pfnScptTrace(p->pscptLo, p, 1, ic, nullptr);
     PRUN lock = prun;
     SCPTCMD* pc = &ps->acmd[static_cast<size_t>(ic)];
     const int kind = pc->kind;
@@ -2373,9 +2380,88 @@ struct INITSCPT
         });
     }
 } s_initscpt;
+// (PC addition, the map editor's cutscene editor, cutscene.h) Where a builder puts its arguments: each argument's
+// command slot, found by building one command with marked arguments on a scratch script.
+bool FScptBuilderLayoutImpl(uint32_t pfnThunk, int& kind, std::vector<SCPTARGSLOT>& a)
+{
+    a.clear();
+    for (const THUNK& t : Athunk())
+    {
+        if (t.pfn != pfnThunk) continue;
+        SCPT s;
+        s.cMax = 4;
+        ARGS args;
+        // (the marks: argument j's int 7000 + 16 j, its float 7000.5 + 16 j, a vector's components 7000 + 16 j + 1..3)
+        auto mark = [](size_t j) { return 7000 + 16 * int(j); };
+        for (int i : t.aorder)
+        {
+            const size_t j = size_t(i);
+            const int otyp = t.aotyp[j];
+            if (otyp == 1) args.ag.push_back(float(mark(j)) + 0.5f);
+            else if (otyp == 2)
+            {
+                args.aq.push_back(glm::vec4(float(mark(j) + 1), float(mark(j) + 2), float(mark(j) + 3), 0.0f));
+                args.ai.push_back(SLOT{0});
+            }
+            else if (otyp == 0x8006) args.an = {mark(j), mark(j) + 1, mark(j) + 2, mark(j) + 3};
+            else args.ai.push_back(SLOT{mark(j)});
+        }
+        t.pfnBuild(&s, args);
+        if (s.acmd.empty()) return false;
+        const SCPTCMD& c = s.acmd.back();
+        kind = c.kind;
+        a.resize(t.aotyp.size());
+        for (size_t j = 0; j < t.aotyp.size(); ++j)
+        {
+            SCPTARGSLOT& as = a[j];
+            as.otyp = t.aotyp[j];
+            const int m = mark(j);
+            if (c.b == m) as.ib = -2;   // (the command's "no waiting" word)
+            for (int k = 0; k < 18 && as.ib == -1; ++k)
+            {
+                const int ib = 0x10 + 4 * k;
+                if (as.otyp == 1) { if (c.a[k].g == float(m) + 0.5f) as.ib = ib; }
+                else if (as.otyp == 2)
+                {
+                    // a vector: three floats (a camera's angles stored in radians)
+                    if (c.a[k].g == float(m + 1)) as.ib = ib;
+                    else if (std::fabs(c.a[k].g - float(m + 1) * c_degToRad) < 1e-2f) { as.ib = ib; as.fRad = true; }
+                }
+                else if (c.a[k].n == m) as.ib = ib;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
+// (PC addition, cutscene.h: the map editor's cutscene editor reads the scripts' commands and builders)
+bool FScptBuilderLayout(uint32_t pfnThunk, int& kind, std::vector<SCPTARGSLOT>& a) { return FScptBuilderLayoutImpl(pfnThunk, kind, a); }
+int CScptCommands(LO* pscpt)
+{
+    SCPT* ps = PscptOf(pscpt);
+    return ps ? int(ps->acmd.size()) : -1;
+}
+bool FScptCommand(LO* pscpt, int ic, int& kind, int& b, int32_t an[18])
+{
+    SCPT* ps = PscptOf(pscpt);
+    if (!ps || ic < 0 || ic >= int(ps->acmd.size())) return false;
+    const SCPTCMD& c = ps->acmd[size_t(ic)];
+    kind = c.kind;
+    b = c.b;
+    for (int k = 0; k < 18; ++k) an[k] = c.a[k].n;
+    return true;
+}
+float TScptOf(LO* pscpt)
+{
+    SCPT* ps = PscptOf(pscpt);
+    return ps && ps->fRunning ? ps->t : -1.0f;
+}
+
 // orig: 0x001DFB10 (and 0x001DFAD8's -1 capacity): the buffer, the opening command (-1: no object)
+
 void BeginScptLoad(LO* plo)
 {
     SCPT& s = MpScpt()[plo];

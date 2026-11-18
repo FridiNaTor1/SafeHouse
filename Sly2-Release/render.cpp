@@ -3450,6 +3450,15 @@ GLGLOB* PglInstanceCopyGpu(const GLOB& glob)
 
 void FlushInstanceGlobsGpu() { FlushArena(); }
 
+void TextureCacheStats(int* pctex, double* pcb)
+{
+    *pctex = int(s_mptex.size());
+    double cb = 0;
+    for (const auto& [key, tex] : s_mptex)
+        if (key.first) cb += double(key.first->dx) * double(key.first->dy) * 4.0;
+    *pcb = cb;
+}
+
 void ResetTextureCache()
 {
     // (CANE_PULL) the old world's arenas keep their buffers, not their CPU indices: a kept world's guests draw from

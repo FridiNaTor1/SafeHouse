@@ -207,6 +207,10 @@ private:
     const FILEENT* PentFindAny(uint32_t isector) const;
     mutable std::vector<FILEENT> m_aentExternal;
     std::vector<uint8_t> ReadWorldParts(const FK& fk, bool fReduced) const;
+    // (a mod's part that did not load, the modded scripts' diagnostics: the log and the notice, modnotice.h)
+    std::string ModOfPath(const std::string& path) const;
+    void ReportModPartError(const std::string& pathMod, const std::string& rel, const std::string& why) const;
+    void ReportModScriptWarnings(const std::vector<std::string>& arelScripts, const std::set<std::string>& setSkip) const;
 
     std::string m_path;
     mutable std::vector<std::unique_ptr<cane::DiscImage>> m_apimage;  // the image's readers not in use

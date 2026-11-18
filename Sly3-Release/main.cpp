@@ -619,6 +619,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--editor-project") && i + 1 < argc) eo.project = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-do") && i + 1 < argc) eo.script = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-hidden")) eo.fHidden = true;
+        else if (!std::strcmp(argv[i], "--editor-language") && i + 1 < argc) eo.language = argv[++i];
         else if (!std::strcmp(argv[i], "--editor-size") && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &eo.width, &eo.height);
         else if (!std::strcmp(argv[i], "--editor-record") && i + 1 < argc) { command = "editor-record"; arg = argv[++i]; }   // (editrec_check.cpp)
         else if (!std::strcmp(argv[i], "--convert-worlds") && i + 1 < argc) { command = "convert-worlds"; arg = argv[++i]; }

@@ -35,6 +35,7 @@
 #include "core/style.h"
 
 #include "../platform/platform.h"
+#include "../platform/mod_worlds.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_glfw.h>
@@ -66,6 +67,7 @@ struct CMDLIST;   // (Sly 2's command lists: editor_guard.inc)
 
 namespace edimpl
 {
+class CCutsceneEditor;   // (editor_cutscene.inc, Sly 2: the cutscene editor and its Timeline dock)
 namespace ce = cane::editor;
 namespace st = cane::editor::style;
 
@@ -120,11 +122,10 @@ struct EDOBJ
 const char* SzOptionName(int eopid);      // null: not known
 bool FOidOption(int eopid);               // an integer option whose value is an oid (its kind does not say so)
 std::string StrOption(int eopid);         // "1264 job" / "1264"
-enum GAMEAREA : int
+}  // namespace edimpl
+#include "editor_objtypes.h"   // (GAMEAREA; the object types and vis groups: shared with the games' debug overlays)
+namespace edimpl
 {
-    GA_None, GA_Traversal, GA_Guards, GA_Triggers, GA_Lasers, GA_Warps, GA_Pickups, GA_Cameras, GA_Lights, GA_Missions, GA_Hacking,
-    GA_TwoPlayer, GA_Buttons, GA_Gang, GA_Rides, GA_Max
-};
 GAMEAREA AreaOfCid(int cid);
 const char* SzArea(GAMEAREA ga);
 // the key options shown first for an area (the rest under "All options")
@@ -263,6 +264,13 @@ struct CONVEX
     std::vector<std::vector<int>> aface;
 };
 
+// A brush's extra material slot (a mesh brush's faces: another object's texture or a grid of a colour)
+struct BRUSHMAT
+{
+    int texFrom = 0;
+    uint32_t rgb = 0xB8B8B8;
+};
+
 // A brush (editor_brush.inc): a shape the editor makes into an object's model and collision, kept in the project
 // (editor/brushes.json) so it can be changed and made again
 struct BRUSH
@@ -274,6 +282,15 @@ struct BRUSH
     int texFrom = 0;               // the object whose first material's texture it takes (0: a grid in rgb)
     uint32_t rgb = 0xB8B8B8;
     int oid = 0;                   // the object it became
+    // shape 6 (a mesh brush, editor_brushedit.inc): its convex pieces, each face's material slot (0: the brush's own
+    // texFrom / rgb, i: amat[i - 1])
+    std::vector<CONVEX> apiece;
+    std::vector<std::vector<int>> afaceMat;
+    std::vector<BRUSHMAT> amat;
+};
+struct BRUSHSEL
+{
+    int ip = -1, iface = -1, v0 = -1, v1 = -1;   // the piece, its face, a point (v0) or an edge (v0, v1)
 };
 
 struct SCRIPTCMD
@@ -286,31 +303,11 @@ struct SCRIPTCMD
 const char* T(const char* szEnglish);
 // "Text###id": a translated label with a fixed ImGui id
 std::string TL(const char* szEnglish, const char* id);
+bool FSetEditorLanguage(const std::string& code);   // (editor_lang.inc) "": SAFEHOUSE_LANGUAGE, else English
+const std::string& EditorLanguage();
+void AddEditorLanguageFonts(ImGuiIO& io, float pixels);
 
-// ---- object types and vis groups (editor_types.inc)
-enum VISGROUP : int
-{
-    VG_Characters, VG_Gameplay, VG_Triggers, VG_Paths, VG_Cameras, VG_Lighting, VG_Sound, VG_Effects, VG_Missions, VG_Logic,
-    VG_World, VG_Other, VG_Max
-};
-enum OBJTYPE : int
-{
-    OT_Player, OT_Guard, OT_Swarmer, OT_Boss, OT_Npc, OT_Pickup, OT_Loot, OT_Vault, OT_Carryable, OT_HideSpot, OT_Trigger,
-    OT_Volume, OT_Button, OT_Sensor, OT_Turret, OT_Door, OT_Warp, OT_Checkpoint, OT_Spawner, OT_Path, OT_Traversal,
-    OT_NavMesh, OT_Camera, OT_CameraZone, OT_Light, OT_Sound, OT_Effect, OT_Water, OT_Sky, OT_Job, OT_Task, OT_JobMarker,
-    OT_Scene, OT_Logic, OT_Animation, OT_Interest, OT_Ui, OT_Mesh, OT_Prop, OT_Breakable, OT_Proxy, OT_Grouper, OT_Other,
-    OT_Max
-};
-struct OBJTYPEINFO
-{
-    const char* name;       // (English; T() at the drawing)
-    const char* plural;
-    VISGROUP vg;
-    uint32_t rgb;           // its marker / icon colour
-    char icon;              // its icon letter
-};
-const OBJTYPEINFO& InfoOfType(OBJTYPE ot);
-const char* SzVisGroup(VISGROUP vg);
+// ---- object types and vis groups: editor_objtypes.h (included above), editor_types.inc
 // a stable key for an object across reloads (its oid and the proxy that placed its instance)
 inline uint64_t KeyOfLo(const LO* plo) { return (uint64_t(uint32_t(plo->oid)) << 32) | uint32_t(plo->oidInstance); }
 
@@ -469,7 +466,8 @@ private:
     bool FCheckScript(const std::string& text, std::string& error, int& line, std::vector<PROBLEM>* papb, int igroup = -1);
     bool FApplyScript(int igroup, const std::string& text, std::string& error);
     int AppendScriptModule(int igroup, const std::string& body, std::string& error);   // its index (-1: failed)
-    // ---- editor_scriptnames.inc (Sly 2): the Scripts tab's names (display only), "when it exists" in plain words
+    // ---- editor_scriptnames.inc (Sly 2): the Scripts tab's names (kept in the part when Names is on: the game
+    // compiles them), "when it exists" in plain words
     bool m_fScriptReadable = true;
     std::shared_ptr<struct EXISTCACHE> m_pexist;
     const SW* m_pswExist = nullptr;
@@ -479,6 +477,16 @@ private:
     void BuildExistCache();
     void EnsureExistCache();
     void ExistenceFacts(LO* plo, std::vector<std::string>& alines);
+    // ---- editor_scriptdiag.inc (Sly 2): the Scripts tab's diagnostics (underlines, the problems list, quick fixes)
+    std::shared_ptr<struct SCRIPTDIAG> m_pscriptdiag;
+    void RunScriptDiagnostics();                               // the shown text now
+    void ScriptDiagnosticsTick();                              // each frame: again a moment after an edit
+    float ScriptDiagPanelHeight() const;                       // the problems list's height (0: none)
+    void DrawScriptDiagUnderlines();                           // right after the text input: its squiggles, hover text
+    void DrawScriptDiagPanel();                                // the problems list (below the text)
+    std::string ScriptDiagSummary() const;                     // "2 errors, 1 warning"
+    // (both games) a scripts part's converter text: a readable one (Sly 2's names) as the converter prints it
+    std::string ScriptTextRaw(const std::string& text);
     bool FParseDialogue(std::vector<DLGLINE>& a, std::vector<std::string>& alang, std::string& error) const;
     bool FSetText(int id, const std::string& text, std::string& error);
     bool FSetDialogueEvent(const DLGLINE& l, int k, int dt60, int itarget, int32_t value, std::string& error);
@@ -500,7 +508,11 @@ private:
     bool FImportTexture(const std::string& png, LO* plo, int imat, int mode, std::string& error);
     bool FSetMaterial(LO* plo, int imat, int shdk, int grfshd, const uint32_t argba[3], int grftex, std::string& error);
     bool FExportGlb(LO* plo, int kind, const std::string& path, std::string& error);
-    void ExportAnimations(LO* plo, cane::editor::model::Scene& sc, const std::map<const XF*, int>& mpjoint, const glm::mat4& C, const glm::mat4& refInv);
+    struct EXPORTRIG;               // (editor_model.cpp: a character's skeleton as the export builds it)
+    void ExportAnimations(LO* plo, cane::editor::model::Scene& sc, const EXPORTRIG& rig);
+    bool FPoseDump(LO* plo, int oidAseg, float t, bool fCycle, const std::string& path, std::string& error);
+    bool FPoseCharacter(LO* plo, LO* plAseg, float tClip, std::vector<std::pair<struct XF*, glm::mat4>>& arel);   // (Sly 2: the cutscene editor's poses)
+    void UnbindPosed(LO* plo);
     bool FSetCollision(LO* plo, int kind, std::string& error);
     void DrawModels();
     void DrawModelSection(LO* plo);
@@ -594,6 +606,10 @@ private:
     bool m_fShowKeys = false;       // the shortcuts list
     bool m_fHelpAtStart = true;     // (the user's choice, kept in <user dir>/Editor/editor.ini)
     int m_exportKind = 0;           // 0 the object, 1 its group, 2 a character
+    int m_exportAnim = 0;           // a character's animations: 0 as the game shows them (limbs solved, baked), 1 the clips' channels only
+    int m_exportFps = 60;           // the baked keys a second (60: every game step; 30)
+    bool m_exportReduce = true;     // keys dropped where the motion stays within a small error
+    std::string m_exportAnimInfo;   // the last character export's animations (shown in its status line)
     int m_texMode = 0;              // texture import: 0 the texture pack, 1 the game data
     std::function<void(const std::string&)> m_fnFile;
     std::map<std::pair<const void*, const void*>, unsigned> m_mpthumb;
@@ -640,6 +656,77 @@ private:
     void DrawBuildSection(LO* plo);
     float m_buildLength = 800.0f;
     bool m_fBuildVertical = false;
+    // (step 7-8 part 2) each player's own rules: Sly 1, Bentley 2, Murray 4 (apszWhy[3]: why / why not, each)
+    uint32_t GrfPlayersOf(LO* plo, std::string* apszWhy, int* peopidMask, bool* pfKnown) const;
+    bool FSetPlayers(LO* plo, uint32_t grf);
+    int BuildCrawlSpace(std::string& error);           // a crawl space: its entries and a low ceiling (brushes)
+    int BuildKey(LO* pguard, std::string& error);      // a key (a prize with its task) in a guard's pocket
+    std::vector<std::string> PocketWords(LO* plo) const;
+    std::string StrExitTo(LO* plo) const;              // an exit's destination in words
+    bool FSetExitTo(LO* plo, LO* pother);              // an exit made to lead where another one leads
+    void DrawInteractSection(LO* plo);                 // pockets, exits, vaults, prizes (the Properties)
+    bool FBuildVerb(const std::string& verb, const std::string& arg);
+    float m_crawlHeight = 100.0f, m_crawlWidth = 192.0f;
+    float m_dockScroll = -1.0f;                        // (automation: the Create tab scrolled there)
+    // ---- editor_states.inc: map states (step 9)
+    struct STATEROW
+    {
+        std::string id, name, trigger, kind, from;
+        int oidTaskStart = -1;
+        std::vector<std::pair<int, int>> atask;   // (task, state)
+    };
+    void BuildStates();
+    void ShowState(int istate);                         // -1: every object
+    void PollState();
+    bool FStateHides(const LO* plo) const;
+    void DrawStates();
+    void DrawStateEditor();
+    void PlayInState(int istate);
+    bool FSaveStates(std::string& error);
+    std::string StrStateWhen(const cane::mods::MapState& s) const;
+    bool FStatesVerb(const std::string& verb, const std::string& arg);
+    std::vector<STATEROW> m_astate;
+    std::vector<std::string> m_astateWhy;
+    std::vector<std::pair<int, int>> m_astateTask;
+    std::set<int> m_setStateOut;
+    std::string m_statePending, m_playMapState;
+    int m_istateShown = -1, m_istateEdit = -1, m_statePoll = 0;
+    bool m_fStatesBuilt = false, m_fStateHide = true, m_fStateNewOpen = false;
+    cane::mods::MapState m_stateNew;
+    // ---- editor_brushedit.inc: brush faces / edges / points (step 13)
+    bool FBrushMakeEditable(BRUSH& b, std::string& error);
+    void BrushFixMats(BRUSH& b);
+    bool FBrushPick(float x, float y);
+    bool FBrushApply(BRUSH& b, const std::string& label);
+    bool FBrushOp(int op, const glm::vec3& v, float g);
+    void DrawBrushEdit();
+    void DrawBrushEditTools(BRUSH& b);
+    bool FBrushEditVerb(const std::string& verb, const std::string& arg);
+    bool m_fBrushEdit = false;
+    int m_brushMode = 0, m_brushOther = 0;
+    float m_brushDist = 64.0f;
+    glm::vec3 m_brushMove{0.0f, 0.0f, 32.0f};
+    BRUSHSEL m_bsel;
+    // ---- editor_everything.inc: every option addable / removable (step 10)
+    bool FAddAnyOption(LO* plo, int eopid, const std::vector<double>& av, std::string& error);
+    void DrawOptionTools(LO* plo, const EDOBJ* po);
+    bool FEverythingVerb(const std::string& verb, const std::string& arg);
+    char m_szOptFind[64] = "";
+    int m_eopidAdd = -1, m_ifieldRemove = -1;
+    double m_avAdd[4] = {0, 0, 0, 0};
+    // ---- editor_newlevel.inc: brand-new levels (step 11)
+    bool FCreateLevel(std::string& error);
+    void OpenLevel(int record);
+    bool FSaveManifestOnly(std::string& error);
+    void DrawEntries();
+    glm::vec3 PosViewGround();
+    void DrawLevelTab();
+    void DrawNewLevelDialog();
+    bool FLevelVerb(const std::string& verb, const std::string& arg);
+    std::string m_nlName = "My Level";
+    int m_nlTemplate = 16, m_nlEntryWorld = -1, m_nlMadeRecord = -1;
+    bool m_nlKeepLevel = false, m_nlReturn = true, m_fNewLevelOpen = false, m_nlFloor = true;
+    float m_nlSpawn[4] = {0, 0, 200, 0}, m_nlEntryAt[4] = {0, 0, 0, 120}, m_nlReturnAt[4] = {0, 1500, 100, 150};
     // ---- editor_guard.inc: guards' patrols
     std::string StrCommand(const void* pcmd, LO** pploRef) const;
     LO* PatrolOf(LO* plo) const;                    // its patrol's command list (null: none)
@@ -711,6 +798,13 @@ private:
     unsigned m_fboPreview = 0, m_texPreview = 0;
     int m_dxPreview = 0, m_dyPreview = 0;
     float m_fovEdit = 57.3f, m_fovCameraDefault = 57.29578f;   // (CM's own: 1 radian)
+    // ---- editor_cutscene.inc (Sly 2): the cutscene editor, its Timeline dock (in the bottom dock's place while open)
+    friend class CCutsceneEditor;
+    std::shared_ptr<CCutsceneEditor> m_pcut;
+    void DrawTimeline();                       // every frame (the playhead's scene applied, the dock drawn when open)
+    void TimelineMenuItem();                   // View > Cutscene timeline
+    bool FTimelineOpen() const;
+    bool FCutsceneVerb(const SCRIPTCMD& c);    // --editor-do cut...
 };
 
 }  // namespace edimpl

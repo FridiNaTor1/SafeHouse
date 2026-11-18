@@ -1496,8 +1496,9 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
 
 namespace
 {
-const glm::vec3 s_acurveTimed[6] = {  // 0x2BDA70: (u^3, u^2, u) coefficients
-    {0.0f, 0.0f, 1.0f}, {-1.0f, 2.0f, 0.0f}, {-1.0f, -1.0f, 1.0f}, {-2.0f, 3.0f, 0.0f}, {5.0f, 0.0f, 0.5f}, {2000.0f, 0.0f, 1.0f}};
+const glm::vec3 s_acurveTimed[7] = {  // 0x2BDA70: (u^3, u^2, u) coefficients
+    {0.0f, 0.0f, 1.0f}, {-1.0f, 2.0f, 0.0f}, {-1.0f, -1.0f, 1.0f}, {-2.0f, 3.0f, 0.0f}, {5.0f, 0.0f, 0.5f}, {2000.0f, 0.0f, 1.0f},
+    {0.0f, -1.0f, 2.0f}};   // (PC addition, the cutscene editor: 6 an ease out; the original clamps 6 and up to 5)
 const SMP s_smpAttachTurn{5.0f, 0.0f, 0.5f};     // 0x2BDAB0
 const SMP s_smpAttachMove{2000.0f, 0.0f, 1.0f};  // 0x2BDAC0
 }
@@ -1528,7 +1529,7 @@ void CPTIMED::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     float u = (TCm() - g_cm.tActivateCplcy) / ptrans->dt;
     if (u < 0.0f) u = 0.0f;
     else if (1.0f < u) u = 1.0f;
-    const glm::vec3& k = s_acurveTimed[std::clamp(ptrans->icurve, 0, 5)];
+    const glm::vec3& k = s_acurveTimed[ptrans->icurve == 6 ? 6 : std::clamp(ptrans->icurve, 0, 5)];
     const float s = u * u * u * k.x + u * u * k.y + u * k.z;
     const float r = 1.0f - s;
     const CMSTATE& a = *ptrans->pstateA;

@@ -12,6 +12,10 @@
 #if CANE_EDITOR_3D
 
 #include "editor_impl.h"
+#if EDGAME_SLY2
+#include "splicenames.h"   // (the Scripts tab's scriptedit verb: the readable text kept)
+#include "editor_scriptdiag.h"   // (scriptdiag / scriptfix)
+#endif
 #include "editor_font.h"
 #include "texmod.h"
 
@@ -555,6 +559,7 @@ void CEditor::PlayTestAt(int oidTask, const glm::vec3* ppos, float heading)
 #endif
     std::vector<std::string> args{"--data-dir", ce::utf8(m_inst.dir), "--user-dir", cane::utf8(cane::userDirectory()), "--mod-package",
                                   ce::utf8(m_proj.dir), "--world", std::to_string(m_eo.record) + (oidTask > 0 ? ":" + std::to_string(oidTask) : std::string())};
+    if (!m_playMapState.empty()) args.insert(args.end(), {"--map-state", m_playMapState});   // (the States tab's Play)
     if (ppos)
     {
         char sz[96];
@@ -654,6 +659,7 @@ glm::vec3 CEditor::RayDir(float x, float y) const
 
 void CEditor::Pick(float x, float y)
 {
+    if (FBrushPick(x, y)) return;   // (editor_brushedit.inc: a face of the brush being edited)
     const glm::vec3 o = m_cam.pos, d = RayDir(x, y);
     LO* pbest = nullptr;
     float rBest = 1e30f, tBest = 1e30f;
@@ -992,16 +998,16 @@ void CEditor::DrawGizmo()
 void CEditor::DrawMenu()
 {
     if (!ImGui::BeginMainMenuBar()) return;
-    if (ImGui::BeginMenu("Project"))
+    if (ImGui::BeginMenu(T("Project")))
     {
-        if (ImGui::MenuItem("Save", "Ctrl+S")) FSave();
+        if (ImGui::MenuItem(T("Save"), "Ctrl+S")) FSave();
         if (ImGui::MenuItem("Install into " EDGAME_NAME "'s mods folder"))
         {
             std::string error;
             if (FSave() && m_proj.install(cane::userDirectory() / "Mods", error)) Status("installed as Mods/Packages/" + m_proj.manifest.id);
             else if (!error.empty()) Status("install failed: " + error);
         }
-        if (ImGui::MenuItem("Export as .zip"))
+        if (ImGui::MenuItem(T("Export as .zip")))
         {
             std::string error;
             const auto zip = m_proj.dir.parent_path() / (m_proj.manifest.id + ".zip");
@@ -1009,33 +1015,33 @@ void CEditor::DrawMenu()
             else if (!error.empty()) Status("export failed: " + error);
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Import model as a new object..."))
+        if (ImGui::MenuItem(T("Import model as a new object...")))
             OpenFileDialog("Import a model as a new object", "Models{.glb,.gltf,.fbx}", m_importPath, [this](const std::string& path) {
                 std::string e;
                 std::snprintf(m_importPath, sizeof(m_importPath), "%s", path.c_str());
                 if (!FImportModel(path, m_plSel, true, e)) Status("import: " + e);
             });
-        if (ImGui::MenuItem("Export the selection as GLB...", nullptr, false, m_plSel != nullptr))
+        if (ImGui::MenuItem(T("Export the selection as GLB..."), nullptr, false, m_plSel != nullptr))
             OpenFileDialog("Export as GLB", ".glb", m_exportPath, [this](const std::string& path) {
                 std::string e;
                 std::snprintf(m_exportPath, sizeof(m_exportPath), "%s", path.c_str());
                 if (!FExportGlb(m_plSel, m_exportKind, path, e)) Status("export: " + e);
             });
         ImGui::Separator();
-        if (ImGui::MenuItem("Reload world")) Reload(m_plSel ? m_plSel->oid : 0);
-        if (ImGui::MenuItem("Close")) m_fQuit = true;
+        if (ImGui::MenuItem(T("Reload world"))) Reload(m_plSel ? m_plSel->oid : 0);
+        if (ImGui::MenuItem(T("Close"))) m_fQuit = true;
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Edit"))
+    if (ImGui::BeginMenu(T("Edit")))
     {
-        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_proj.canUndo())) Undo();
-        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_proj.canRedo())) Redo();
+        if (ImGui::MenuItem(T("Undo"), "Ctrl+Z", false, m_proj.canUndo())) Undo();
+        if (ImGui::MenuItem(T("Redo"), "Ctrl+Y", false, m_proj.canRedo())) Redo();
         ImGui::Separator();
         if (ImGui::MenuItem(T("Copy"), "Ctrl+C", false, !m_asel.empty())) CopySelection();
         if (ImGui::MenuItem(T("Paste in front of the camera"), "Ctrl+V", false, !m_aclip.empty())) Paste(false);
         if (ImGui::MenuItem(T("Paste in place"), "Ctrl+Shift+V", false, !m_aclip.empty())) Paste(true);
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_plSel != nullptr)) DuplicateSelection();
-        if (ImGui::MenuItem("Delete", "Del", false, m_plSel != nullptr)) DeleteSelection();
+        if (ImGui::MenuItem(T("Duplicate"), "Ctrl+D", false, m_plSel != nullptr)) DuplicateSelection();
+        if (ImGui::MenuItem(T("Delete"), "Del", false, m_plSel != nullptr)) DeleteSelection();
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(TL("Select", "selectmenu").c_str()))
@@ -1066,30 +1072,33 @@ void CEditor::DrawMenu()
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View"))
+    if (ImGui::BeginMenu(T("View")))
     {
         if (ImGui::MenuItem(T("Hide the selection"), "H", false, !m_asel.empty())) HideSelection(true);
         if (ImGui::MenuItem(T("Isolate the selection"), "I", false, !m_asel.empty())) IsolateSelection();
         if (ImGui::MenuItem(T("Show all"), "Alt+H")) ShowAll();
         ImGui::Separator();
         if (ImGui::MenuItem(T("Bottom panel (missions, create, scripts...)"), nullptr, &m_fDockOpen)) SaveViewState();
+#if EDGAME_SLY2
+        TimelineMenuItem();
+#endif
         ImGui::MenuItem(T("Grid snap"), nullptr, &m_fGridSnap);
         ImGui::MenuItem(T("Angle snap"), nullptr, &m_fAngleSnap);
         ImGui::MenuItem(T("Scale snap"), nullptr, &m_fScaleSnap);
         ImGui::Separator();
-        ImGui::MenuItem("Markers (objects without a model)", nullptr, &m_fShowMarkers);
-        ImGui::MenuItem("Curves: the selected one", nullptr, &m_fShowPaths);
-        ImGui::MenuItem("Curves: all near the camera", nullptr, &m_fShowAllPaths);
-        ImGui::MenuItem("Cel borders", nullptr, &m_opts.fCelBorders);
-        ImGui::MenuItem("Shadows", nullptr, &m_opts.fShadows);
-        ImGui::MenuItem("Local axes", nullptr, &m_fLocalAxes);
-        if (ImGui::MenuItem("Frame selected", "F")) FrameSelected();
+        ImGui::MenuItem(T("Markers (objects without a model)"), nullptr, &m_fShowMarkers);
+        ImGui::MenuItem(T("Curves: the selected one"), nullptr, &m_fShowPaths);
+        ImGui::MenuItem(T("Curves: all near the camera"), nullptr, &m_fShowAllPaths);
+        ImGui::MenuItem(T("Cel borders"), nullptr, &m_opts.fCelBorders);
+        ImGui::MenuItem(T("Shadows"), nullptr, &m_opts.fShadows);
+        ImGui::MenuItem(T("Local axes"), nullptr, &m_fLocalAxes);
+        if (ImGui::MenuItem(T("Frame selected"), "F")) FrameSelected();
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Help"))
+    if (ImGui::BeginMenu(T("Help")))
     {
-        ImGui::MenuItem("Getting started", "F1", &m_fShowHelp);
-        ImGui::MenuItem("Keyboard shortcuts", nullptr, &m_fShowKeys);
+        ImGui::MenuItem(T("Getting started"), "F1", &m_fShowHelp);
+        ImGui::MenuItem(T("Keyboard shortcuts"), nullptr, &m_fShowKeys);
         ImGui::EndMenu();
     }
     ImGui::Separator();
@@ -1422,7 +1431,7 @@ void CEditor::DrawWorldPanel()
         ImGui::End();
         return;
     }
-    const float h = std::max(220.0f, (size.y - top) * ((m_tabCur == 3 || m_tabCur == 5) ? 0.5f : 0.36f));
+    const float h = std::max(220.0f, (size.y - top) * ((m_tabCur == 3 || m_tabCur == 5 || m_tabCur == 10) ? 0.5f : 0.36f));
     const float y = size.y - 36 - h;
     ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
@@ -1437,14 +1446,16 @@ void CEditor::DrawWorldPanel()
             return f;
         };
 #if EDFEAT_MISSIONS
-        if (tab("Missions", 1)) { DrawMissions(); ImGui::EndTabItem(); }
+        if (tab(T("Missions"), 1)) { DrawMissions(); ImGui::EndTabItem(); }
+        if (tab(T("States"), 10)) { DrawStates(); ImGui::EndTabItem(); }
+        if (tab(T("Level"), 11)) { DrawLevelTab(); ImGui::EndTabItem(); }
 #endif
         if (tab(T("Assets"), 9)) { DrawAssets(); ImGui::EndTabItem(); }
 #if EDFEAT_STRUCT
-        if (tab("Create", 6)) { DrawBrushTools(); DrawBuildPalette(); ImGui::SeparatorText(T("Copies of the world's objects")); DrawCreate(); ImGui::EndTabItem(); }
+        if (tab(T("Create"), 6)) { DrawBrushTools(); DrawBuildPalette(); ImGui::SeparatorText(T("Copies of the world's objects")); DrawCreate(); if (m_dockScroll >= 0) { ImGui::SetScrollY(m_dockScroll); m_dockScroll = -1; } ImGui::EndTabItem(); }
 #endif
 #if EDFEAT_OPTIONS
-        if (tab("Areas", 7))
+        if (tab(T("Areas"), 7))
         {
             // the gameplay areas: the objects of each, by class
             for (int ga = 1; ga < GA_Max; ++ga)
@@ -1470,15 +1481,15 @@ void CEditor::DrawWorldPanel()
         }
 #endif
 #if EDFEAT_MODELS
-        if (tab("Models", 8)) { DrawModels(); ImGui::EndTabItem(); }
+        if (tab(T("Models"), 8)) { DrawModels(); ImGui::EndTabItem(); }
 #endif
 #if EDFEAT_SCRIPTS
-        if (tab("Scripts", 3)) { DrawScripts(); ImGui::EndTabItem(); }
+        if (tab(T("Scripts"), 3)) { DrawScripts(); ImGui::EndTabItem(); }
 #endif
 #if EDFEAT_DIALOGUE
-        if (tab("Dialogue", 5)) { DrawDialogue(); ImGui::EndTabItem(); }
+        if (tab(T("Dialogue"), 5)) { DrawDialogue(); ImGui::EndTabItem(); }
 #endif
-        if (tab("Text", 2))
+        if (tab(T("Text"), 2))
         {
             ImGui::TextColored(st::vec(st::muted), "%zu strings (%s)", m_atext.size(), m_textLanguage.c_str());
             ImGui::BeginChild("text");
@@ -1486,7 +1497,7 @@ void CEditor::DrawWorldPanel()
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (tab("History", 4))
+        if (tab(T("History"), 4))
         {
             const auto& ah = m_proj.history();
             for (std::size_t i = 0; i < ah.size(); ++i) ImGui::BulletText("%s%s", ah[i].label.c_str(), ah[i].structural ? "  *" : "");
@@ -1722,6 +1733,7 @@ bool CEditor::FRunScript()
                 for (LO* pp : PatrolPaths(pg)) std::printf("editor: patrol path %d\n", pp->oid);
             }
     }
+    else if (FBuildVerb(c.verb, c.arg)) {}   // (editor_build.inc: the palette's presets, who uses what, pockets, exits)
     else if (c.verb == "build")   // build:CID (Sly 2's class, hex): a copy of a working one in front of the camera (curves laid out)
     {
         const int cid = int(std::strtol(c.arg.c_str(), nullptr, 16));
@@ -1795,8 +1807,8 @@ bool CEditor::FRunScript()
         std::getline(ss, n, ':');
         std::getline(ss, tex, ':');
         BRUSH b;
-        static const char* const s_a[] = {"block", "ramp", "stairs", "cylinder", "floor"};
-        for (int i = 0; i < 5; ++i)
+        static const char* const s_a[] = {"block", "ramp", "stairs", "cylinder", "floor", "tunnel"};
+        for (int i = 0; i < 6; ++i)
             if (shape == s_a[i]) b.shape = i;
         float a[3] = {b.size.x, b.size.y, b.size.z};
         floats(size, a, 3);
@@ -1958,7 +1970,7 @@ bool CEditor::FRunScript()
             std::vector<uint8_t> ab;
             if (!m_proj.readPart(g.scriptsPart, ab)) continue;
             ++cgrp;
-            const std::string raw(ab.begin(), ab.end());
+            const std::string raw = ScriptTextRaw(std::string(ab.begin(), ab.end()));
             std::string err, back;
             const std::string rd = ScriptReadable(g.index, raw, &err);
             if (!err.empty() || !FScriptToRaw(rd, back, err) || back != raw)
@@ -1967,6 +1979,52 @@ bool CEditor::FRunScript()
             }
         }
         std::printf("editor: scripts round trip: %d groups, %d differ\n", cgrp, cdiff);
+    }
+    else if (c.verb == "scripttype")   // scripttype:FROM|TO: the shown text edited (the first FROM) as typing does (not applied); diagnosed
+    {
+        const std::size_t bar = c.arg.find('|');
+        const std::string from = c.arg.substr(0, bar), to = bar == std::string::npos ? std::string() : c.arg.substr(bar + 1);
+        const std::size_t at = m_scriptEdit.find(from);
+        if (m_igroupScript < 0 || from.empty() || at == std::string::npos) Status("scripttype: not found");
+        else
+        {
+            m_scriptEdit.replace(at, from.size(), to);
+            m_fScriptDirty = m_scriptEdit != m_scriptText;
+            RunScriptDiagnostics();
+        }
+    }
+    else if (c.verb == "scriptsave")   // scriptsave:PATH: the shown text written to a file (tests)
+    {
+        if (FILE* pf = std::fopen(c.arg.c_str(), "wb")) { std::fwrite(m_scriptEdit.data(), 1, m_scriptEdit.size(), pf); std::fclose(pf); }
+    }
+    else if (c.verb == "scriptdiag")   // the shown text's diagnostics printed ("editor: diag line L:C: ...")
+    {
+        RunScriptDiagnostics();
+        if (m_pscriptdiag)
+            for (const SPLICEISSUE& d : m_pscriptdiag->a) std::printf("editor: diag %s\n", StrSpliceDiag(d).c_str());
+        std::printf("editor: diagnostics: %s\n", ScriptDiagSummary().empty() ? "none" : ScriptDiagSummary().c_str());
+    }
+    else if (c.verb == "scriptfix")   // scriptfix:CODE: the first problem of that code with a quick fix, fixed (as its Fix button)
+    {
+        bool fDone = false;
+        if (m_pscriptdiag)
+            for (const SPLICEISSUE& d : m_pscriptdiag->a)
+                if (d.code == c.arg && !d.fixLabel.empty())
+                {
+                    std::string text = m_scriptEdit;
+                    if (FApplySpliceFix(d, text)) { m_scriptEdit = text; m_fScriptDirty = true; Status("scriptfix: " + d.fixLabel); fDone = true; }
+                    break;
+                }
+        if (!fDone) Status("scriptfix: none");
+        RunScriptDiagnostics();
+    }
+    else if (c.verb == "scriptselect")   // scriptselect:N: the problems list's row N selected (the text scrolled to it)
+    {
+        if (m_pscriptdiag && std::atoi(c.arg.c_str()) < int(m_pscriptdiag->a.size()))
+        {
+            m_pscriptdiag->iselected = std::atoi(c.arg.c_str());
+            m_pscriptdiag->lineJump = m_pscriptdiag->a[std::size_t(m_pscriptdiag->iselected)].line;
+        }
     }
     else if (c.verb == "scriptedit")   // scriptedit:FROM|TO: the Scripts tab's shown text edited (the last FROM), applied as Apply does
     {
@@ -1979,7 +2037,10 @@ bool CEditor::FRunScript()
         {
             m_scriptEdit.replace(at, from.size(), to);
             std::vector<std::string> anew;
-            if (!FScriptToRaw(m_scriptEdit, raw, err, &anew) || !FApplyScript(m_igroupScript, raw, err)) Status("scriptedit failed: " + err);
+            // (as Apply: with Names the readable text kept, its table made again)
+            const bool fKeep = m_fScriptReadable && FSpliceTextReadable(m_scriptEdit);
+            if (!(fKeep ? FSpliceNormalize(m_scriptEdit, raw, err, &anew) : FScriptToRaw(m_scriptEdit, raw, err, &anew)) || !FApplyScript(m_igroupScript, raw, err))
+                Status("scriptedit failed: " + err);
             else
             {
                 for (const std::string& n : anew) Status("scriptedit: new symbol " + n);
@@ -2019,7 +2080,7 @@ bool CEditor::FRunScript()
         {
             std::vector<uint8_t> abPart;
             m_proj.readPart(m_index.groups[std::size_t(ig)].scriptsPart, abPart);
-            text.assign(abPart.begin(), abPart.end());
+            text = ScriptTextRaw(std::string(abPart.begin(), abPart.end()));
         }
         const auto i = text.rfind(from);
         if (ig < 0 || from.empty() || i == std::string::npos) Status("scriptreplace: not found");
@@ -2319,6 +2380,23 @@ bool CEditor::FRunScript()
         std::string error;
         if (!FExportGlb(m_plSel, c.verb == "export" ? 0 : c.verb == "exportgroup" ? 1 : 2, c.arg, error)) Status("export: " + error);
     }
+    else if (c.verb == "exportanim")   // exportanim:MODE,FPS,REDUCE: a character's animations (0 as in the game, 1 the clips' channels only), keys a second, key reduction (the export kind: a character)
+    {
+        int a[3] = {m_exportAnim, m_exportFps, m_exportReduce ? 1 : 0};
+        std::sscanf(c.arg.c_str(), "%d,%d,%d", &a[0], &a[1], &a[2]);
+        m_exportAnim = a[0] == 1 ? 1 : 0; m_exportFps = a[1] >= 60 ? 60 : 30; m_exportReduce = a[2] != 0;
+        m_exportKind = 2;   // (the panels' export kind: a character)
+    }
+    else if (c.verb == "posedump")   // posedump:[c]ASEG:T:FILE: the selected character's skinned vertices at the clip's time as the game poses it (c: a cycle, played twice first; export check)
+    {
+        int oid = -1;
+        float t = 0.0f;
+        char sz[1024] = "";
+        std::string error;
+        const bool fCycle = !c.arg.empty() && c.arg[0] == 'c';
+        if (std::sscanf(c.arg.c_str() + (fCycle ? 1 : 0), "%d:%f:%1023[^\n]", &oid, &t, sz) != 3 || !FPoseDump(m_plSel, oid, t, fCycle, sz, error))
+            Status("posedump: " + (error.empty() ? std::string("posedump:[c]ASEG:T:FILE") : error));
+    }
     else if (c.verb == "texture" || c.verb == "texturegame")   // texture:MAT:FILE.png (texture-pack path, full size) / texturegame (into the game data)
     {
         const auto colon = c.arg.find(':');
@@ -2344,6 +2422,9 @@ bool CEditor::FRunScript()
         floats(c.arg, a, 5);
         m_importScale = a[0]; m_importMaxTex = std::clamp(int(a[1]), 8, 1024); m_importLit = a[2] != 0; m_importCollision = int(a[3]); m_importOutline = a[4] != 0;
     }   // the selection's model (glob set) and textures printed
+#if EDGAME_SLY2
+    else if (c.verb.rfind("cut", 0) == 0 && FCutsceneVerb(c)) {}   // (editor_cutscene.inc)
+#endif
     else if (c.verb == "quit") m_fQuit = true;
     else Status("unknown step " + c.verb);
     return true;
@@ -2419,6 +2500,7 @@ int CEditor::Run()
         if (ce::readFile(pathIni, ab)) m_fHelpAtStart = std::string(ab.begin(), ab.end()).find("help_at_start=0") == std::string::npos;
         m_fShowHelp = m_fHelpAtStart && !m_eo.fHidden && m_ascript.empty();
     }
+    FSetEditorLanguage(m_eo.language);   // (editor_lang.inc: the launcher's language)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -2426,6 +2508,7 @@ int CEditor::Run()
     ImFontConfig fc;
     fc.FontDataOwnedByAtlas = false;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(cane_font), int(sizeof(cane_font)), 17.0f, &fc);
+    AddEditorLanguageFonts(io, 17.0f);
     st::apply(1.0f);
     ImGui_ImplGlfw_InitForOpenGL(g_gl.window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -2451,7 +2534,12 @@ int CEditor::Run()
         DrawToolStrip();
         DrawOutliner();
         DrawInspector();
+#if EDGAME_SLY2
+        if (!FTimelineOpen()) DrawWorldPanel();   // (the Timeline dock takes the bottom dock's place while open)
+        DrawTimeline();
+#else
         DrawWorldPanel();
+#endif
         DrawStatusBar();
         DrawProblems();
         DrawFileDialogs();
@@ -2459,6 +2547,10 @@ int CEditor::Run()
         DrawMarkers();
         DrawCameraFrusta();
         DrawPatrols();
+#if EDGAME_SLY2
+        DrawEntries();
+#endif
+        DrawBrushEdit();
         DrawCameraPanel();
         const int ipointBefore = m_ipoint;
         const bool fCurveBefore = m_fCurveMode;
@@ -2494,6 +2586,7 @@ int CEditor::Run()
         UpdateShaderAnimations(float(t), dt);
         RenderPendingThumbs();
         PollOtherLevel();
+        PollState();
         RenderCameraPreview();
         RenderScene(m_scene, m_cam, m_opts);
         g_gl.Present();
@@ -2532,6 +2625,10 @@ int CEditor::Run()
 #include "editor_assets.inc"
 #include "editor_guard.inc"
 #include "editor_build.inc"
+#include "editor_states.inc"
+#include "editor_newlevel.inc"
+#include "editor_everything.inc"
+#include "editor_brushedit.inc"
 
 using namespace edimpl;
 

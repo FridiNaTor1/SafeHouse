@@ -902,6 +902,8 @@ void GetSlyLaunchTarget(SLY* p, float dt, LAUNCHTARGET* ptarget)
     }
 }
 
+bool g_fEditorStartTeleport = false;   // (main.cpp --start-pos: the teleport in UpdateSly ends a scripted state)
+
 // orig: 0x0018C250 (the state change: leave the old state, enter the new one, the substate, the animation)
 void SetSlyState(SLY* p, int n, int m)
 {
@@ -2460,6 +2462,14 @@ void UpdateSly(LO* plo)
             if (!qk || (qEnd && qk > qEnd)) SetStepRotation(p, r);
             SetAloVelocityTo(p->palo, glm::vec3(0.0f));
             CutCm(&g_cm);
+            // (the map editor's "play from here": the hub's start hands the pad to Sly in the safe house's scripted
+            // exit (state 18), which waits for the safe house scene that the start skipped: he would stay frozen at
+            // the point. The teleport ends it: state 0, the player's)
+            if (g_fEditorStartTeleport)
+            {
+                g_fEditorStartTeleport = false;
+                if (p->state >= 18 && p->state <= 20) SetSlyState(p, 0, -1);
+            }
         }
         }
     }

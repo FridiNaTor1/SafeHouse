@@ -74,6 +74,9 @@ unsigned GlTextureOfShd(const SHD* pshd, int iframe);
 // World start (shd.cpp ResetShaders): forgets the texture cache, keyed by the old world's records; the GL textures are
 // deleted at the next lookup.
 void ResetTextureCache();
+// (debug overlays, debugvis.h) the texture cache now: the textures made from the world's bitmaps and their size as
+// RGBA8 (bytes)
+void TextureCacheStats(int* pctex, double* pcb);
 void RenderScene(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts);
 // The foreground kinds 22..25 (SCENEGLOBSET::fForeground) after the HUD, over a cleared depth.
 void RenderSceneForeground(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts);

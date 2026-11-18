@@ -5,6 +5,7 @@
 // editor loads a world): nothing is recorded and the loaders behave exactly as before.
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 struct LO;
@@ -59,6 +60,8 @@ extern EDITRECORDER* g_peditrec;
 
 // The option descriptors (brx.cpp, the executable's table): an option's kind and flags (false: no such eopid).
 bool FEditorOptionInfo(int eopid, int& k, int& grf);
+// A method / list option's function (the loader hands its values to it) and its value count (false: not one).
+bool FEditorOptionMethod(int eopid, uint32_t& pfnArray, int& cArgs);
 // An option's new value bytes (as ReadOptionValue reads them) applied to the live object the way the loader applies
 // it, replacing its OPT entry. False (why says it) for the options that make or link objects at the load (methods,
 // sub-objects, arrays, warps, booty): those show after a reload.

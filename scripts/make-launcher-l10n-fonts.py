@@ -7,7 +7,7 @@ NOTO_DIR holds NotoSans-Regular.ttf / NotoSans-Bold.ttf (Cyrillic and other lett
 NotoSansCJK-Regular.ttc / NotoSansCJK-Bold.ttc (the Japanese face is taken). Writes launcher/assets/l10n/
 NotoSans-{Regular,Bold}.subset.ttf and NotoSansCJKjp-{Regular,Bold}.subset.otf (its Hangul too: Noto Sans CJK's
 Hangul is the same in every regional face, so Korean needs no font of its own) with every character launcher/lang/*.json
-prints (and launcher/editor/lang/*.json) that Atkinson Hyperlegible has not, plus the whole kana and Cyrillic blocks. Run it again after adding or
+prints (and launcher/editor/lang/*.json, and the 3D map editor's editor/lang/*.json) that Atkinson Hyperlegible has not, plus the whole kana and Cyrillic blocks. Run it again after adding or
 changing translations (scripts/test-launcher-l10n.py / safehouse --l10n-check say when a glyph is missing).
 Needs fontTools (pip install fonttools). All fonts are SIL Open Font License 1.1 (launcher/assets/l10n/OFL.txt).
 """
@@ -25,7 +25,8 @@ OUT = ROOT / "launcher" / "assets" / "l10n"
 def used_codepoints():
     cps = set()
     # (the launcher's strings and the Map Editor page's, launcher/editor/lang, when it is there)
-    for path in list((ROOT / "launcher" / "lang").glob("*.json")) + list((ROOT / "launcher" / "editor" / "lang").glob("*.json")):
+    for path in (list((ROOT / "launcher" / "lang").glob("*.json")) + list((ROOT / "launcher" / "editor" / "lang").glob("*.json"))
+                 + list((ROOT / "editor" / "lang").glob("*.json"))):
         data = json.loads(path.read_text(encoding="utf-8"))
         cps.update(ord(c) for c in data["language"]["name"])
         for value in data["strings"].values():

@@ -3,6 +3,8 @@
 // (EOPIDs) from the port's code comments. Sly 2's editor uses them as they are; Sly 3's maps its own numbers to Sly 2's
 // (game/gen/cidmap.inc / eopidmap.inc) and falls back on these after its own names (Sly3-Release/editor_data3.cpp).
 
+#include "editor_objtypes.h"   // (GAMEAREA)
+
 namespace edimpl
 {
 
@@ -21,7 +23,7 @@ inline const char* SzClassName2(int cid)
     case 0x13: return "GRABTARGET";
     case 0x18: return "VOLTRIGGER";
     case 0x1A: return "EXIT";
-    case 0x1B: return "WALKTARGET";
+    case 0x1B: return "CRAWLSPACE";   // (interact.cpp: the circle there starts the crawl, kind 8)
     case 0x1C: return "EMITTERFX";
     case 0x1E: return "BREAKABLEBASE";
     case 0x23: return "USE";
@@ -156,6 +158,12 @@ inline const char* SzOptionName2(int eopid)
     case 1074: return "use: flags";
     case 1076: return "use: task states";
     case 1155: case 1161: case 1162: case 1163: return "booty record";
+    case 1182: return "crawl space: floor point";
+    case 805: case 815: case 825: case 837: case 849: case 857: case 869: case 1024: case 1084: case 1190: return "players' mask (1 Sly, 2 Bentley, 4 Murray)";
+    case 308: return "pocket: coins";
+    case 309: case 310: return "pocket: prize";
+    case 906: return "prize: its task";
+    case 1225: return "vault: combination";
     case 1204: return "photo: completed";
     case 1208: case 1209: return "rope: end";
     case 1210: return "rope: length";

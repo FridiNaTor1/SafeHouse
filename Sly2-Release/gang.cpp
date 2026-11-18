@@ -2493,6 +2493,10 @@ void UpdateMurray(LO* plo)
     case 4: case 5: break; // original 0x2A71E0: no additional state4/5 update body
     case 17: UpdateGangScriptAnim(p, false); break;
     case 18: UpdateGangScriptAnim(p, true); break;
+    // 16 (the jump kind 4: a splice's or a scene's own hold, its state machine +0x102C started by SetMurrayState): the
+    // original's update has nothing for it (0x1B50B0's switch: no case 16; 0x1B4AA0's transitions none either). He
+    // leaves it through his jump state (vt slot 88) or a script's command.
+    case 16: break;
     default: WarnOnce("Murray's update of state " + std::to_string(p->state)); break;
     }
     // 0x1B82A0

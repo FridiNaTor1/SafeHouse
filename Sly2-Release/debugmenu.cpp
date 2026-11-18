@@ -4,6 +4,7 @@
 #include "debugmenu.h"
 #include "cheat.h"
 #include "debugphys.h"
+#include "debugvis.h"
 #include "actioninput.h"
 #include "region.h"
 
@@ -73,7 +74,7 @@ namespace
 {
 // ------------------------------------------------------------ state
 enum PAGEK { PK_Root, PK_Cheats, PK_Episodes, PK_Worlds, PK_Character, PK_Teleport, PK_Jobs, PK_JobList, PK_Player, PK_Speed, PK_Display,
-             PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
+             PK_Overlays, PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
 struct PAGE
 {
     PAGEK pagek = PK_Root;
@@ -192,6 +193,12 @@ const char* const s_apchzWorldFile[44] = {
     "c_sawmill_lighthouse", "c_sawmill_bearcave", "c_sawmill_boss", "a_blimp_ext", "a_blimp_int",
     "a_blimp_engine_room_murray", "a_blimp_engine_room_bentley", "a_blimp_engine_room_jt", "a_blimp_boss_final"};
 
+}  // namespace
+
+const char* PchzDebugWorldFile(int iwrec) { return iwrec >= 0 && iwrec < 44 ? s_apchzWorldFile[iwrec] : ""; }
+
+namespace
+{
 // a world record's place in the game's progress ("episode.nightclub.level.cellar"): its last part
 std::string StrWorldKey(int iwrec, std::string* pstrEpisode = nullptr)
 {
@@ -559,6 +566,11 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
             item("Speed...", [] { Push(PK_Speed); }, ach);
         }
         item("Display...", [] { Push(PK_Display); });
+        {
+            int c = 0;
+            for (int k = 0; k < DV_Max; ++k) c += FDebugVisWant(DEBUGVIS(k));
+            item("Overlays...", [] { Push(PK_Overlays); }, c ? std::to_string(c) + " on" : std::string("Off"));
+        }
         item("Cheat Codes...", [] { Push(PK_Cheats); });
         item("Reset World", [psw] {
             const int iwrec = g_transition.iwrecCur;
@@ -837,6 +849,36 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
             if (g_fDebugFreeCam) Close();
         }, StrOnOff(g_fDebugFreeCam) + "  (W A S D, Q E, right mouse; pad: sticks, R2 / L2, Select)");
         break;
+    // (debugvis.h) what the game keeps hidden, drawn over the picture: each its own toggle, remembered
+    case PK_Overlays:
+        *pstrTitle = "Overlays (shown over the game; remembered)";
+        for (int k = 0; k < DV_Max; ++k)
+        {
+            const DEBUGVIS dv = DEBUGVIS(k);
+            item(SzDebugVis(dv), [dv] {
+                SetDebugVis(dv, !FDebugVisWant(dv));
+                Status(std::string(SzDebugVis(dv)) + ": " + StrOnOff(FDebugVisWant(dv)));
+            }, StrOnOff(FDebugVisWant(dv)));
+            if (dv == DV_Collision)
+                item("  Collision Distance", [] {}, "<  " + StrDebugVisCollisionRange() + "  >")->pfnAdjust = [](int dir) {
+                    StepDebugVisCollisionRange(dir);
+                    Status("collision wireframe within " + StrDebugVisCollisionRange());
+                };
+            if (dv == DV_Labels)
+            {
+                item("  Label Distance", [] {}, "<  " + StrDebugVisLabelRange() + "  >")->pfnAdjust = [](int dir) {
+                    StepDebugVisLabelRange(dir);
+                    Status("labels within " + StrDebugVisLabelRange());
+                };
+                item("  Labels Only Under Cursor / Crosshair", [] { SetDebugVisLabelsCursor(!FDebugVisLabelsCursor()); },
+                     StrOnOff(FDebugVisLabelsCursor()));
+            }
+        }
+        item("All Off", [] {
+            SetAllDebugVis(false);
+            Status("overlays off");
+        });
+        break;
     }
     return a;
 }
@@ -1095,6 +1137,7 @@ void UpdateDebugMenu(SW* psw)
 void UpdateDebugTools(SW* psw)
 {
     s_psw = psw;
+    UpdateDebugVis(psw);   // (debugvis.h: the event log; reads only)
     // the noclip's player gone with its world (the objects are freed): nothing of it is touched
     if (s_ploNoclip && s_serialNoclip != psw->serial)
     {
@@ -1216,9 +1259,11 @@ void DrawDebugOverlay(int width, int height)
 {
     // (Extras: Carmelita's aim mode crosshair, pccharacter.h)
     const bool fCross = g_pcinput.fDebugKeys && FPcCarmCrosshair();
-    if (!g_pcinput.fDebugKeys || !(s_fOpen || s_fPerf || fCross)) return;
+    const bool fVis = FDebugVisAny();   // (debugvis.h; the test aid SLY2N_DEBUGVIS without Debug mode too)
+    if (!fVis && (!g_pcinput.fDebugKeys || !(s_fOpen || s_fPerf || fCross))) return;
     g_hud.Begin();
+    if (fVis) DrawDebugVis(g_psw);
     if (fCross) DrawPcCarmCrosshair();
-    DrawDebugMenu();
+    if (g_pcinput.fDebugKeys) DrawDebugMenu();
     g_hud.Flush(width, height);
 }

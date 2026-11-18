@@ -8,9 +8,16 @@
 #include "animfind.h"
 #include "aseg.h"
 #include "asega.h"
+#include "anim.h"
 #include "bone.h"
+#include "clock.h"
+#include "xf.h"
+#include "xfphys.h"
+#include "so.h"
 #include "texmod.h"
 #include "core/model.h"
+
+#include <nlohmann/json.hpp>
 
 #include <imgui/ImGuiFileDialog.h>
 #include <glad/glad.h>
@@ -22,6 +29,7 @@
 #include <functional>
 #include <fstream>
 #include <numeric>
+#include <set>
 
 namespace edimpl
 {
@@ -1709,67 +1717,896 @@ bool CEditor::FSetMaterial(LO* plo, int imat, int shdk, int grfshd, const uint32
     return true;
 }
 
-// The character's animations (its ASEGs) sampled at 30 frames a second on the exported joints: each joint relative to
-// its parent joint by the animation's own evaluation (asega.cpp CalculateAsegMatrices; nothing is applied or played)
-void CEditor::ExportAnimations(LO* plo, md::Scene& sc, const std::map<const XF*, int>& mpjoint, const glm::mat4& C, const glm::mat4& refInv)
+// ---- a character posed as the game poses it (the export's animations)
+//
+// The game's pose of a character each frame (xf.h UpdateAloXfs, 0x22DE88): every transform record of the object, in
+// the records' order, moves by the mode its head controller (the highest priority) gives it, and gets its world matrix
+// (its reference's world x its local) at once. The clips (ASEGAs) put a channel controller on the records they
+// animate (mode 5: the track's value at the clip's time); the rest are set at the load (xf.cpp InitAloXfs):
+//   - the two-bone joints (ik.cpp, ALOPAIR, kind-7 controllers): the upper record of a limb (mode 13) is solved from its
+//     rest pose so that the end (hand / foot) reaches the target record the clip moves (law of cosines for the bend
+//     about the joint's axis, then the turn onto the target, then the twist an ASEGA's scalar channel eases); the lower
+//     record (mode 14) only gets the bend. A clip that drives the upper record itself outranks the joint (prio -1).
+//   - links (mode 15, xfphys.cpp): a record follows another's world position / rotation;
+//   - chains (mode 16, chain.cpp): ropes / tails simulated with the clock's step;
+//   - look-at (kind 2, lookat.cpp): a head turning toward the player within a range, else its loaded value;
+//     look-along-motion (kind 4) and spins (kind 9).
+// The renderer then skins with each bone record's world matrix x its binding (bone.cpp). So the clips' channels alone
+// leave the limbs at their rest pose while the hands / feet move (the targets): the export runs the game's own update
+// on the character for each clip (muted: no events, no scripts) and bakes every joint's world matrix per frame.
+// Not part of a clip and left out: the look-at's target (the player), and what the actors' code does at run time on top
+// (Sly's feet on the ground (slyfeet), the cane's reach (reach.cpp), a guard's arm aimed by its AI, held objects).
+
+namespace
+{
+// The game's update run on a character's tree (its ALO and the ALOs under it, parents first) in the editor's world,
+// which loads without the animation's start (anim.cpp InitWorldAnimation: no controllers, joints or bindings) and never
+// runs it: the records' run-time state is made as the game makes it (xf.cpp InitAloXfs: their controllers, the joints'
+// rest poses, links, chains; the clips' priorities and speeds, anim.cpp), each clip starts from that state, and
+// everything is given back at the end (the records, their controller lists, the joints' / chains' state, the update
+// flags, the clock; the controllers made here are freed).
+class POSER
+{
+public:
+    POSER(SW* psw, ALO* proot, const std::vector<ASEG*>& apaseg, bool fSolve) : m_proot(proot)
+    {
+        m_pswSaved = g_psw;
+        g_psw = psw;
+        for (const auto& up : psw->aploAll)
+            if (FCidDerivedFrom(up->Cid(), 0x30) && FLoInParentChain(up.get(), proot)) m_apalo.push_back(static_cast<ALO*>(up.get()));
+        if (std::find(m_apalo.begin(), m_apalo.end(), proot) == m_apalo.end()) m_apalo.insert(m_apalo.begin(), proot);
+        m_clock = g_clock;
+        SaveTree(m_orig);
+        std::set<CTRL*> setOrig;
+        for (const XFSAVE& x : m_orig.axf) setOrig.insert(x.actrl.begin(), x.actrl.end());
+        // the animation's start for these objects and clips (anim.cpp InitAnimationRecordsOf without the bindings)
+        for (ALO* palo : m_apalo) InitAloXfs(palo);
+        InitAnimationRecordsOf(std::vector<LO*>(apaseg.begin(), apaseg.end()));
+        for (ALO* palo : m_apalo)
+            for (auto& up : palo->axf)
+                for (CTRL* q = up->pctrlFirst; q; q = q->pnext)
+                    if (!setOrig.count(q)) m_actrlMade.push_back(q);
+        // no look-at (its target is the player at run time); without solving: no joints, chains or links either (the
+        // clips' channels only)
+        for (ALO* palo : m_apalo)
+        {
+            for (ALOPAIR& q : palo->apair) { q.ptrkgWeight = nullptr; q.ptWeight = nullptr; q.gWeight = 0.0f; }
+            for (auto& up : palo->axf)
+            {
+                XF* pxf = up.get();
+                std::vector<CTRL*> akeep;
+                for (CTRL* q = pxf->pctrlFirst; q; q = q->pnext)
+                {
+                    if (q->kind == 2) continue;
+                    if (!fSolve && (q->kind == 7 || q->kind == 3)) continue;
+                    akeep.push_back(q);
+                }
+                CTRL* pheadOld = pxf->pctrlFirst;
+                Relink(pxf, akeep);
+                if (pxf->pctrlFirst != pheadOld)
+                {
+                    InvalidateXfParams(palo, pxf);
+                    if (pxf->pctrlFirst) pxf->pctrlFirst->Start();
+                    else { pxf->state = 0; ResetXfParams(pxf); SetXfMode(palo, pxf, 0); }
+                }
+                if (!fSolve && pxf->mode == XFM_Link) SetXfMode(palo, pxf, 0);
+            }
+        }
+        SaveTree(m_start);
+    }
+    ~POSER()
+    {
+        while (!m_apasega.empty()) Stop(m_apasega.back());
+        RestoreTree(m_orig);
+        for (CTRL* q : m_actrlMade) delete q;
+        for (ALO* palo : m_apalo) PostUpdateAloXfs(palo);   // (the world's visibility tree and activators: the object where it was)
+        g_clock = m_clock;
+        g_psw = m_pswSaved;
+    }
+    // the clip applied as the game applies it (snap, from its start; the tree in its start state), its events and
+    // scripts muted, driven here only
+    ASEGA* Play(ASEG* paseg)
+    {
+        RestoreTree(m_start);
+        // (the channels' records outside the tree, if any, are kept too: the apply snaps them)
+        if (ASEGD* pd = PasegdOf(paseg))
+            for (const ASEGCHN& chn : pd->achn)
+            {
+                ALO* po = nullptr;
+                XF* pxf = nullptr;
+                GetAsegChannelTarget(paseg, m_proot, chn, &po, &pxf);
+                if (pxf && !m_setxf.count(pxf)) { m_setxf.insert(pxf); m_orig.axf.push_back(SaveXf(pxf)); }
+            }
+        ASEGA* pasega = nullptr;
+        g_fAsegaEventsMuted = true;
+        ApplyAseg(paseg, m_proot, 0.0f, 1.0f, 0, &pasega);
+        g_fAsegaEventsMuted = false;
+        if (auto it = std::find(g_apasega.begin(), g_apasega.end(), pasega); it != g_apasega.end()) g_apasega.erase(it);
+        if (pasega) m_apasega.push_back(pasega);
+        return pasega;
+    }
+    void Stop(ASEGA* pasega)
+    {
+        if (!pasega) return;
+        pasega->ieaEnd = int(PasegdOf(pasega->paseg)->aaev[2].size());   // (no end events)
+        g_fAsegaEventsMuted = true;
+        RetractAsega(pasega);
+        g_fAsegaEventsMuted = false;
+        m_apasega.erase(std::remove(m_apasega.begin(), m_apasega.end(), pasega), m_apasega.end());
+    }
+    // one game step at the clip's time t (dt: the step, the chains' simulation)
+    void Step(ASEGA* pasega, float t, float dt)
+    {
+        m_tClock += dt;
+        g_clock.t = m_tClock;
+        g_clock.dt = dt;
+        if (pasega) pasega->t = t;
+        for (ALO* palo : m_apalo) UpdateAloXfs(palo, g_clock.t, dt);
+    }
+    const std::vector<ALO*>& Apalo() const { return m_apalo; }
+
+private:
+    struct XFSAVE
+    {
+        XF* pxf;
+        XF xf;
+        std::vector<CTRL*> actrl;
+    };
+    struct ALOSAVE
+    {
+        ALO* palo = nullptr;
+        uint32_t grfUpd = 0;
+        std::vector<ALOPAIR> apair;
+        std::vector<std::pair<float, glm::vec3>> achain;
+        std::vector<std::pair<glm::vec3, glm::vec3>> achaine;
+    };
+    struct TREESAVE
+    {
+        std::vector<XFSAVE> axf;
+        std::vector<ALOSAVE> aalo;
+    };
+    static XFSAVE SaveXf(XF* pxf)
+    {
+        XFSAVE s{pxf, *pxf, {}};
+        for (CTRL* q = pxf->pctrlFirst; q; q = q->pnext) s.actrl.push_back(q);
+        return s;
+    }
+    void SaveTree(TREESAVE& ts)
+    {
+        ts = TREESAVE();
+        for (ALO* palo : m_apalo)
+        {
+            ALOSAVE as;
+            as.palo = palo;
+            as.grfUpd = GrfUpdOfLo(palo);
+            as.apair = palo->apair;
+            for (const ALOCHAIN& c : palo->achain)
+            {
+                as.achain.push_back({c.tLast, c.posAnchor});
+                for (const ALOCHAINE& e : c.ae) as.achaine.push_back({e.pos, e.v});
+            }
+            ts.aalo.push_back(std::move(as));
+            for (auto& up : palo->axf)
+            {
+                ts.axf.push_back(SaveXf(up.get()));
+                m_setxf.insert(up.get());
+            }
+        }
+    }
+    static void RestoreTree(const TREESAVE& ts)
+    {
+        for (auto it = ts.axf.rbegin(); it != ts.axf.rend(); ++it)
+        {
+            *it->pxf = it->xf;
+            Relink(it->pxf, it->actrl);
+        }
+        for (const ALOSAVE& as : ts.aalo)
+        {
+            ALO* palo = as.palo;
+            for (std::size_t i = 0; i < palo->apair.size() && i < as.apair.size(); ++i) palo->apair[i] = as.apair[i];
+            std::size_t ic = 0, ie = 0;
+            for (ALOCHAIN& c : palo->achain)
+            {
+                if (ic >= as.achain.size()) break;
+                c.tLast = as.achain[ic].first;
+                c.posAnchor = as.achain[ic++].second;
+                for (ALOCHAINE& e : c.ae)
+                    if (ie < as.achaine.size()) { e.pos = as.achaine[ie].first; e.v = as.achaine[ie++].second; }
+            }
+            SetGrfUpdOfLo(palo, as.grfUpd);
+        }
+    }
+    static void Relink(XF* pxf, const std::vector<CTRL*>& a)
+    {
+        pxf->pctrlFirst = a.empty() ? nullptr : a[0];
+        for (std::size_t i = 0; i < a.size(); ++i) a[i]->pnext = i + 1 < a.size() ? a[i + 1] : nullptr;
+    }
+    ALO* m_proot;
+    SW* m_pswSaved = nullptr;
+    std::vector<ALO*> m_apalo;
+    TREESAVE m_orig, m_start;
+    std::set<const XF*> m_setxf;
+    std::vector<CTRL*> m_actrlMade;
+    std::vector<ASEGA*> m_apasega;
+    CLOCK m_clock;
+    float m_tClock = 10000.0f;   // (the chains simulate when the clock's time changes)
+};
+
+// The records' worlds the skin is bound in (bone.cpp BindAloBones: at the post-load, before any animation; the
+// editor's world is never animated, so its records' worlds now)
+glm::mat4 MatBindWorld(const XF* pxf) { return pxf ? pxf->matWorld : glm::mat4(1.0f); }
+
+// A transform's translation / rotation / scale (a mirrored frame: the x scale negative)
+void DecomposeTrs(const glm::mat4& m, glm::vec3& t, glm::quat& q, glm::vec3& s)
+{
+    t = glm::vec3(m[3]);
+    s = glm::vec3(glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2])));
+    if (glm::determinant(glm::mat3(m)) < 0) s.x = -s.x;
+    const glm::mat3 r(glm::vec3(m[0]) / s.x, glm::vec3(m[1]) / s.y, glm::vec3(m[2]) / s.z);
+    q = glm::normalize(glm::quat_cast(r));
+}
+glm::mat4 MatTrs(const glm::vec3& t, const glm::quat& q, const glm::vec3& s)
+{
+    glm::mat4 m = glm::mat4_cast(q);
+    m[0] *= s.x;
+    m[1] *= s.y;
+    m[2] *= s.z;
+    m[3] = glm::vec4(t, 1.0f);
+    return m;
+}
+
+// The rotation and translation of a transform (polar decomposition: the nearest rotation to its 3x3). glTF's joints
+// inherit their parents' whole transform: a record's small squash / stretch in the game (its non-uniform scale) under
+// rotated children would need a shear, which a joint's translation / rotation / scale cannot hold, so the baked joints
+// are rigid (the skinned surface differs from the game's by that squash only, see FPoseDump's check).
+glm::mat4 MatRigid(const glm::mat4& m)
+{
+    glm::mat3 r(m);
+    if (glm::determinant(r) < 0) r[0] = -r[0];
+    for (int i = 0; i < 20; ++i)
+    {
+        const glm::mat3 n = 0.5f * (r + glm::transpose(glm::inverse(r)));
+        const bool fDone = glm::length(n[0] - r[0]) + glm::length(n[1] - r[1]) + glm::length(n[2] - r[2]) < 1e-7f;
+        r = n;
+        if (fDone) break;
+    }
+    glm::mat4 o(r);
+    o[3] = m[3];
+    return o;
+}
+
+// A symmetric 3x3 matrix's eigenvectors (the columns of the rotation Q) and values (L): K = Q diag(L) Q^T (Jacobi).
+// The columns are ordered and signed to follow Qprev's (a squash's axes change little from key to key).
+void EigenSym3(const glm::mat3& K, const glm::mat3& Qprev, glm::mat3& Q, glm::vec3& L)
+{
+    double a[3][3], v[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) a[i][j] = K[j][i];
+    for (int sweep = 0; sweep < 32; ++sweep)
+    {
+        const double off = std::fabs(a[0][1]) + std::fabs(a[0][2]) + std::fabs(a[1][2]);
+        if (off < 1e-12) break;
+        for (int p = 0; p < 2; ++p)
+            for (int q = p + 1; q < 3; ++q)
+            {
+                if (std::fabs(a[p][q]) < 1e-15) continue;
+                const double th = 0.5 * std::atan2(2.0 * a[p][q], a[q][q] - a[p][p]);
+                const double c = std::cos(th), s = std::sin(th);
+                for (int k = 0; k < 3; ++k)
+                {
+                    const double akp = a[k][p], akq = a[k][q];
+                    a[k][p] = c * akp - s * akq;
+                    a[k][q] = s * akp + c * akq;
+                }
+                for (int k = 0; k < 3; ++k)
+                {
+                    const double apk = a[p][k], aqk = a[q][k];
+                    a[p][k] = c * apk - s * aqk;
+                    a[q][k] = s * apk + c * aqk;
+                }
+                for (int k = 0; k < 3; ++k)
+                {
+                    const double vkp = v[k][p], vkq = v[k][q];
+                    v[k][p] = c * vkp - s * vkq;
+                    v[k][q] = s * vkp + c * vkq;
+                }
+            }
+    }
+    glm::vec3 ae[3];
+    for (int c = 0; c < 3; ++c) ae[c] = glm::vec3(float(v[0][c]), float(v[1][c]), float(v[2][c]));
+    // the order and signs nearest the previous axes
+    int aperm[3] = {0, 1, 2}, abest[3] = {0, 1, 2};
+    float best = -1.0f;
+    do
+    {
+        float sum = 0.0f;
+        for (int c = 0; c < 3; ++c) sum += std::fabs(glm::dot(ae[aperm[c]], Qprev[c]));
+        if (sum > best) { best = sum; std::copy(aperm, aperm + 3, abest); }
+    } while (std::next_permutation(aperm, aperm + 3));
+    for (int c = 0; c < 3; ++c)
+    {
+        glm::vec3 e = ae[abest[c]];
+        if (glm::dot(e, Qprev[c]) < 0) e = -e;
+        Q[c] = e;
+        L[c] = float(a[abest[c]][abest[c]]);
+    }
+    if (glm::determinant(Q) < 0)
+    {
+        int cMin = 0;
+        for (int c = 1; c < 3; ++c) if (std::fabs(glm::dot(Q[c], Qprev[c])) < std::fabs(glm::dot(Q[cMin], Qprev[cMin]))) cMin = c;
+        Q[cMin] = -Q[cMin];
+    }
+}
+
+// The angle between two unit quaternions (x y z w), precise for small ones (an acos of their dot is not, in floats)
+float QuatAngle(const glm::vec4& a, const glm::vec4& b)
+{
+    const float d = std::min(glm::length(a - b), glm::length(a + b));
+    return 4.0f * std::asin(std::min(1.0f, 0.5f * d));
+}
+
+// A channel's value at time t (linear; rotations spherical), as a glTF viewer interpolates it
+glm::vec4 SampleChannel(const md::Channel& ch, float t)
+{
+    if (ch.t.size() == 1 || t <= ch.t.front()) return ch.v.front();
+    if (t >= ch.t.back()) return ch.v.back();
+    std::size_t i = 1;
+    while (ch.t[i] < t) ++i;
+    const float u = (t - ch.t[i - 1]) / std::max(ch.t[i] - ch.t[i - 1], 1e-9f);
+    if (ch.path != 1) return ch.v[i - 1] + (ch.v[i] - ch.v[i - 1]) * u;
+    const glm::quat a(ch.v[i - 1].w, ch.v[i - 1].x, ch.v[i - 1].y, ch.v[i - 1].z), b(ch.v[i].w, ch.v[i].x, ch.v[i].y, ch.v[i].z);
+    const glm::quat q = glm::slerp(a, b, u);
+    return glm::vec4(q.x, q.y, q.z, q.w);
+}
+
+// The keys a channel needs (mask): dropped where the interpolation between the kept neighbours stays within tol
+// (translation / scale: units; rotation: radians); the first and last stay; a channel that never moves keeps one
+std::vector<bool> MaskReduceKeys(const md::Channel& ch, float tol)
+{
+    const std::size_t n = ch.t.size();
+    std::vector<bool> mask(n, n < 3);
+    if (n < 3) return mask;
+    auto err = [&](std::size_t a, std::size_t b, std::size_t k) {
+        const float u = (ch.t[k] - ch.t[a]) / std::max(ch.t[b] - ch.t[a], 1e-9f);
+        if (ch.path == 1)
+        {
+            glm::quat qa(ch.v[a].w, ch.v[a].x, ch.v[a].y, ch.v[a].z), qb(ch.v[b].w, ch.v[b].x, ch.v[b].y, ch.v[b].z), qk(ch.v[k].w, ch.v[k].x, ch.v[k].y, ch.v[k].z);
+            const glm::quat qi = glm::slerp(qa, qb, u);
+            return QuatAngle(glm::vec4(qi.x, qi.y, qi.z, qi.w), glm::vec4(qk.x, qk.y, qk.z, qk.w));
+        }
+        return glm::length(glm::vec3(ch.v[a] + (ch.v[b] - ch.v[a]) * u - ch.v[k]));
+    };
+    mask[0] = true;
+    std::size_t a = 0;
+    for (std::size_t b = 2; b < n; ++b)
+    {
+        bool fOk = true;
+        for (std::size_t k = a + 1; k < b && fOk; ++k) fOk = err(a, b, k) <= tol;
+        if (!fOk) { a = b - 1; mask[a] = true; }
+    }
+    mask[n - 1] = true;
+    bool fConst = true;
+    for (std::size_t k = 1; k < n && fConst; ++k) fConst = err(0, 0, k) <= tol;
+    if (fConst) std::fill(mask.begin() + 1, mask.end(), false);
+    return mask;
+}
+
+md::Channel ChannelMasked(const md::Channel& ch, const std::vector<bool>& mask)
+{
+    md::Channel o;
+    o.joint = ch.joint;
+    o.path = ch.path;
+    for (std::size_t k = 0; k < ch.t.size(); ++k)
+        if (mask[k]) { o.t.push_back(ch.t[k]); o.v.push_back(ch.v[k]); }
+    return o;
+}
+
+// A character's skeleton made readable (the joints are sorted, parents set): each joint's bind frame turned into a
+// right-handed one (+Y along the bone toward its child, +X a limb joint's bend axis; skinning does not change: the
+// inverse binds follow), the limbs' records named by their part, the rest poses and inverse binds from those frames.
+// apxf / amatFrame: per joint its record and the frame change (the record's world x it = the joint's frame).
+void BuildRig(ALO* palo, md::Scene& sc, const std::map<const XF*, int>& mpjoint, const glm::mat4& C, const glm::mat4& refBind, bool fRaw,
+              std::vector<const XF*>& apxf, std::vector<glm::mat4>& amatFrame)
+{
+    const std::size_t cj = sc.joints.size();
+    const glm::mat4 Cinv = glm::inverse(C);
+    apxf.assign(cj, nullptr);
+    for (const auto& [pxf, ij] : mpjoint) apxf[size_t(ij)] = pxf;
+    std::vector<glm::mat4> aB(cj);
+    for (std::size_t j = 0; j < cj; ++j) aB[j] = C * refBind * MatBindWorld(apxf[j]) * Cinv;
+    auto jointOf = [&](const XF* pxf) { const auto it = mpjoint.find(pxf); return it == mpjoint.end() ? -1 : it->second; };
+    // the limbs (the two-bone joints): legs / arms by their end's height, sides by its y (the character's frame: x ahead,
+    // y left, z up)
+    struct ROLE { std::string sz; glm::vec3 posNext{0.0f}; bool fNext = false; glm::vec3 axis{0.0f}; bool fAxis = false; };
+    std::vector<ROLE> arole(cj);
+    std::vector<int> aiq;
+    float zTop = 0.0f;
+    for (auto& up : palo->axf) zTop = std::max(zTop, (refBind * MatBindWorld(up.get()))[3].z);
+    for (std::size_t iq = 0; iq < palo->apair.size(); ++iq)
+        if (palo->apair[iq].apxf[1] && palo->apair[iq].apxf[2] && palo->apair[iq].apxf[3]) aiq.push_back(int(iq));
+    auto posOf = [&](const XF* pxf) { return glm::vec3((refBind * MatBindWorld(pxf))[3]); };
+    // (the limb's end point: the end record's point, ik.cpp's vecB0; the export's space)
+    auto posEndOf = [&](const ALOPAIR& q) { return glm::vec3(C * refBind * MatBindWorld(q.apxf[3]) * glm::vec4(q.vecB0, 1.0f)); };
+    std::stable_sort(aiq.begin(), aiq.end(), [&](int a, int b) { return posOf(palo->apair[size_t(a)].apxf[3]).z < posOf(palo->apair[size_t(b)].apxf[3]).z; });
+    std::map<std::string, int> mpcount;
+    nlohmann::json aik = nlohmann::json::array();
+    for (std::size_t k = 0; k < aiq.size(); ++k)
+    {
+        const ALOPAIR& q = palo->apair[size_t(aiq[k])];
+        const glm::vec3 posEnd = posOf(q.apxf[3]);
+        std::string limb = aiq.size() == 4 ? (k < 2 ? "leg" : "arm") : aiq.size() == 2 ? (posEnd.z < 0.35f * zTop ? "leg" : "arm") : "limb" + std::to_string(k);
+        std::string side = posEnd.y >= 0.0f ? "L" : "R";
+        if (mpcount[limb + side]++) side += std::to_string(mpcount[limb + side]);
+        const bool fLeg = limb == "leg", fArm = limb == "arm";
+        // the parts: the target (the bone the clip moves: the foot / hand), the upper and lower bones the joint solves,
+        // and the end (the record holding the point that reaches the target, when not the lower bone itself)
+        const char* aszPart[4] = {fLeg ? "foot" : fArm ? "hand" : "target", fLeg ? "thigh" : fArm ? "upperarm" : "upper",
+                                  fLeg ? "shin" : fArm ? "forearm" : "lower", fLeg ? "ankle" : fArm ? "wrist" : "end"};
+        // the bend axis from the bind pose (ik.cpp InitAloPairRest's: upper -> lower x lower -> the end point); a
+        // straight limb: the character's sideways axis
+        const glm::vec3 pU = glm::vec3(C * glm::vec4(posOf(q.apxf[1]), 1.0f)), pL = glm::vec3(C * glm::vec4(posOf(q.apxf[2]), 1.0f)), pE = posEndOf(q);
+        glm::vec3 axis = glm::cross(pL - pU, pE - pL);
+        if (glm::length(axis) < 0.03f * glm::length(pL - pU) * glm::length(pE - pL)) axis = glm::vec3(glm::mat3(C) * glm::vec3(0.0f, 1.0f, 0.0f));
+        axis = glm::normalize(axis);
+        nlohmann::json e;
+        for (int r = 0; r < 4; ++r)
+        {
+            const int j = jointOf(q.apxf[r]);
+            if (j < 0 || (r == 3 && q.apxf[3] == q.apxf[2])) continue;
+            arole[size_t(j)].sz = std::string(aszPart[r]) + "_" + side;
+            if (r == 1 || r == 2)
+            {
+                arole[size_t(j)].posNext = r == 1 ? pL : pE;
+                arole[size_t(j)].fNext = true;
+                arole[size_t(j)].axis = axis;
+                arole[size_t(j)].fAxis = true;
+            }
+            e[r == 0 ? "target" : r == 1 ? "upper" : r == 2 ? "lower" : "end"] = sc.joints[size_t(j)].name + "_" + arole[size_t(j)].sz;
+        }
+        aik.push_back(e);
+    }
+    for (std::size_t j = 0; j < cj; ++j)
+        if (!arole[j].sz.empty()) sc.joints[j].name += "_" + arole[j].sz;
+    // the frames
+    std::vector<std::vector<int>> achild(cj);
+    for (std::size_t j = 0; j < cj; ++j) if (sc.joints[j].parent >= 0) achild[size_t(sc.joints[j].parent)].push_back(int(j));
+    std::vector<glm::mat4> aF(cj, glm::mat4(1.0f));
+    amatFrame.assign(cj, glm::mat4(1.0f));
+    for (std::size_t j = 0; j < cj; ++j)
+    {
+        if (sc.joints[j].parent < 0) { aF[j] = glm::mat4(1.0f); amatFrame[j] = glm::inverse(aB[j]); continue; }   // (the root: the placement)
+        const glm::vec3 pos(aB[j][3]);
+        glm::vec3 y(0.0f);
+        auto dirTo = [&](const glm::vec3& p) { const glm::vec3 d = p - pos; return glm::length(d) > 1e-5f ? glm::normalize(d) : glm::vec3(0.0f); };
+        if (arole[j].fNext) y = dirTo(arole[j].posNext);
+        if (y == glm::vec3(0.0f) && !achild[j].empty())
+        {
+            glm::vec3 avg(0.0f);
+            for (int c : achild[j]) avg += glm::vec3(aB[size_t(c)][3]);
+            y = dirTo(avg / float(achild[j].size()));
+            float dMax = 0.0f;
+            if (y == glm::vec3(0.0f))
+                for (int c : achild[j])
+                    if (const float d = glm::length(glm::vec3(aB[size_t(c)][3]) - pos); d > dMax) { dMax = d; y = dirTo(glm::vec3(aB[size_t(c)][3])); }
+        }
+        // (a leaf: along the line from its parent, the first ancestor apart from it)
+        for (int p = sc.joints[j].parent; y == glm::vec3(0.0f) && p >= 0; p = sc.joints[size_t(p)].parent) y = -dirTo(glm::vec3(aB[size_t(p)][3]));
+        if (y == glm::vec3(0.0f)) y = glm::normalize(glm::vec3(aB[j][1]));
+        glm::vec3 x;
+        if (arole[j].fAxis && std::fabs(glm::dot(arole[j].axis, y)) < 0.95f) x = arole[j].axis;
+        else
+        {
+            float dMin = 2.0f;
+            for (int c = 0; c < 3; ++c)
+            {
+                const glm::vec3 a = glm::normalize(glm::vec3(aB[j][c]));
+                if (std::fabs(glm::dot(a, y)) < dMin) { dMin = std::fabs(glm::dot(a, y)); x = a; }
+            }
+        }
+        x = glm::normalize(x - y * glm::dot(x, y));
+        const glm::vec3 z = glm::cross(x, y);
+        aF[j] = glm::mat4(glm::vec4(x, 0.0f), glm::vec4(y, 0.0f), glm::vec4(z, 0.0f), glm::vec4(pos, 1.0f));
+        amatFrame[j] = glm::inverse(aB[j]) * aF[j];
+    }
+    for (std::size_t j = 0; j < cj; ++j)
+    {
+        const int ip = sc.joints[j].parent;
+        sc.joints[j].local = ip >= 0 ? glm::inverse(aF[size_t(ip)]) * aF[j] : aF[j];
+        sc.joints[j].inverseBind = glm::inverse(aF[j]);
+    }
+    // what the file's animations are, on the root joint (Blender: its custom properties)
+    for (std::size_t j = 0; j < cj; ++j)
+        if (sc.joints[j].parent < 0)
+        {
+            nlohmann::json e;
+            e["safehouse_animations"] = fRaw ? "clip channels only: the limbs are not solved (the joints in safehouse_ik: rebuild them with IK constraints)"
+                                             : "as the game shows them: every joint baked per frame (limbs solved, links, chains)";
+            if (!aik.empty()) e["safehouse_ik"] = aik;
+            sc.joints[j].extras = e.dump();
+        }
+}
+}  // namespace
+
+// The skeleton of a character's export: per joint its record, its bind world (the export's space, before the frame
+// change) and the frame change (bind x frame: a right-handed frame, +Y along the bone toward its child, +X the bend
+// axis of a limb's joints)
+struct CEditor::EXPORTRIG
+{
+    std::vector<const XF*> apxf;     // sc.joints order
+    std::vector<glm::mat4> amatFrame;
+    glm::mat4 C{1.0f};               // game -> glTF
+    bool fSolve = true;
+};
+
+void CEditor::ExportAnimations(LO* plo, md::Scene& sc, const EXPORTRIG& rig)
 {
     ALO* palo = dynamic_cast<ALO*>(plo);
-    if (!palo || mpjoint.empty()) return;
-    const glm::mat4 Cinv = glm::inverse(C);
+    if (!palo || rig.apxf.empty() || !m_psw) return;
     std::vector<ASEG*> apaseg;
     std::function<void(LO*)> collect = [&](LO* p) {
-        if (FCidDerivedFrom(p->Cid(), 0x6D)) apaseg.push_back(static_cast<ASEG*>(p));
+        if (FCidDerivedFrom(p->Cid(), 0x6D) && std::find(apaseg.begin(), apaseg.end(), p) == apaseg.end()) apaseg.push_back(static_cast<ASEG*>(p));
         if (const auto it = m_mpchildren.find(p); it != m_mpchildren.end())
             for (LO* c : it->second) collect(c);
     };
     collect(plo);
-    std::vector<std::pair<const XF*, int>> ajoint(mpjoint.begin(), mpjoint.end());
-    int canim = 0;
-    for (ASEG* paseg : apaseg)
-    {
+    const glm::mat4 C = rig.C, Cinv = glm::inverse(C);
+    const std::size_t cj = rig.apxf.size();
+    const int fps = m_exportFps >= 60 ? 60 : 30;
+    const float dtStep = 1.0f / 60.0f;   // (the game's step)
+    const int cstepKey = 60 / fps;
+    const float unit = 100.0f / (m_importScale > 0 ? m_importScale : 100.0f);   // (1 m in the file's units)
+    // the export's space: the character's placement record as it stands (the skeleton's root joint)
+    const glm::mat4 refInv = glm::inverse(MatWorldOfAlo(palo));
+    POSER poser(m_psw.get(), palo, apaseg, rig.fSolve);
+    // each clip played from its start, settled first (the chains hang, the joints' targets in place; a cycle (its end
+    // pose its start's) played twice before, so its chains swing as in a looping play); fn(t) after each step that is a
+    // key's
+    auto play = [&](ASEG* paseg, bool fCycle, const std::function<void(float)>& fn) {
         ASEGD* pd = PasegdOf(paseg);
-        if (!pd || pd->achn.empty() || canim >= 64) continue;
-        const float tMax = std::clamp(pd->tMax, 0.0f, 30.0f);
-        const int cframe = std::max(2, int(tMax * 30.0f) + 1);
+        const float tMax = std::clamp(pd->tMax, 0.0f, 120.0f);
+        ASEGA* pasega = poser.Play(paseg);
+        if (!pasega) return false;
+        const int cstep = std::max(0, int(std::ceil(tMax / dtStep - 1e-3f)));
+        for (int i = 0; i < 30; ++i) poser.Step(pasega, 0.0f, dtStep);
+        if (fCycle)
+            for (int i = 0; i < 2 * cstep; ++i) poser.Step(pasega, float(i % cstep) * dtStep, dtStep);
+        for (int i = 0; i <= cstep; ++i)
+        {
+            const float t = std::min(float(i) * dtStep, tMax);
+            poser.Step(pasega, t, dtStep);
+            if (i % cstepKey == 0 || i == cstep) fn(t);
+        }
+        poser.Stop(pasega);
+        return true;
+    };
+    auto worldOf = [&](std::size_t j) { return C * refInv * rig.apxf[j]->matWorld * Cinv * rig.amatFrame[j]; };
+    std::vector<ASEG*> apasegAnim;
+    for (ASEG* paseg : apaseg)
+        if (ASEGD* pd = PasegdOf(paseg); pd && !pd->achn.empty() && apasegAnim.size() < 1000 &&
+            std::find(apasegAnim.begin(), apasegAnim.end(), paseg) == apasegAnim.end())
+            apasegAnim.push_back(paseg);
+    // 1. the joints the game squashes / shears somewhere (a record's non-uniform scale, inherited by rotated children):
+    // a joint's translation / rotation / scale cannot hold a shear, nor can its children inherit a squash the game's do
+    // not, so the joints stay rigid and such a joint gets two more under it that carry it, and its skin moves to them:
+    // "<joint>_deform_scale" (rotation Q, scale L) and "<joint>_deform" (rotation Q^T): the joint x Q L Q^T is the game's
+    // matrix (Q L Q^T: the symmetric part of the polar decomposition)
+    // (and the cycles: the clips whose joints end where they start, chains aside)
+    std::vector<float> adev(cj, 0.0f);
+    std::set<const XF*> setxfChain;
+    for (ALO* pa : poser.Apalo())
+        for (const ALOCHAIN& c : pa->achain)
+            for (const ALOCHAINE& e : c.ae)
+                if (e.pxf) setxfChain.insert(e.pxf);
+    auto fChained = [&](const XF* pxf) {
+        for (const XF* p = pxf; p; p = p->pxfRef) if (setxfChain.count(p)) return true;
+        return false;
+    };
+    std::vector<bool> afCycle(apasegAnim.size(), false);
+    for (std::size_t ia = 0; ia < apasegAnim.size(); ++ia)
+    {
+        std::vector<glm::vec3> apos0, apos1;
+        float dRange = 0.0f;
+        play(apasegAnim[ia], false, [&](float) {
+            apos1.clear();
+            for (std::size_t j = 0; j < cj; ++j)
+            {
+                const glm::mat4 w = worldOf(j);
+                const glm::mat3 K = glm::transpose(glm::mat3(MatRigid(w))) * glm::mat3(w);
+                for (int c = 0; c < 3; ++c) adev[j] = std::max(adev[j], glm::length(K[c] - glm::mat3(1.0f)[c]));
+                if (!fChained(rig.apxf[j])) apos1.push_back(glm::vec3(w[3]));
+            }
+            if (apos0.empty()) apos0 = apos1;
+            for (std::size_t k = 0; k < apos0.size() && k < apos1.size(); ++k) dRange = std::max(dRange, glm::length(apos0[k] - apos1[k]));
+        });
+        float d = apos0.size() == apos1.size() && apos0.size() > 0 ? 0.0f : 1e9f;
+        for (std::size_t k = 0; k < apos0.size() && k < apos1.size(); ++k) d = std::max(d, glm::length(apos0[k] - apos1[k]));
+        // (a cycle: it ends near its start, against how far its joints go (a run's end is its next start's frame before))
+        afCycle[ia] = d < std::max(0.02f * unit, 0.25f * dRange) && PasegdOf(apasegAnim[ia])->tMax > 0.1f;
+        if (std::getenv("SLY2N_EDITOR_EXPORTDBG"))
+            std::printf("export animations: clip %d %.3f s: start / end apart by %.4f of %.4f%s\n", apasegAnim[ia]->oid, PasegdOf(apasegAnim[ia])->tMax, d, dRange, afCycle[ia] ? " (a cycle)" : "");
+    }
+    std::vector<int> ajointDeform(cj, -1);   // the joint's "_deform_scale" (its "_deform": the next one)
+    for (std::size_t j = 0; j < cj; ++j)
+    {
+        if (adev[j] < 0.004f || sc.joints[j].parent < 0) continue;
+        ajointDeform[j] = int(sc.joints.size());
+        md::Joint a, c;
+        a.name = sc.joints[j].name + "_deform_scale";
+        a.parent = int(j);
+        a.inverseBind = sc.joints[j].inverseBind;
+        c.name = sc.joints[j].name + "_deform";
+        c.parent = ajointDeform[j];
+        c.inverseBind = sc.joints[j].inverseBind;
+        sc.joints.push_back(a);
+        sc.joints.push_back(c);
+    }
+    for (md::Mesh& mesh : sc.meshes)
+        for (md::Primitive& p : mesh.prims)
+            for (std::size_t iv = 0; iv < p.joints.size(); ++iv)
+                for (int q = 0; q < 4; ++q)
+                    if (p.weights[iv][q] > 0 && ajointDeform[p.joints[iv][q]] >= 0) p.joints[iv][q] = uint16_t(ajointDeform[p.joints[iv][q]] + 1);
+    const std::size_t cjAll = sc.joints.size();
+    // each joint's reach: its skin's farthest vertex at the bind (a rotation's error moves it by this much)
+    std::vector<float> areach(cjAll, 0.1f * unit);
+    for (const md::Mesh& mesh : sc.meshes)
+        for (const md::Primitive& p : mesh.prims)
+            for (std::size_t iv = 0; iv < p.joints.size(); ++iv)
+                for (int q = 0; q < 4; ++q)
+                    if (p.weights[iv][q] > 0)
+                    {
+                        const int j = p.joints[iv][q];
+                        areach[size_t(j)] = std::max(areach[size_t(j)], glm::length(p.pos[iv] - glm::vec3(glm::inverse(sc.joints[size_t(j)].inverseBind)[3])));
+                    }
+    // 2. the clips' keys: every joint's world (rigid; the deform joints: the game's matrix) per key, its local
+    // translation / rotation / scale from its parent's, fewer keys where the error stays within tolErr
+    const float tolErr = 0.0005f * unit;   // (0.5 mm)
+    double errMax = 0.0;
+    std::size_t ckey = 0;
+    for (std::size_t ia = 0; ia < apasegAnim.size(); ++ia)
+    {
+        ASEG* paseg = apasegAnim[ia];
+        std::vector<float> at;
+        std::vector<std::vector<glm::mat4>> aamat;   // per key, per joint: its world (the export's space, the joint's frame)
+        std::vector<glm::mat3> aQ(cjAll, glm::mat3(1.0f));   // (the deform rotations of the previous key: continuity)
+        if (!play(paseg, afCycle[ia], [&](float t) {
+                at.push_back(t);
+                std::vector<glm::mat4> amat(cjAll);
+                for (std::size_t j = 0; j < cj; ++j)
+                {
+                    const glm::mat4 w = worldOf(j);
+                    amat[j] = MatRigid(w);
+                    if (const int a = ajointDeform[j]; a >= 0)
+                    {
+                        const glm::mat3 K = glm::transpose(glm::mat3(amat[j])) * glm::mat3(w);
+                        glm::mat3 Q;
+                        glm::vec3 L;
+                        EigenSym3(0.5f * (K + glm::transpose(K)), aQ[size_t(a)], Q, L);
+                        // (no squash: the axes are any, the last ones kept so the keys stay still)
+                        if (glm::all(glm::lessThan(glm::abs(L - glm::vec3(1.0f)), glm::vec3(2e-4f)))) { Q = aQ[size_t(a)]; L = glm::vec3(1.0f); }
+                        aQ[size_t(a)] = Q;
+                        glm::mat4 wa = amat[j] * glm::mat4(Q * glm::mat3(glm::scale(glm::mat4(1.0f), L)));
+                        wa[3] = amat[j][3];
+                        amat[size_t(a)] = wa;
+                        glm::mat4 wc = amat[j] * glm::mat4(Q * glm::mat3(glm::scale(glm::mat4(1.0f), L)) * glm::transpose(Q));
+                        wc[3] = amat[j][3];
+                        amat[size_t(a) + 1] = wc;
+                    }
+                }
+                aamat.push_back(std::move(amat));
+            }))
+            continue;
         md::Animation an;
         an.name = "aseg_" + std::to_string(paseg->oid);
         bool fMoves = false;
-        for (const auto& [pxf, ij] : ajoint)
+        for (std::size_t j = 0; j < cjAll; ++j)
         {
-            const int ip = sc.joints[size_t(ij)].parent;
-            const XF* pxfParent = nullptr;
-            if (ip >= 0)
-                for (const auto& [p2, j2] : ajoint) if (j2 == ip) pxfParent = p2;
             md::Channel T, R, S;
-            T.joint = R.joint = S.joint = ij;
+            T.joint = R.joint = S.joint = int(j);
             T.path = 0; R.path = 1; S.path = 2;
             glm::quat qPrev(1, 0, 0, 0);
-            for (int f = 0; f < cframe; ++f)
+            const int ip = sc.joints[j].parent;
+            for (std::size_t k = 0; k < at.size(); ++k)
             {
-                const float t = tMax * float(f) / float(cframe - 1);
-                glm::mat4 m(1.0f);
-                CalculateAsegMatrices(paseg, palo, const_cast<XF*>(pxf), const_cast<XF*>(pxfParent), t, 0.0f, &m, nullptr);
-                glm::mat4 local = pxfParent ? C * m * Cinv : C * refInv * m * Cinv;
-                glm::vec3 sc3(glm::length(glm::vec3(local[0])), glm::length(glm::vec3(local[1])), glm::length(glm::vec3(local[2])));
-                glm::mat3 r(glm::vec3(local[0]) / sc3.x, glm::vec3(local[1]) / sc3.y, glm::vec3(local[2]) / sc3.z);
-                if (glm::determinant(r) < 0) { sc3.x = -sc3.x; r[0] = -r[0]; }
-                glm::quat q = glm::quat_cast(r);
+                const glm::mat4 local = ip >= 0 ? glm::inverse(aamat[k][size_t(ip)]) * aamat[k][j] : aamat[k][j];
+                glm::vec3 t, s;
+                glm::quat q;
+                DecomposeTrs(local, t, q, s);
                 if (glm::dot(q, qPrev) < 0) q = -q;
                 qPrev = q;
-                T.t.push_back(t); R.t.push_back(t); S.t.push_back(t);
-                T.v.push_back(glm::vec4(glm::vec3(local[3]), 0.0f));
+                T.t.push_back(at[k]); R.t.push_back(at[k]); S.t.push_back(at[k]);
+                T.v.push_back(glm::vec4(t, 0.0f));
                 R.v.push_back(glm::vec4(q.x, q.y, q.z, q.w));
-                S.v.push_back(glm::vec4(sc3, 0.0f));
-                if (f > 0 && (T.v[size_t(f)] != T.v[0] || R.v[size_t(f)] != R.v[0])) fMoves = true;
+                S.v.push_back(glm::vec4(s, 0.0f));
+                if (k > 0 && (glm::length(T.v[k] - T.v[0]) > 1e-5f || glm::length(R.v[k] - R.v[0]) > 1e-5f)) fMoves = true;
             }
             an.ch.push_back(std::move(T));
             an.ch.push_back(std::move(R));
             an.ch.push_back(std::move(S));
         }
         if (!fMoves) continue;
+        // fewer keys: each channel reduced, then keys put back (for the joint and the ones above it) wherever a joint's
+        // transform from its parents' keys, as a viewer interpolates them, moves its skin by more than tolErr
+        std::vector<std::vector<bool>> amask(an.ch.size());
+        for (std::size_t c = 0; c < an.ch.size(); ++c)
+            amask[c] = m_exportReduce ? MaskReduceKeys(an.ch[c], an.ch[c].path == 1 ? 0.25f * tolErr / areach[c / 3] : 0.25f * tolErr)
+                                      : std::vector<bool>(an.ch[c].t.size(), true);
+        double errClip = 0.0;
+        for (int pass = 0; pass < 64; ++pass)
+        {
+            std::vector<md::Channel> ach(an.ch.size());
+            for (std::size_t c = 0; c < an.ch.size(); ++c) ach[c] = ChannelMasked(an.ch[c], amask[c]);
+            bool fAdded = false;
+            errClip = 0.0;
+            for (std::size_t k = 0; k < at.size(); ++k)
+            {
+                std::vector<glm::mat4> aw(cjAll);
+                for (std::size_t j = 0; j < cjAll; ++j)
+                {
+                    const glm::vec4 t = SampleChannel(ach[3 * j], at[k]), r = SampleChannel(ach[3 * j + 1], at[k]), s = SampleChannel(ach[3 * j + 2], at[k]);
+                    const glm::mat4 l = MatTrs(glm::vec3(t), glm::quat(r.w, r.x, r.y, r.z), glm::vec3(s));
+                    aw[j] = sc.joints[j].parent >= 0 ? aw[size_t(sc.joints[j].parent)] * l : l;
+                    double e = glm::length(glm::vec3(aw[j][3] - aamat[k][j][3]));
+                    for (int c = 0; c < 3; ++c) e = std::max(e, double(glm::length(glm::vec3(aw[j][c] - aamat[k][j][c])) * areach[j]));
+                    errClip = std::max(errClip, e);
+                    // (the key back in the joint's own channels that miss their value there, else in the nearest joint's
+                    // above it)
+                    if (e > tolErr && pass < 63)
+                        for (int p = int(j); p >= 0; p = sc.joints[size_t(p)].parent)
+                        {
+                            bool fAny = false;
+                            for (int c = 0; c < 3; ++c)
+                            {
+                                const std::size_t ic = size_t(3 * p + c);
+                                if (amask[ic][k]) continue;
+                                const glm::vec4 v = SampleChannel(ach[ic], at[k]), w = an.ch[ic].v[k];
+                                const float d = an.ch[ic].path == 1 ? QuatAngle(v, w) : glm::length(glm::vec3(v - w));
+                                if (d > 1e-6f) { amask[ic][k] = true; fAny = true; }
+                            }
+                            if (fAny) { fAdded = true; break; }
+                        }
+                }
+            }
+            if (!fAdded || pass == 63) { an.ch = std::move(ach); break; }
+        }
+        errMax = std::max(errMax, errClip);
+        for (const md::Channel& ch : an.ch) ckey += ch.t.size();
         sc.anims.push_back(std::move(an));
-        ++canim;
     }
+    int cdeform = 0;
+    for (int a : ajointDeform) cdeform += a >= 0;
+    char sz[64];
+    std::snprintf(sz, sizeof(sz), "%.2f mm", errMax * 1000.0 / unit);
+    m_exportAnimInfo = std::to_string(sc.anims.size()) + " of " + std::to_string(apaseg.size()) + " clips " + (rig.fSolve ? "as in the game" : "(clip channels only)") +
+                       ", " + std::to_string(ckey) + " keys, largest error " + sz + (cdeform ? ", " + std::to_string(cdeform) + " joints with deform bones" : "");
+    if (std::getenv("SLY2N_EDITOR_EXPORTDBG"))
+    {
+        std::printf("export animations: %d keys a second; %s\n", fps, m_exportAnimInfo.c_str());
+        for (std::size_t j = 0; j < cj; ++j)
+            if (ajointDeform[j] >= 0) std::printf("export animations: %s squashed / sheared by up to %.3f\n", sc.joints[j].name.c_str(), adev[j]);
+    }
+}
+
+// The renderer's skinned vertices of the character at clip oidAseg's time t (-1: no clip), posed by the game's update
+// as the export bakes it and skinned by the renderer's own code (bone.cpp: the bindings made for it here, dropped
+// after), in the export's space (glTF: Y up, the file's units): per drawn group "glob NAME" then "x y z" lines in the
+// export's vertex order, and "xf OID RECORD x y z" per record. A check of an export (build/: gltfeval.py, Blender).
+bool CEditor::FPoseDump(LO* plo, int oidAseg, float t, bool fCycle, const std::string& path, std::string& error)
+{
+    ALO* palo = dynamic_cast<ALO*>(plo);
+    if (!palo || !palo->pglobset || !m_psw) { error = "select a character"; return false; }
+    ASEG* paseg = nullptr;
+    std::function<void(LO*)> find = [&](LO* p) {
+        if (FCidDerivedFrom(p->Cid(), 0x6D) && p->oid == oidAseg) paseg = static_cast<ASEG*>(p);
+        if (const auto it = m_mpchildren.find(p); it != m_mpchildren.end())
+            for (LO* c : it->second) find(c);
+    };
+    find(plo);
+    if (oidAseg >= 0 && !paseg) { error = "no clip " + std::to_string(oidAseg) + " under the character"; return false; }
+    std::FILE* pf = std::fopen(path.c_str(), "w");
+    if (!pf) { error = "cannot write " + path; return false; }
+    const float scale = m_importScale > 0 ? m_importScale : 100.0f;
+    const glm::mat4 C = glm::scale(glm::mat4(glm::transpose(AxisToGame())), glm::vec3(1.0f / scale));
+    const glm::mat4 refInv = glm::inverse(MatWorldOfAlo(palo));
+    BindAloBones(palo);   // (the bindings at the editor's (never animated) pose, as the game's post-load makes them)
+    {
+        POSER poser(m_psw.get(), palo, paseg ? std::vector<ASEG*>{paseg} : std::vector<ASEG*>{}, m_exportAnim == 0);
+        ASEGA* pasega = paseg ? poser.Play(paseg) : nullptr;
+        for (int i = 0; i < 30; ++i) poser.Step(pasega, 0.0f, 1.0f / 60.0f);
+        // (fCycle: played twice through first, as the export plays a cycle)
+        if (const int cstepClip = paseg ? int(std::ceil(PasegdOf(paseg)->tMax * 60.0f - 1e-3f)) : 0; fCycle && cstepClip > 0)
+            for (int i = 0; i < 2 * cstepClip; ++i) poser.Step(pasega, float(i % cstepClip) / 60.0f, 1.0f / 60.0f);
+        const int cstep = std::max(0, int(std::ceil(t * 60.0f - 1e-3f)));
+        for (int i = 0; i <= cstep; ++i) poser.Step(pasega, std::min(float(i) / 60.0f, t), 1.0f / 60.0f);
+        const GLOBSET& gs = *palo->pglobset;
+        const auto* paabind = PaabindOfAlo(palo);
+        for (std::size_t ig = 0; ig < gs.aglob.size(); ++ig)
+        {
+            const GLOB& glob = gs.aglob[ig];
+            if (glob.meshk != MESHK_Strips) continue;
+            const GLOB& geom = glob.iglobTemplate >= 0 && glob.avtx.empty() ? gs.aglob[size_t(glob.iglobTemplate)] : glob;
+            // (the renderer's choice, scenesw.cpp: an instance with bones has its own binding)
+            const int iglobBind = glob.iglobTemplate >= 0 && glob.abone.empty() ? glob.iglobTemplate : int(ig);
+            std::vector<glm::mat4> amat;
+            const bool fSkin = !geom.abone.empty() && FGlobBoneMatricesOf(paabind, iglobBind, &amat);
+            const XF* pxfOwner = glob.oidOwner >= 0 ? PxfFindAlo(palo, glob.oidOwner) : nullptr;
+            glm::mat4 m = pxfOwner ? pxfOwner->matWorld : MatWorldOfAlo(palo);
+            if (glob.fMatrix) m = m * glob.dmat;
+            std::fprintf(pf, "glob %s_%d_%zu\n", SzClassRaw(palo->Cid()), palo->oid, ig);
+            // (the export's order: each part's vertices as its triangles first use them)
+            std::vector<uint32_t> aiv;
+            for (const SUBGLOB& sub : geom.asubglob)
+            {
+                std::set<uint32_t> setv;
+                for (uint32_t k = 0; k < sub.indexCount; ++k)
+                    if (setv.insert(geom.aindex[sub.firstIndex + k]).second) aiv.push_back(geom.aindex[sub.firstIndex + k]);
+            }
+            for (uint32_t iv : aiv)
+            {
+                const VTXGLOB& v = geom.avtx[iv];
+                glm::vec4 p(0.0f);
+                if (fSkin)
+                {
+                    // (light.cpp's sum: the weights as they are, a slot past the bones is the last one)
+                    for (int q = 0; q < 4; ++q)
+                        if (v.aw[q]) p += (float(v.aw[q]) / 255.0f) * (amat[std::min<size_t>(v.abone[q], amat.size() - 1)] * glm::vec4(v.pos, 1.0f));
+                }
+                else p = m * glm::vec4(v.pos, 1.0f);
+                const glm::vec3 e = glm::vec3(C * refInv * glm::vec4(glm::vec3(p), 1.0f));
+                std::fprintf(pf, "%.5f %.5f %.5f\n", e.x, e.y, e.z);
+            }
+        }
+        for (std::size_t i = 0; i < palo->axf.size(); ++i)
+        {
+            const glm::vec3 e = glm::vec3(C * refInv * palo->axf[i]->matWorld[3]);
+            std::fprintf(pf, "xf %d %zu %.5f %.5f %.5f\n", palo->oid, i, e.x, e.y, e.z);
+        }
+    }
+    SetAloBoneBindings(palo, {});   // (unbound again: the editor draws it as it did)
+    std::fclose(pf);
+    Status("pose of clip " + std::to_string(oidAseg) + " at " + std::to_string(t) + " written to " + path);
+    return true;
+}
+
+// A character (with the objects under it) posed by a clip at its time tClip as the game poses it (the cutscene editor's
+// playhead): each of its records' world matrix relative to its object record (PxfObj: where the trace places it), the
+// records' own state given back after. Its skin bound first (at the editor's pose, the bind pose) so the renderer
+// skins it with the records' worlds the caller sets. paseg null: its rest pose (the joints solved).
+bool CEditor::FPoseCharacter(LO* plo, LO* plAseg, float tClip, std::vector<std::pair<XF*, glm::mat4>>& arel)
+{
+    arel.clear();
+    ALO* palo = dynamic_cast<ALO*>(plo);
+    if (!palo || !m_psw) return false;
+    ASEG* paseg = plAseg && FCidDerivedFrom(plAseg->Cid(), 0x6D) ? static_cast<ASEG*>(plAseg) : nullptr;
+    // (the tree's skins bound once, at the pose they stand in now: the editor's world is never animated)
+    for (const auto& up : m_psw->aploAll)
+        if (FCidDerivedFrom(up->Cid(), 0x30) && FLoInParentChain(up.get(), palo))
+        {
+            ALO* p = static_cast<ALO*>(up.get());
+            const auto* paab = PaabindOfAlo(p);
+            if (p->pglobset && (!paab || paab->empty())) BindAloBones(p);
+        }
+    XF* pxfObj = PxfObj(palo) ? PxfObj(palo) : palo->axf.empty() ? nullptr : palo->axf[0].get();
+    if (!pxfObj) return false;
+    {
+        POSER poser(m_psw.get(), palo, paseg ? std::vector<ASEG*>{paseg} : std::vector<ASEG*>{}, true);
+        ASEGA* pasega = paseg ? poser.Play(paseg) : nullptr;
+        const float t = paseg ? std::clamp(tClip, 0.0f, PasegdOf(paseg) ? PasegdOf(paseg)->tMax : tClip) : 0.0f;
+        // (a few steps at that time: the joints and chains settle)
+        for (int i = 0; i < 4; ++i) poser.Step(pasega, t, 1.0f / 60.0f);
+        const glm::mat4 inv = glm::inverse(pxfObj->matWorld);
+        for (ALO* p : poser.Apalo())
+            for (auto& up : p->axf) arel.push_back({up.get(), inv * up->matWorld});
+    }
+    return !arel.empty();
+}
+
+// The bindings FPoseCharacter made taken away again (the editor draws the character unskinned, as it did)
+void CEditor::UnbindPosed(LO* plo)
+{
+    ALO* palo = dynamic_cast<ALO*>(plo);
+    if (!palo || !m_psw) return;
+    for (const auto& up : m_psw->aploAll)
+        if (FCidDerivedFrom(up->Cid(), 0x30) && FLoInParentChain(up.get(), palo) && PaabindOfAlo(static_cast<ALO*>(up.get())))
+            SetAloBoneBindings(static_cast<ALO*>(up.get()), {});
 }
 
 // ---- GLB export: an object (with its children), its whole group, or a character with its skeleton
@@ -1795,6 +2632,10 @@ bool CEditor::FExportGlb(LO* plo, int kind, const std::string& path, std::string
     // game -> glTF: (x, y, z) -> (x, z, -y) / scale
     const glm::mat4 C = glm::scale(glm::mat4(glm::transpose(AxisToGame())), glm::vec3(1.0f / scale));
     const glm::mat4 Cinv = glm::inverse(C);
+    // a character: the skeleton's root joint is its placement record; the bind pose is its records' worlds as they
+    // stand (MatBindWorld), the animations are the game's poses relative to the same record (ExportAnimations)
+    ALO* paloChar = kind == 2 ? dynamic_cast<ALO*>(plo) : nullptr;
+    const XF* pxfPlace = paloChar && !paloChar->axf.empty() ? paloChar->axf[0].get() : nullptr;
     md::Scene sc;
     std::map<const SHD*, int> mpmat;
     std::map<const XF*, int> mpjoint;
@@ -1831,12 +2672,13 @@ bool CEditor::FExportGlb(LO* plo, int kind, const std::string& path, std::string
         int ixf = 0;
         if (pa) for (std::size_t k = 0; k < pa->axf.size(); ++k) if (pa->axf[k].get() == pxf) ixf = int(k);
         j.name = std::string(pa ? SzClassRaw(pa->Cid()) : "XF") + "#" + std::to_string(pa ? pa->oid : 0) + "." + std::to_string(ixf);
-        j.inverseBind = glm::inverse(C * refInv * pxf->matWorld * Cinv);
+        j.inverseBind = glm::inverse(C * refInv * MatBindWorld(pxf) * Cinv);
         const int i = int(sc.joints.size());
         sc.joints.push_back(j);
         mpjoint[pxf] = i;
         return i;
     };
+    if (pxfPlace) jointOf(pxfPlace);   // (joint 0: the character's placement, the skeleton's root)
     std::size_t ctri = 0;
     for (ALO* palo : apalo)
     {
@@ -1848,16 +2690,20 @@ bool CEditor::FExportGlb(LO* plo, int kind, const std::string& path, std::string
             if (glob.meshk != MESHK_Strips) continue;
             const GLOB& geom = glob.iglobTemplate >= 0 && glob.avtx.empty() ? gs.aglob[size_t(glob.iglobTemplate)] : glob;
             const XF* pxfOwner = glob.oidOwner >= 0 ? PxfFindAlo(palo, glob.oidOwner) : nullptr;
-            glm::mat4 m = pxfOwner ? pxfOwner->matWorld : MatWorldOfAlo(palo);
+            // (a character: a part that follows a record (else its placement) is bound to it as a one-bone skin)
+            const XF* pxfRigid = kind == 2 && geom.abone.empty() ? (pxfOwner ? pxfOwner : palo->axf.empty() ? nullptr : palo->axf[0].get()) : nullptr;
+            glm::mat4 m = pxfOwner ? pxfOwner->matWorld : pxfRigid ? pxfRigid->matWorld : MatWorldOfAlo(palo);
             if (glob.fMatrix) m = m * glob.dmat;
+            // (a character's skinned part as the game binds it (bone.cpp BindAloBones): its vertices in its owner record's
+            // space at the bind, else in the world's; no instance matrix (the bones' matrices replace it))
+            if (kind == 2 && !geom.abone.empty()) m = pxfOwner ? pxfOwner->matWorld : glm::mat4(1.0f);
             const glm::mat4 M = C * refInv * m;
             const glm::mat3 N = glm::transpose(glm::inverse(glm::mat3(M)));
             // skinned: the bones' records as joints
             std::vector<int> ajointOfBone;
-            // (a character: a part that follows a record is bound to it as a one-bone skin)
-            const bool fRigid = kind == 2 && geom.abone.empty() && pxfOwner;
+            const bool fRigid = pxfRigid != nullptr;
             const bool fSkin = !geom.abone.empty() || fRigid;
-            if (fRigid) ajointOfBone.push_back(jointOf(pxfOwner));
+            if (fRigid) ajointOfBone.push_back(jointOf(pxfRigid));
             else if (fSkin)
                 for (const GLOBBONE& b : geom.abone)
                 {
@@ -1895,8 +2741,9 @@ bool CEditor::FExportGlb(LO* plo, int kind, const std::string& path, std::string
                             float wsum = 0;
                             for (int q = 0; q < 4 && !fRigid; ++q)
                             {
-                                const int ib = v.abone[q];
-                                if (v.aw[q] == 0 || ib >= int(ajointOfBone.size()) || ajointOfBone[size_t(ib)] < 0) continue;
+                                // (a slot past the group's bones is its last one, as the renderer reads it: light.cpp)
+                                const int ib = std::min(int(v.abone[q]), int(ajointOfBone.size()) - 1);
+                                if (v.aw[q] == 0 || ib < 0 || ajointOfBone[size_t(ib)] < 0) continue;
                                 j[q] = uint16_t(ajointOfBone[size_t(ib)]);
                                 w[q] = v.aw[q] / 255.0f;
                                 wsum += w[q];
@@ -1925,13 +2772,18 @@ bool CEditor::FExportGlb(LO* plo, int kind, const std::string& path, std::string
         }
     }
     if (sc.meshes.empty()) { error = "the selection has no drawn model to export"; return false; }
-    // the joints' parents (the nearest joint up the records' references) and rest poses
+    // (raw clip channels: the limbs' targets as joints of their own, to rebuild the joints with IK constraints)
+    if (paloChar && m_exportAnim == 1)
+        for (const ALOPAIR& q : paloChar->apair)
+            if (q.apxf[0] && q.apxf[1] && q.apxf[2]) jointOf(q.apxf[0]);
+    // the joints' parents (the nearest joint up the records' references; a character's: else its root) and rest poses
     for (auto& [pxf, ij] : mpjoint)
     {
-        const glm::mat4 world = C * refInv * pxf->matWorld * Cinv;
+        const glm::mat4 world = C * refInv * MatBindWorld(pxf) * Cinv;
         int ip = -1;
         for (const XF* p = pxf->pxfRef; p; p = p->pxfRef)
             if (const auto it = mpjoint.find(p); it != mpjoint.end()) { ip = it->second; break; }
+        if (ip < 0 && pxfPlace && pxf != pxfPlace) ip = mpjoint[pxfPlace];
         sc.joints[size_t(ij)].parent = ip;
         sc.joints[size_t(ij)].local = ip >= 0 ? sc.joints[size_t(ip)].inverseBind * world : world;
     }
@@ -1954,11 +2806,20 @@ bool CEditor::FExportGlb(LO* plo, int kind, const std::string& path, std::string
                     for (int q = 0; q < 4; ++q) j[q] = uint16_t(newOf[j[q]]);
         for (auto& [pxf, ij] : mpjoint) ij = newOf[size_t(ij)];
     }
-    if (kind == 2) ExportAnimations(plo, sc, mpjoint, C, refInv);
+    m_exportAnimInfo.clear();
+    if (paloChar)
+    {
+        EXPORTRIG rig;
+        BuildRig(paloChar, sc, mpjoint, C, refInv, m_exportAnim == 1, rig.apxf, rig.amatFrame);
+        rig.C = C;
+        rig.fSolve = m_exportAnim == 0;
+        ExportAnimations(plo, sc, rig);
+    }
     if (!md::saveGlb(ce::pathOf(path), sc, error)) return false;
     m_lastExport = path;
     Status("exported " + std::to_string(sc.meshes.size()) + " meshes, " + std::to_string(ctri) + " triangles, " + std::to_string(sc.materials.size()) + " materials, " +
-           std::to_string(sc.joints.size()) + " joints, " + std::to_string(sc.anims.size()) + " animations to " + path);
+           std::to_string(sc.joints.size()) + " joints, " + std::to_string(sc.anims.size()) + " animations to " + path +
+           (paloChar ? " (animations: " + m_exportAnimInfo + ")" : std::string()));
     return true;
 }
 
@@ -2027,6 +2888,29 @@ void Tip(const char* sz)
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", sz);
 }
 const char* SzExportKind(int k) { return k == 0 ? "the object (with its children)" : k == 1 ? "its whole group (the world part)" : "a character (skeleton + animations)"; }
+
+// A character export's animation options (ExportAnimations): as the game shows them, or the clips' channels only
+void DrawCharAnimOptions(int& mode, int& fps, bool& fReduce)
+{
+    ImGui::SetNextItemWidth(std::min(260.0f, ImGui::GetContentRegionAvail().x));
+    const char* asz[2] = {"Animations as in the game", "Clip channels only (no IK)"};
+    if (ImGui::BeginCombo("##exportanim", asz[mode == 1 ? 1 : 0]))
+    {
+        for (int k = 0; k < 2; ++k) if (ImGui::Selectable(asz[k], mode == k)) mode = k;
+        ImGui::EndCombo();
+    }
+    Tip("As in the game: every clip played through the game's own update (the limbs' two-bone joints solved, links and "
+        "chains, squash and stretch) and each joint baked per frame: Blender shows what the game shows.\n"
+        "Clip channels only: the clips' keys without the solvers (the limbs stay at rest while the hands / feet move); "
+        "the limbs' targets are extra joints and the root's custom properties (safehouse_ik) list each limb's joints, to "
+        "rebuild them with IK constraints.");
+    bool f60 = fps >= 60;
+    if (ImGui::Checkbox("60 keys/s", &f60)) fps = f60 ? 60 : 30;
+    Tip("60: a key at every game step (exact at each frame the game draws); 30: half as many before the reduction.");
+    ImGui::SameLine();
+    ImGui::Checkbox("Fewer keys", &fReduce);
+    Tip("Keys dropped where the joints stay within 0.5 mm (at 1 unit = 1 m) of the game's pose.");
+}
 }  // namespace
 
 void CEditor::DrawModelSection(LO* plo)
@@ -2065,6 +2949,7 @@ void CEditor::DrawModelSection(LO* plo)
         for (int k = 0; k < 3; ++k) if (ImGui::Selectable(SzExportKind(k), m_exportKind == k)) m_exportKind = k;
         ImGui::EndCombo();
     }
+    if (m_exportKind == 2) DrawCharAnimOptions(m_exportAnim, m_exportFps, m_exportReduce);
     const std::vector<SHD*> apshd = ApshdOfAlo(palo);
     for (std::size_t i = 0; i < apshd.size(); ++i)
     {
@@ -2161,6 +3046,7 @@ void CEditor::DrawModels()
     {
         if (ImGui::RadioButton(SzExportKind(k), m_exportKind == k)) m_exportKind = k;
     }
+    if (m_exportKind == 2) DrawCharAnimOptions(m_exportAnim, m_exportFps, m_exportReduce);
     if (ImGui::Button("Export the selection as GLB..."))
         OpenFileDialog("Export as GLB", ".glb", m_exportPath, [this](const std::string& path) {
             std::string e;
@@ -2170,7 +3056,8 @@ void CEditor::DrawModels()
     ImGui::EndDisabled();
     if (!m_lastExport.empty()) ImGui::TextColored(st::vec(st::muted), "Last: %s", m_lastExport.c_str());
     ImGui::SeparatorText("Round trip");
-    ImGui::TextWrapped("A character exported here keeps its joints' names (\"MURRAY#9.31\": object 9, record 31). Edit the mesh in Blender, keep "
+    ImGui::TextWrapped("A character exported here keeps its joints' names (\"MURRAY#9.31\": object 9, record 31; a limb's joints add "
+                       "their part, \"_thigh_L\"; \"_deform\" joints carry a joint's squash and stretch). Edit the mesh in Blender, keep "
                        "the armature and the names, and import it back in place of the character's model: it stays skinned and animated. "
                        "Imported parts have no shader animations (blinks, scrolling) and use the level's lights.");
 }

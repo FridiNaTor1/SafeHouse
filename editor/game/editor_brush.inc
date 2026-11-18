@@ -71,7 +71,8 @@ md::Image GridImage(uint32_t rgb)
         }
     return img;
 }
-const char* const s_aszShape[] = {"Block", "Ramp", "Stairs", "Cylinder", "Floor"};
+const char* const s_aszShape[] = {"Block", "Ramp", "Stairs", "Cylinder", "Floor", "Crawl tunnel", "Mesh"};
+constexpr int c_cshape = 7;
 }  // namespace
 
 bool CEditor::FBuildBrush(const BRUSH& b, md::Scene& sc, std::vector<CONVEX>& acv, std::string& error)
@@ -79,7 +80,7 @@ bool CEditor::FBuildBrush(const BRUSH& b, md::Scene& sc, std::vector<CONVEX>& ac
     sc = md::Scene();
     acv.clear();
     md::Mesh mesh;
-    mesh.name = std::string("brush_") + s_aszShape[std::clamp(b.shape, 0, 4)];
+    mesh.name = std::string("brush_") + s_aszShape[std::clamp(b.shape, 0, c_cshape - 1)];
     md::Primitive pr;
     pr.material = 0;
     const glm::vec3 s = glm::max(b.size, glm::vec3(1.0f));
@@ -88,6 +89,13 @@ bool CEditor::FBuildBrush(const BRUSH& b, md::Scene& sc, std::vector<CONVEX>& ac
     {
     case 0: AddBox(pr, acv, glm::vec3(-hx, -hy, 0), glm::vec3(hx, hy, s.z), b.texScale); break;
     case 4: AddBox(pr, acv, glm::vec3(-hx, -hy, -std::min(s.z, 32.0f)), glm::vec3(hx, hy, 0), b.texScale); break;
+    case 5:
+        // a crawl tunnel along y: the inside width x, the ceiling's underside at z (lower than a standing player, 200
+        // above him keeps the crawl going: interact.cpp FInteractCovered), side walls and the ceiling 32 thick
+        AddBox(pr, acv, glm::vec3(-hx - 32.0f, -hy, 0), glm::vec3(-hx, hy, s.z), b.texScale);
+        AddBox(pr, acv, glm::vec3(hx, -hy, 0), glm::vec3(hx + 32.0f, hy, s.z), b.texScale);
+        AddBox(pr, acv, glm::vec3(-hx - 32.0f, -hy, s.z), glm::vec3(hx + 32.0f, hy, s.z + 32.0f), b.texScale);
+        break;
     case 1:
     {
         // a wedge rising toward +y: 0 1 at the low front edge, 2 3 at the top back edge
@@ -127,19 +135,41 @@ bool CEditor::FBuildBrush(const BRUSH& b, md::Scene& sc, std::vector<CONVEX>& ac
         AddPiece(pr, acv, a, af, b.texScale, true);
         break;
     }
+    case 6:
+    {
+        // an edited brush (editor_brushedit.inc): its convex pieces, each face in its material slot's primitive
+        const std::size_t cmat = 1 + b.amat.size();
+        std::vector<md::Primitive> apr(cmat);
+        for (std::size_t m = 0; m < cmat; ++m) apr[m].material = int(m);
+        std::vector<CONVEX> acvNone;
+        for (std::size_t i = 0; i < b.apiece.size(); ++i)
+        {
+            const CONVEX& cv = b.apiece[i];
+            for (std::size_t j = 0; j < cv.aface.size(); ++j)
+            {
+                int m = i < b.afaceMat.size() && j < b.afaceMat[i].size() ? b.afaceMat[i][j] : 0;
+                if (m < 0 || std::size_t(m) >= cmat) m = 0;
+                AddPiece(apr[std::size_t(m)], acvNone, cv.apos, {cv.aface[j]}, b.texScale, false);
+            }
+            acv.push_back(cv);
+        }
+        if (acv.empty()) { error = "the brush has no pieces"; return false; }
+        pr = std::move(apr[0]);
+        for (std::size_t m = 1; m < cmat; ++m)
+            if (!apr[m].idx.empty()) mesh.prims.push_back(std::move(apr[m]));
+        break;
+    }
     default: error = "no such shape"; return false;
     }
-    mesh.prims.push_back(std::move(pr));
+    mesh.prims.insert(mesh.prims.begin(), std::move(pr));
     sc.meshes.push_back(std::move(mesh));
-    md::Material mat;
-    mat.name = "brush";
-    mat.image = 0;
-    // the texture: another object's first material (exported through the GLB path), else a grid of the colour
+    // the texture of a slot: another object's first material (exported through the GLB path), else a grid of the colour
+    auto addImage = [&](int texFrom, uint32_t rgb) {
     bool fTex = false;
-    if (b.texFrom > 0)
-        if (LO* psrc = PloOid(b.texFrom))
+    if (texFrom > 0)
+        if (LO* psrc = PloOid(texFrom))
         {
-            const cane::fs::path tmp = m_proj.dir / "editor" / "brushes" / ("tex_" + std::to_string(b.texFrom) + ".glb");
+            const cane::fs::path tmp = m_proj.dir / "editor" / "brushes" / ("tex_" + std::to_string(texFrom) + ".glb");
             std::error_code ec;
             cane::fs::create_directories(tmp.parent_path(), ec);
             md::Scene scs;
@@ -159,8 +189,15 @@ bool CEditor::FBuildBrush(const BRUSH& b, md::Scene& sc, std::vector<CONVEX>& ac
                 if (iimg >= 0 && std::size_t(iimg) < scs.images.size()) { sc.images.push_back(scs.images[std::size_t(iimg)]); fTex = true; }
             }
         }
-    if (!fTex) sc.images.push_back(GridImage(b.rgb));
+    if (!fTex) sc.images.push_back(GridImage(rgb));
+    md::Material mat;
+    mat.name = "brush" + std::to_string(sc.materials.size());
+    mat.image = int(sc.images.size()) - 1;
     sc.materials.push_back(mat);
+    };
+    addImage(b.texFrom, b.rgb);
+    if (b.shape == 6)
+        for (const BRUSHMAT& m : b.amat) addImage(m.texFrom, m.rgb);
     return true;
 }
 
@@ -213,7 +250,7 @@ int CEditor::CreateBrush(const BRUSH& bIn, const glm::vec3* ppos, std::string& e
     }
     m_abrush.push_back(b);
     SaveBrushes();
-    Status(std::string(T("made")) + " " + T(s_aszShape[std::clamp(b.shape, 0, 4)]) + " " + std::to_string(b.oid) + " (" + std::to_string(acv.size()) + " " + T("collision pieces") + ")");
+    Status(std::string(T("made")) + " " + T(s_aszShape[std::clamp(b.shape, 0, c_cshape - 1)]) + " " + std::to_string(b.oid) + " (" + std::to_string(acv.size()) + " " + T("collision pieces") + ")");
     return b.oid;
 }
 
@@ -252,8 +289,27 @@ void CEditor::SaveBrushes()
 {
     nlohmann::json a = nlohmann::json::array();
     for (const BRUSH& b : m_abrush)
-        a.push_back({{"shape", s_aszShape[std::clamp(b.shape, 0, 4)]}, {"size", {b.size.x, b.size.y, b.size.z}}, {"steps", b.steps},
-                     {"segments", b.segments}, {"tex_scale", b.texScale}, {"tex_from", b.texFrom}, {"rgb", b.rgb}, {"oid", b.oid}});
+    {
+        nlohmann::json e = {{"shape", s_aszShape[std::clamp(b.shape, 0, c_cshape - 1)]}, {"size", {b.size.x, b.size.y, b.size.z}}, {"steps", b.steps},
+                            {"segments", b.segments}, {"tex_scale", b.texScale}, {"tex_from", b.texFrom}, {"rgb", b.rgb}, {"oid", b.oid}};
+        if (b.shape == 6)
+        {
+            // (a mesh brush: its pieces' points and faces, each face's material slot, the extra slots)
+            nlohmann::json ap = nlohmann::json::array();
+            for (std::size_t i = 0; i < b.apiece.size(); ++i)
+            {
+                nlohmann::json pts = nlohmann::json::array(), fcs = nlohmann::json::array();
+                for (const glm::vec3& p : b.apiece[i].apos) pts.push_back({p.x, p.y, p.z});
+                for (const auto& f : b.apiece[i].aface) fcs.push_back(f);
+                ap.push_back({{"points", pts}, {"faces", fcs}, {"face_materials", i < b.afaceMat.size() ? nlohmann::json(b.afaceMat[i]) : nlohmann::json::array()}});
+            }
+            e["pieces"] = ap;
+            nlohmann::json am = nlohmann::json::array();
+            for (const BRUSHMAT& m : b.amat) am.push_back({{"tex_from", m.texFrom}, {"rgb", m.rgb}});
+            e["materials"] = am;
+        }
+        a.push_back(e);
+    }
     const std::string s = nlohmann::json({{"brushes", a}}).dump(1);
     ce::writeFile(m_proj.dir / "editor" / "brushes.json", std::vector<uint8_t>(s.begin(), s.end()));
 }
@@ -270,7 +326,7 @@ void CEditor::LoadBrushes()
         if (!e.is_object()) continue;
         BRUSH b;
         const std::string shape = e.value("shape", std::string("Block"));
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < c_cshape; ++i)
             if (shape == s_aszShape[i]) b.shape = i;
         if (e.contains("size") && e["size"].is_array() && e["size"].size() == 3) b.size = glm::vec3(e["size"][0].get<float>(), e["size"][1].get<float>(), e["size"][2].get<float>());
         b.steps = e.value("steps", b.steps);
@@ -279,6 +335,27 @@ void CEditor::LoadBrushes()
         b.texFrom = e.value("tex_from", 0);
         b.rgb = e.value("rgb", b.rgb);
         b.oid = e.value("oid", 0);
+        if (e.contains("pieces") && e["pieces"].is_array())
+            for (const auto& p : e["pieces"])
+            {
+                CONVEX cv;
+                for (const auto& q : p.value("points", nlohmann::json::array()))
+                    if (q.is_array() && q.size() == 3) cv.apos.push_back(glm::vec3(q[0].get<float>(), q[1].get<float>(), q[2].get<float>()));
+                for (const auto& f : p.value("faces", nlohmann::json::array()))
+                {
+                    std::vector<int> af;
+                    for (const auto& k : f)
+                        if (k.is_number_integer() && k.get<int>() >= 0 && k.get<int>() < int(cv.apos.size())) af.push_back(k.get<int>());
+                    if (af.size() >= 3) cv.aface.push_back(af);
+                }
+                std::vector<int> am;
+                for (const auto& k : p.value("face_materials", nlohmann::json::array()))
+                    if (k.is_number_integer()) am.push_back(k.get<int>());
+                b.apiece.push_back(cv);
+                b.afaceMat.push_back(am);
+            }
+        if (e.contains("materials") && e["materials"].is_array())
+            for (const auto& m : e["materials"]) b.amat.push_back({m.value("tex_from", 0), m.value("rgb", 0xB8B8B8u)});
         m_abrush.push_back(b);
     }
 }
@@ -288,7 +365,7 @@ void CEditor::DrawBrushTools()
     ImGui::SeparatorText(T("Brushes"));
     ImGui::TextColored(st::vec(st::muted), "%s", T("New geometry with collision, made in front of the camera on the ground."));
     BRUSH& b = m_brushNew;
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < c_cshape - 1; ++i)   // (Mesh: an edited brush, not made from here)
     {
         if (i) ImGui::SameLine();
         if (ImGui::RadioButton(T(s_aszShape[i]), b.shape == i)) b.shape = i;
@@ -322,10 +399,13 @@ void CEditor::DrawBrushProperties(LO* plo)
     if (!pb || !ImGui::CollapsingHeader(TL("Brush", "brushprops").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) return;
     BRUSH b = *pb;
     bool f = false;
-    ImGui::TextColored(st::vec(st::muted), "%s", T(s_aszShape[std::clamp(b.shape, 0, 4)]));
-    ImGui::SetNextItemWidth(-140);
-    ImGui::DragFloat3(T("Size"), glm::value_ptr(b.size), 4.0f, 8.0f, 20000.0f, "%.0f");
-    f |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::TextColored(st::vec(st::muted), "%s", T(s_aszShape[std::clamp(b.shape, 0, c_cshape - 1)]));
+    if (b.shape != 6)
+    {
+        ImGui::SetNextItemWidth(-140);
+        ImGui::DragFloat3(T("Size"), glm::value_ptr(b.size), 4.0f, 8.0f, 20000.0f, "%.0f");
+        f |= ImGui::IsItemDeactivatedAfterEdit();
+    }
     if (b.shape == 2) { ImGui::SliderInt(T("Steps"), &b.steps, 1, 32); f |= ImGui::IsItemDeactivatedAfterEdit(); }
     if (b.shape == 3) { ImGui::SliderInt(T("Sides"), &b.segments, 3, 48); f |= ImGui::IsItemDeactivatedAfterEdit(); }
     ImGui::DragFloat(T("Texture size"), &b.texScale, 4.0f, 16.0f, 4096.0f, "%.0f");
@@ -336,8 +416,14 @@ void CEditor::DrawBrushProperties(LO* plo)
         std::string error;
         if (!FRebuildBrush(*pb, error)) Status(std::string(T("brush")) + ": " + error);
     }
+    if ((pb = PbrushOf(plo)) != nullptr) DrawBrushEditTools(*pb);   // (editor_brushedit.inc)
 }
 #else
+int CEditor::CreateBrush(const BRUSH&, const glm::vec3*, std::string& error)
+{
+    error = "brushes: not for " EDGAME_NAME " yet";
+    return 0;
+}
 void CEditor::LoadBrushes() {}
 void CEditor::DrawBrushTools() { ImGui::TextDisabled("(brushes: not for " EDGAME_NAME " yet)"); }
 void CEditor::DrawBrushProperties(LO*) {}

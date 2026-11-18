@@ -154,6 +154,20 @@ if(SLY2_EDITOR)
             -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h -P ${CANE_ROOT}/cmake/embed-font.cmake
     DEPENDS ${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf ${CANE_ROOT}/cmake/embed-font.cmake VERBATIM)
   target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h")
+  # the 3D editor's strings in the launcher's languages (editor/lang/<code>.json, editor_lang.inc) and the Noto letters
+  # Atkinson Hyperlegible lacks (Cyrillic, kana, kanji, Hangul: the launcher's subsets, scripts/make-launcher-l10n-fonts.py)
+  file(GLOB sly2n_editor_lang_files CONFIGURE_DEPENDS "${CANE_ROOT}/editor/lang/*.json")
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_lang.h"
+    COMMAND ${CMAKE_COMMAND} -DDIR=${CANE_ROOT}/editor/lang -DPREFIX=cane_editor3d_lang
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_lang.h -P ${CANE_ROOT}/cmake/embed-lang.cmake
+    DEPENDS ${sly2n_editor_lang_files} ${CANE_ROOT}/cmake/embed-lang.cmake VERBATIM)
+  set(sly2n_l10n_fonts "${CANE_ROOT}/launcher/assets/l10n/NotoSans-Regular.subset.ttf;${CANE_ROOT}/launcher/assets/l10n/NotoSansCJKjp-Regular.subset.otf")
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_l10n_fonts.h"
+    COMMAND ${CMAKE_COMMAND} "-DFILES=${sly2n_l10n_fonts}" "-DSYMBOLS=cane_editor3d_noto;cane_editor3d_cjk"
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_l10n_fonts.h -P ${CANE_ROOT}/cmake/embed-files.cmake
+    DEPENDS ${sly2n_l10n_fonts} ${CANE_ROOT}/cmake/embed-files.cmake VERBATIM)
+  target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_lang.h" "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_l10n_fonts.h")
+  target_compile_definitions(Sly2-Release PRIVATE CANE_EDITOR3D_L10N=1)
   target_link_libraries(Sly2-Release PRIVATE cane_editor_core cane_editor_model)
   target_compile_definitions(Sly2-Release PRIVATE SLY2_EDITOR=1)
 endif()

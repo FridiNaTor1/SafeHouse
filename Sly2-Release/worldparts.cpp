@@ -1,5 +1,6 @@
 // PC addition: the unravelled world files (worldparts.h).
 #include "worldparts.h"
+#include "splicenames.h"
 
 #include "eval.h"
 #include "ref.h"
@@ -1195,7 +1196,9 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
                 }
                 else if (fmt == "splice-text")
                 {
-                    if (!FSpliceFromText(std::string(abFile.begin(), abFile.end()), abPart, err)) throw std::runtime_error(rel + ": " + err);
+                    // (a mod's scripts may be readable: names compiled to the game's numbers, splicenames.h; the
+                    // converter's text compiles as it always did)
+                    if (!FSpliceTextToBytes(std::string(abFile.begin(), abFile.end()), abPart, err)) throw std::runtime_error(rel + ": " + err);
                 }
                 else
                 {

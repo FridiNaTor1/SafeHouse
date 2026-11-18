@@ -362,6 +362,7 @@ private:
     void start3d(int record, const std::string& project) {
         std::vector<std::string> a = baseArgs();
         a.insert(a.end(), {"--editor", std::to_string(record), "--editor-project", project});
+        a.insert(a.end(), {"--editor-language", l10n::current()});   // (the 3D editor's strings in the launcher's language)
         std::error_code ec;
         fs::create_directories(projectsDir(), ec);
         if (!cane::editor::spawnDetached(m_backend.binary(cane::game(m_game).runtime), a)) m_status = tr("The 3D editor did not start.");
