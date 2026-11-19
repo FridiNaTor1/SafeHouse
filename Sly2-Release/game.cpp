@@ -51,6 +51,7 @@ int NRandom();  // xfmath.h (0x11D3C0)
 #include <cstdint>
 extern uint32_t g_uRandState;  // xfmath.cpp
 #include "task.h"
+#include "stallwatch.h"
 #include "pcinput.h"
 #include "stepphys.h"
 #include "cplcy.h"
@@ -752,9 +753,12 @@ int RunGame(const GAMEOPTS& goIn)
     // the display rates above 60 Hz: 60 Hz steps, the frames drawn between them (frameinterp.h)
     FRAMEACCUM accum;
     static const char* s_szFrameInterp = std::getenv("SLY2N_FRAMEINTERP");   // (=fps: forced, a virtual display at that rate)
+    if (fWindow) stall::Start();   // (test: SLY2N_STALLPRINT, stallwatch.h)
     for (int frame = 0; go.cframe < 0 || frame < go.cframe;)
     {
         const double t0 = now();
+        stall::Frame(frame);
+        stall::Phase("steps");
         // (crash_context.h: the world and the frame in a crash or hang report)
         cane::crash::frame(frame);
         if (static int s_iwrecReported = -2; g_transition.iwrecCur != s_iwrecReported)
@@ -788,14 +792,18 @@ int RunGame(const GAMEOPTS& goIn)
                 std::fprintf(stderr, "movieaudit frame %d: queued movies, transition pending %d, live tracks %d\n", frame,
                              int(g_transition.fPending), CSpiopLiveTracks());
             if (g_transition.fPending && fWindow) StopSoundsForMovie();   // (the menu's music must not play over it)
+            stall::Phase("movies");
             PlayQueuedMovies(fWindow);
+            stall::Phase("steps");
         }   // orig 0x1B3A48's movies, before the world they lead to
         if (g_transition.fPending)
         {
 #ifdef __SWITCH__
             CaneSwitch::LoadingBoost boost;   // (the CPU's loading profile while the world loads and its scene builds)
 #endif
+            stall::Phase("world load");
             psw = PswUpdateTransition(std::move(psw));
+            stall::Phase("world load: the scene");
             scene = SCENE{};
             apalo.clear();
             ResetStepSnapshots();
@@ -805,8 +813,10 @@ int RunGame(const GAMEOPTS& goIn)
                 CBuildSceneFromSw(psw.get(), scene, &apalo);
                 ApproximateBakeLighting(scene);
                 BuildSceneGpu(scene);
+                stall::Phase("world load: prewarm");
                 PrewarmRenderer(g_transition.iwrecCur);
             }
+            stall::Phase("steps");
         }
         else if (FPcCharTakeSceneRebuild() && fDraws)
         {
@@ -1833,8 +1843,9 @@ int RunGame(const GAMEOPTS& goIn)
                 g_dtFixedStep = DT_FRAME_NTSC;
                 stepSim(frame);
                 g_dtFixedStep = dtFixedSave;
-                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
+                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); stall::Beat(); tPoll = now(); }
             }
+            if (FSkipCutFastForward()) stall::Phase("skip: fast-forward");
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
                 // (a step that waits for a drawn frame: an animated overlay's capture (overlay.h: the job's end screen
@@ -1848,7 +1859,7 @@ int RunGame(const GAMEOPTS& goIn)
                 g_dtFixedStep = DT_FRAME_NTSC;
                 stepSim(frame);
                 g_dtFixedStep = dtFixedSave;
-                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
+                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); stall::Beat(); tPoll = now(); }
                 if (!FSkipCutStep()) break;
             }
 #ifdef __SWITCH__
@@ -1871,6 +1882,8 @@ int RunGame(const GAMEOPTS& goIn)
         if (fWindow)
         {
             glfwPollEvents();
+            stall::Beat();
+            stall::Phase("input");
             UpdateDisplayMonitors(g_gl.window);   // (a monitor plugged in or unplugged: display.h)
             GLFWwindow* w = g_gl.window;
             const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1);   // (debug keys only)
@@ -1933,6 +1946,7 @@ int RunGame(const GAMEOPTS& goIn)
                                 (fDraws && (FPhotoCapturePending() || FAnimatedOverlayNeedsFrame() || std::getenv("SLY2N_RENDERALL")));
         if (fDrawFrame)
         {
+            stall::Phase("draw");
             static const bool s_fDrawAll0 = std::getenv("SLY2N_DRAWALL") != nullptr;
             // the spawners' run-time clones (and their parts) into the scene (scenesw.h; AI code)
             CAMERA camStep = CameraFromCm(g_cm);
@@ -2190,6 +2204,7 @@ int RunGame(const GAMEOPTS& goIn)
             if (fWindow)
             {
                 if (FGpuMarks()) GpuMark("present");
+                stall::Phase("present");
                 g_gl.Present();
                 if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
 #ifdef __SWITCH__
@@ -2211,6 +2226,7 @@ int RunGame(const GAMEOPTS& goIn)
         // (SLY2N_REALTIME: a headless run paced at 60 Hz too, so the audio thread's streams (dialog lines the
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;
+        stall::Phase("pace");
         if (fWindow && vr::FActive()) {}   // (the headset paces: vr::BeginFrame)
 #if defined(CANE_IOS)
         // (iOS: the display's own frames when the cap is its rate or a whole fraction of it (display.cpp): a timer of

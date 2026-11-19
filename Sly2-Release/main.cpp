@@ -38,6 +38,7 @@
 #include "../platform/platform.h"
 #include "../platform/safe_paths.h"
 
+#include <exception>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -266,6 +267,7 @@ int PhysCheckMain(const std::vector<std::string>& args);  // physcheck.cpp
 // (a crash or a hang: "crash:" / "hang:" lines with the stack, a minidump on Windows; the output unbuffered)
 #include "../platform/crash_report.h"
 
+
 #ifdef __SWITCH__
 // (the Switch: SafeHouse.nro runs this one as the PC launcher would, cane_game_sly2 at the end of this file)
 #include "../platform/switch/runtime.h"
@@ -345,6 +347,20 @@ static std::vector<std::string> s_aguestArg;   // --guest (modguests.h)
 int main(int argc, char** argv)
 {
     cane::crash::install("Sly2-Release");
+    // (disc.h: an installed level that cannot be read back, from wherever it is read (the boot, a transition, the
+    // loader's thread): the "install again" error and exit code 3, not a crash report; anything else to the crash
+    // report's own terminate handler)
+    static std::terminate_handler s_pfnTerminate = nullptr;
+    s_pfnTerminate = std::set_terminate([] {
+        if (const std::exception_ptr pe = std::current_exception())
+            try { std::rethrow_exception(pe); }
+            catch (const DAMAGEDINSTALL& e) { FailDamagedInstall(e.what()); }
+            catch (...) {}
+        if (s_pfnTerminate) s_pfnTerminate();
+        std::abort();
+    });
+    void DisableWindowGhosting();   // (wincrash.cpp: Windows, no "Not Responding" ghost over a stall)
+    DisableWindowGhosting();
     // (vr.h Check: the launcher's "Play in VR" check, launcher/vr_probe.h: an OpenXR runtime with a headset; no window)
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--vr-check")) return vr::Check();
@@ -1029,7 +1045,16 @@ int main(int argc, char** argv)
         go.height = vo.height;
         go.loadmaps = vo.loadmaps;
         for (JOYPRESS& press : go.apress) press.frame -= go.vbBase;  // (--press-vblank-base: the reference's vblanks)
-        return RunGame(go);
+        // (disc.h: an installed level that cannot be read back. Caught here as well as by the terminate handler: on
+        // Windows an uncaught C++ exception goes to the unhandled-exception filter (exit 0x20474343), not std::terminate)
+        try
+        {
+            return RunGame(go);
+        }
+        catch (const DAMAGEDINSTALL& e)
+        {
+            FailDamagedInstall(e.what());
+        }
     }
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
