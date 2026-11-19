@@ -5004,6 +5004,9 @@ void ClearMasked(bool color, bool depth, bool stencil)
     const VkRect2D sc = ScissorRect();
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+    // (every dynamic state the pipeline declares is set before its draw: a command buffer whose first draw is this one
+    // otherwise draws with an undefined winding, VUID-vkCmdDraw-None-07841)
+    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
     vkCmdSetDepthTestEnable(cmd, depth);
     vkCmdSetDepthWriteEnable(cmd, depth);
     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS);
@@ -6744,6 +6747,13 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     std::printf("Vulkan: %s%s%s%s\n", g_rendererString.c_str(), fBuffersLocal ? "" : " (buffers in system memory)",
                 g_feat.pushDescriptors ? "" : " (descriptor sets: no push descriptors)",
                 g_feat.pushBytes < kPushBytes ? " (uniform buffers for the large blocks: few push-constant bytes)" : "");
+    // (the optional features the renderer's paths depend on: a driver-specific report says which paths it ran)
+    std::printf("Vulkan: features: dynamic blend %s, dual-source blend %s, last provoking vertex %s, geometry %s, demote %s, "
+                "float16 %s, non-uniform indexing %s, depth bounds %s, %s depth\n",
+                g_feat.eds3 ? "yes" : "no", g_feat.dualSrcBlend ? "yes" : "no", g_feat.provokingLast ? "yes" : "no",
+                g_feat.geometry ? "yes" : "no", g_feat.demote ? "yes" : "no", g_feat.float16 ? "yes" : "no",
+                g_feat.nonUniform ? "yes" : "no", g_feat.depthBounds ? "yes" : "no",
+                g_feat.depthStencil == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8");
     if (g_feat.tiler)
         std::printf("Vulkan: a tile-based GPU: %s depth, in-place reads %s, MSAA on the tile %s\n",
                     g_feat.depthStencil == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",

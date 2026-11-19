@@ -1903,6 +1903,12 @@ int RunGame(const GAMEOPTS& goIn)
         // (debugmenu.h) the free camera's pad controls (and SLY2N_FREECAMAT's test switch)
         if (fFreeCam && cam.fMat) cam.fMat = false;
         FUpdateDebugFreeCamPad(cam, frame);
+        // (test: SLY2N_TESTLAYOUT=FRAME:W:H lays the display out for a W x H window at that frame, as a window resize does)
+        if (static const char* s_szLayout = std::getenv("SLY2N_TESTLAYOUT"); s_szLayout)
+        {
+            int f = 0, w = 0, h = 0;
+            if (std::sscanf(s_szLayout, "%d:%d:%d", &f, &w, &h) == 3 && frame == f && w > 0 && h > 0) LayoutDisplay(w, h);
+        }
         const double t1 = now();
         double t2 = t1;
         // (debug: SLY2N_SHOTEVERY=dir:N also writes every N-th frame to dir/frame_NNNNNN_tT.png, T the game clock)
