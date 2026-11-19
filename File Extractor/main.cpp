@@ -4,6 +4,7 @@
 #define NOMINMAX
 #endif
 #include "../platform/install.h"
+#include "../platform/crash_report.h"
 #include "../platform/brx_decompress.h"
 #include "../platform/disc_image.h"
 #include "pcbrx.h"
@@ -2342,6 +2343,7 @@ static int Extract(int argc, char** argv)
 }
 
 int main(int argc,char** argv) {
+    cane::crash::install("cane-extractor");   // (output unbuffered, crash reports: platform/crash_report.h)
     g_stdoutBuffer=std::cout.rdbuf();
     // (iOS / Android run main again in the same image: no option of the previous run carries over)
     g_nonInteractive=false;g_progressJson=false;g_languagesDir.clear();g_sourcePath.clear();g_isoSize=0;

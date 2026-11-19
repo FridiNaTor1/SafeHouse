@@ -55,6 +55,7 @@
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
+#include "../platform/crash_context.h"
 
 void SetExitState(LO* plo, int n);
 void TriggerExit(LO* plo);
@@ -773,6 +774,7 @@ void PlayQueuedMovies(bool fWindow)
         m.fWindowed = true;
         BeginMoviePresentation(m);
         std::printf("movie %u\n", fk.id);
+        cane::crash::note("movie %u", fk.id);   // (crash_context.h)
         g_fMoviePlaying = true;   // (pcinput.cpp: no menu cursor over a movie)
         vr::SetMoviePlaying(true);   // (VR: the movie on a screen, not a wipe's whole-view panel)
         FPlayMovie(fk, PresentMovieGl, &m);

@@ -367,6 +367,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     settings.showLogs = &showLogs;
     settings.setScale = [&](float next) { pendingScale = next; };
     settings.logging = [&] { return logging.load(); };
+    settings.logError = [&] { return sessionLog.error(); };
     settings.setLogging = [&](bool enabled) {
         logging = enabled;
         try {
@@ -481,6 +482,9 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             if (auto colon = s.find(':'); colon != std::string::npos) ui::aboutScrollTarget() = s.substr(colon + 1);
         }
         else if (s == "sly3-notice") page.showSly3Notice();
+        else if (s == "crash")   // (the dialog after a game crashed: the message as the launcher makes it, process.h)
+            page.showCrash(shell.game, "Sly2-Release crashed: access violation (reading 0x0) (0xC0000005) at Sly2-Release.exe+0x1a2b3c, thread 4242 (main) "
+                                       "(Sly2-Release.exe, exit 0xC0000005, access violation)", true);
         else if (s == "editor" && page.openEditor) page.openEditor();
         else if (s == "localisation" && page.openLocalisation) page.openLocalisation();
         else if (s == "quit-confirm") shell.askQuit();
@@ -593,11 +597,15 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         if (busy) lastLabel = job.label;
         if (wasBusy && !busy && !fixture) {
             std::string message;
+            bool crashed = false, report = false;
             {
                 std::lock_guard lock(job.mutex);
                 message = job.message;
+                crashed = job.crashed;
+                report = !job.report.empty();
             }
             const int installed = page.installingGame;
+            const int played = page.playingGame;
             page.invalidate();
             install.invalidate();
             if (installed >= 0 && message == "Completed") {
@@ -612,6 +620,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
                 shell.toast(cane::tr("PS3 HD textures installed. They show the next time the game starts."));
             else if (message == "Completed" && lastLabel == ui::SettingsPage::kCollectionImportLabel)
                 shell.toast(cane::tr("The Collection menu is imported. The Collection Style Launcher can start now."));
+            else if (crashed && played >= 0)
+                page.showCrash(static_cast<GameId>(played), message, report);   // (with the log folder: crash_report.h)
             else if (message != "Completed" && message != "Cancelled" && !(shell.view == ui::View::Install && installed >= 0))
                 shell.toast(message, false);
             page.installingGame = page.playingGame = -1;
@@ -1245,6 +1255,9 @@ int main(int argc, char** argv) {
 #endif
         }
         cane::LauncherBackend backend;
+        // (crash_report.h: the games' and tools' crash reports, and the launcher's own, go to the log folder)
+        cane::crash::setDirectory(cane::utf8(backend.locations.logs).c_str());
+        cane::crash::install("safehouse", false);
         std::atomic<bool> cancel{false};
         auto log = [](const std::string& s) { std::cout << s << std::endl; };
         auto args = cane::arguments(argc, argv);

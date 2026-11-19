@@ -127,5 +127,10 @@ struct RENDERSTATS
     int cbatch = 0;     // GL draw calls for the passes (glMultiDrawElementsIndirect runs and special draws)
     int cculled = 0;    // records outside the view frustum
     int cmrd = 0;       // records beyond their MRD
+    // (SLY2N_RTGTDUMP, render targets' diagnosis: rtgtdiag.h) records reaching the draw list, the pass draws' triangles,
+    // the pass draws drawn without the near-clip stage
+    int crec = 0;
+    long long ctri = 0;
+    int cnoclip = 0;
 };
 extern RENDERSTATS g_renderstats;

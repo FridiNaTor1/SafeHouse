@@ -1,4 +1,5 @@
 #include "runtime_error.h"
+#include "../platform/crash_report.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -20,35 +21,6 @@ namespace
 	bool s_consoleInitialized = false;
 	std::mutex s_errorMutex;
 
-	#ifdef _WIN32
-	LONG WINAPI RuntimeUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPointers)
-	{
-		EnsureRuntimeErrorConsole();
-		const DWORD code = exceptionPointers != nullptr && exceptionPointers->ExceptionRecord != nullptr
-			? exceptionPointers->ExceptionRecord->ExceptionCode : 0;
-		const void* address = exceptionPointers != nullptr && exceptionPointers->ExceptionRecord != nullptr
-			? exceptionPointers->ExceptionRecord->ExceptionAddress : nullptr;
-		std::fprintf(stderr,
-			"\n[FATAL] Unhandled Windows exception 0x%08lX at %p on thread %lu.\n",
-			code, address, GetCurrentThreadId());
-		std::fprintf(stderr,
-			"Please copy this message and describe what was happening when the failure occurred.\n");
-		std::fflush(stderr);
-		MessageBoxW(nullptr,
-			L"SafeHouse encountered a fatal error.\n\n"
-			L"The error details were printed in the diagnostic console.",
-			L"SafeHouse - Fatal Error", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
-		return EXCEPTION_CONTINUE_SEARCH;
-	}
-	#else
-	void RuntimeSignalHandler(int signal)
-	{
-		std::fprintf(stderr, "\n[FATAL] Received signal %d.\n", signal);
-		std::fflush(stderr);
-		std::signal(signal, SIG_DFL);
-		raise(signal);
-	}
-	#endif
 }
 
 void EnsureRuntimeErrorConsole()
@@ -57,6 +29,13 @@ void EnsureRuntimeErrorConsole()
 	if (s_consoleInitialized)
 		return;
 	#ifdef _WIN32
+	// (output already going to a pipe or a file, the launcher's: keep it there, no console of its own)
+	const DWORD errorType = GetFileType(GetStdHandle(STD_ERROR_HANDLE));
+	if (errorType == FILE_TYPE_PIPE || errorType == FILE_TYPE_DISK)
+	{
+		s_consoleInitialized = true;
+		return;
+	}
 	if (GetConsoleWindow() == nullptr && AllocConsole() == FALSE)
 		return;
 
@@ -119,33 +98,9 @@ void ReportFatalRuntimeError(const char* message)
 	#endif
 }
 
+// The crash handlers shared by every program (platform/crash_report.h): "crash:" lines on stderr, which the launcher
+// keeps, and a minidump on Windows; no console window or message box (the launcher runs the game with its output piped).
 void InstallRuntimeErrorHandlers()
 {
-	#ifdef _WIN32
-	SetUnhandledExceptionFilter(RuntimeUnhandledExceptionFilter);
-	#else
-	std::signal(SIGSEGV, RuntimeSignalHandler);
-	std::signal(SIGABRT, RuntimeSignalHandler);
-	std::signal(SIGFPE, RuntimeSignalHandler);
-	std::signal(SIGILL, RuntimeSignalHandler);
-	#endif
-	std::set_terminate([]
-	{
-		const char* message = "Unhandled C++ exception on a worker thread";
-		try
-		{
-			if (std::exception_ptr exception = std::current_exception())
-				std::rethrow_exception(exception);
-		}
-		catch (const std::exception& exception)
-		{
-			ReportFatalRuntimeError(exception.what());
-			std::abort();
-		}
-		catch (...)
-		{
-		}
-		ReportFatalRuntimeError(message);
-		std::abort();
-	});
+	cane::crash::install("Sly1-Release");
 }

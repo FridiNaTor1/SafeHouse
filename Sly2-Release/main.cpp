@@ -261,23 +261,10 @@ int PhysCheckMain(const std::vector<std::string>& args);  // physcheck.cpp
 
 #if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
 #include <csignal>
-#include <execinfo.h>
 #include <unistd.h>
-namespace
-{
-// a crash's stack on stderr (the release has no debugger): the addresses for addr2line
-void OnCrashSignal(int sig)
-{
-    void* apv[64];
-    const int c = backtrace(apv, 64);
-    const char sz[] = "Sly2-Release: crashed, stack:\n";
-    (void)!write(2, sz, sizeof(sz) - 1);
-    backtrace_symbols_fd(apv, c, 2);
-    std::signal(sig, SIG_DFL);
-    std::raise(sig);
-}
-}
 #endif
+// (a crash or a hang: "crash:" / "hang:" lines with the stack, a minidump on Windows; the output unbuffered)
+#include "../platform/crash_report.h"
 
 #ifdef __SWITCH__
 // (the Switch: SafeHouse.nro runs this one as the PC launcher would, cane_game_sly2 at the end of this file)
@@ -357,10 +344,7 @@ static std::vector<std::string> s_aguestArg;   // --guest (modguests.h)
 
 int main(int argc, char** argv)
 {
-#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
-    std::signal(SIGSEGV, OnCrashSignal);
-    std::signal(SIGABRT, OnCrashSignal);
-#endif
+    cane::crash::install("Sly2-Release");
     // (vr.h Check: the launcher's "Play in VR" check, launcher/vr_probe.h: an OpenXR runtime with a headset; no window)
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--vr-check")) return vr::Check();

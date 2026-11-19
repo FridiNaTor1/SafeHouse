@@ -398,23 +398,10 @@ int PhysCheckMain(const std::vector<std::string>& args);  // physcheck.cpp
 
 #if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
 #include <csignal>
-#include <execinfo.h>
 #include <unistd.h>
-namespace
-{
-// a crash's stack on stderr (the release has no debugger): the addresses for addr2line
-void OnCrashSignal(int sig)
-{
-    void* apv[64];
-    const int c = backtrace(apv, 64);
-    const char sz[] = "Sly3-Release: crashed, stack:\n";
-    (void)!write(2, sz, sizeof(sz) - 1);
-    backtrace_symbols_fd(apv, c, 2);
-    std::signal(sig, SIG_DFL);
-    std::raise(sig);
-}
-}
 #endif
+// (a crash or a hang: "crash:" / "hang:" lines with the stack, a minidump on Windows; the output unbuffered)
+#include "../platform/crash_report.h"
 
 #include "gl.h"
 #include "../platform/gl_context.h"
@@ -491,10 +478,7 @@ static int GlSelfTestCommand(const std::string& out)
 
 int main(int argc, char** argv)
 {
-#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
-    std::signal(SIGSEGV, OnCrashSignal);
-    std::signal(SIGABRT, OnCrashSignal);
-#endif
+    cane::crash::install("Sly3-Release");
     SetRendererRelaunch(argc, argv);   // (renderer.h: a Vulkan error in the first seconds restarts on OpenGL)
     // the mods' audio tools (audiomod.cpp: --make-music, --make-vpk, --make-vag, --export-wav): no game data needed
     {

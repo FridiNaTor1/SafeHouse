@@ -542,7 +542,7 @@ struct LauncherBackend {
             if (!line.empty() && line.front() == '{') {
                 const auto event = json::parse(line, nullptr, false);
                 if (event.is_object() && event.value("stage", std::string{}) == "error") reason = event.value("item", std::string{});
-            } else if (!line.empty()) {
+            } else if (!line.empty() && line.rfind("crash: ", 0) != 0 && line.rfind("hang: ", 0) != 0) {
                 lastLines.push_back(line);
                 if (lastLines.size() > 2) lastLines.pop_front();
             }
@@ -558,6 +558,13 @@ struct LauncherBackend {
             } catch (...) {
             }
             if (cancel || (reason.empty() && lastLines.empty())) throw;
+            // (a crash keeps its own message and report, process.h ProcessFailure: not its stack's last lines)
+            try {
+                throw;
+            } catch (const ProcessFailure& failure) {
+                if (failure.crashed) throw;
+            } catch (...) {
+            }
             if (reason.empty()) {
                 // (no error event: the exit code, then what the extractor said last)
                 try {
@@ -739,10 +746,14 @@ struct LauncherBackend {
     }
     // checkedProcess, but a failure's message is the program's own reason (its last line that reads as an error, else
     // its last line) with the exit code, not "Details are in the launcher output" (the toast is all a phone shows).
+    // A crash or a hang (the program's "crash:" / "hang:" report, platform/crash_report.h, or a crash's exit code) is
+    // said as such (ProcessFailure::crashed: the launcher offers the log folder with the report), never as an unrelated
+    // last line (a crash used to read as the warning printed before it).
     void explainedProcess(const std::vector<std::string>& arguments, const std::atomic<bool>& cancel, const LogFunction& log) {
         std::string last, lastError;
+        CrashWatch crash;
         const int code = runProcess(arguments, tools, cancel, [&](const std::string& line) {
-            if (!line.empty() && line.front() != '{') {
+            if (crash.feed(line) && !line.empty() && line.front() != '{') {
                 last = line;
                 std::string lower = line;
                 std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -752,10 +763,13 @@ struct LauncherBackend {
             log(line);
         });
         if (code == 0) return;
+        const std::string program = utf8(path(arguments[0]).filename());
+        if (!cancel)
+            if (auto failure = crash.failure(program, code)) throw *failure;
         const std::string& reason = lastError.empty() ? last : lastError;
         if (cancel || reason.empty())
-            throw std::runtime_error(arguments[0] + " failed (exit " + std::to_string(code) + "). Details are in the launcher output.");
-        throw std::runtime_error(reason + " (" + utf8(path(arguments[0]).filename()) + ", exit " + std::to_string(code) + ")");
+            throw ProcessFailure(arguments[0] + " failed (" + describeExitCode(code) + "). Details are in the launcher output.", false);
+        throw ProcessFailure(reason + " (" + program + ", " + describeExitCode(code) + ")", false);
     }
     // Sly 2's texture dump (Textures/ in the installation, MODDING.md): the converter writes it at install since
     // 2026-11-04; an installation from before has none, and "Export textures" writes it in place (no re-extract).

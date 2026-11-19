@@ -789,11 +789,8 @@ int main(int cphzArgs, char* aphzArgs[])
     try {
     // The launcher reads output through a pipe, where stdio would otherwise
     // buffer whole blocks and lose the tail of the log if the game crashes.
-#ifdef _WIN32
-    std::setvbuf(stdout, nullptr, _IONBF, 0); // MSVC treats _IOLBF as full buffering.
-#else
-    std::setvbuf(stdout, nullptr, _IOLBF, 4096);
-#endif
+    // (runtime_error.cpp: platform/crash_report.h, unbuffered on Windows, where _IOLBF is full buffering)
+    InstallRuntimeErrorHandlers();
     double smokeSeconds=0;std::string smokeLevel;std::filesystem::path screenshotPath;
     // Benchmark helpers: --smoke-fixed-step makes runs reproducible,
     // --smoke-gpu-timing adds timer queries, and --smoke-screenshot-frame

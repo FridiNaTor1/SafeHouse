@@ -84,6 +84,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "light.h"
 #include "lightsw.h"
 #include "render.h"
+#include "rtgtdiag.h"
 #include "scene.h"
 #include "scenesw.h"
 #include "shd.h"
@@ -102,6 +103,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "mapstates.h"
 #include "modworld.h"
 #include "transition.h"
+#include "../platform/crash_context.h"
 #include "po.h"
 #include "shop.h"
 #include "step.h"
@@ -753,6 +755,15 @@ int RunGame(const GAMEOPTS& goIn)
     for (int frame = 0; go.cframe < 0 || frame < go.cframe;)
     {
         const double t0 = now();
+        // (crash_context.h: the world and the frame in a crash or hang report)
+        cane::crash::frame(frame);
+        if (static int s_iwrecReported = -2; g_transition.iwrecCur != s_iwrecReported)
+        {
+            s_iwrecReported = g_transition.iwrecCur;
+            const char* szWorld = PchzDebugWorldFile(g_transition.iwrecCur);
+            cane::crash::context("world %d (%s)", s_iwrecReported, szWorld);
+            cane::crash::note("frame %d: world %d (%s)", frame, s_iwrecReported, szWorld);
+        }
         if (fWindow && glfwWindowShouldClose(g_gl.window)) break;
         if (cut::FCutsceneToolsDone()) break;   // (cutscene.h: the trace written)
         if (vr::FExitRequested()) break;   // (the headset's system menu: Quit)
@@ -2160,6 +2171,12 @@ int RunGame(const GAMEOPTS& goIn)
             {
                 glFinish();
                 g_gl.FWriteScreenshot(go.screenshot);
+            }
+            if (const std::string pathDiag = RtgtDiagCompositePath(); !pathDiag.empty())
+            {
+                // (SLY2N_RTGTDUMP: the frame as shown at the render targets' picture frames, rtgtdiag.h)
+                glFinish();
+                g_gl.FWriteScreenshot(pathDiag);
             }
             if (fShotEvery)
             {

@@ -6417,6 +6417,23 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         }
     }
     if (!g_phys) return fail("no suitable Vulkan device (" + reasons + ")");
+    // (diagnosis on a device we cannot test: SLY2N_VKNOFEAT=a,b,...: those optional features taken as missing, so the
+    // paths without them run: eds3 (dynamic blend), dualsrc, provoking (last provoking vertex), geometry, demote,
+    // float16, nonuniform (bindless textures), depthbounds, multiview)
+    if (const char* sz = std::getenv("SLY2N_VKNOFEAT"); sz && *sz)
+    {
+        auto off = [&](const char* name) { return std::strstr(sz, name) != nullptr; };
+        if (off("eds3")) g_feat.eds3 = false;
+        if (off("dualsrc")) g_feat.dualSrcBlend = false;
+        if (off("provoking")) g_feat.provokingLast = false;
+        if (off("geometry")) g_feat.geometry = false, g_feat.multiviewGeometry = false;
+        if (off("demote")) g_feat.demote = false;
+        if (off("float16")) g_feat.float16 = false;
+        if (off("nonuniform")) g_feat.nonUniform = false;
+        if (off("depthbounds")) g_feat.depthBounds = false;
+        if (off("multiview")) g_feat.multiview = false, g_feat.multiviewGeometry = false;
+        std::fprintf(stderr, "Vulkan: SLY2N_VKNOFEAT=%s\n", sz);
+    }
     for (VkFormat f : {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT})
     {
         VkFormatProperties fp;

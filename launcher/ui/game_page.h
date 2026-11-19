@@ -104,6 +104,14 @@ public:
     void useVrFixture(vrprobe::State state, std::string runtime, std::string headset) { m_vr.fixture(state, std::move(runtime), std::move(headset)); }
     // Screenshots: the Sly 3 notice shown before Play.
     void showSly3Notice() { m_confirmSly3 = true; }
+    // A game that crashed or hung (main.cpp, Job::crashed): what happened and the log folder with its report.
+    void showCrash(GameId game, const std::string& message, bool report) {
+        m_crashHeading = trf("%s closed unexpectedly", cane::game(game).shortName);
+        m_crashText = message + "\n\n" +
+                      (report ? tr("A crash report and the game's last output are saved in the log folder. Attach them when you report the problem.")
+                              : tr("The game's last output is saved in the log folder (last-failure.log). Attach it when you report the problem."));
+        m_showCrash = true;
+    }
     // Start: the page's main action.
     void primaryAction(GameId game) {
         const auto& s = status(game);
@@ -507,8 +515,34 @@ public:
         }
         ImGui::PopStyleVar();
     }
+    void drawCrashDialog() {
+        if (m_showCrash) {
+            ImGui::OpenPopup("Crash##report");
+            m_showCrash = false;
+        }
+        ImGui::SetNextWindowSize({px(520), 0});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {px(24), px(22)});
+        if (ImGui::BeginPopupModal("Crash##report", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+            heading(m_crashHeading.c_str());
+            textWrapped(m_crashText.c_str(), fonts().body, color::text2);
+            gap(8);
+            const float w = std::floor((ImGui::GetContentRegionAvail().x - px(12)) * 0.5f);
+            if (button(tr("Close"), Tone::Secondary, {w, 0}) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+                ImGui::CloseCurrentPopup();
+            takeFocusNow();
+            ImGui::SameLine(0, px(12));
+            if (button(tr("Open log folder"), Tone::Primary, {w, 0}, Icon::Folder)) {
+                openFolderSafe(m_backend.locations.logs);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+    }
     void drawDialogs() {
         drawSly3Notice();
+        drawCrashDialog();
         drawSteamDialogs();
         drawShortcutDialogs();
         drawReextractDialog();
@@ -971,6 +1005,8 @@ private:
     bool m_wasBusy = false, m_fixture = false;
     bool m_showPreviewError = false;
     std::string m_previewError;
+    bool m_showCrash = false;
+    std::string m_crashHeading, m_crashText;
     int m_confirmUninstall = -1, m_pending = -1;
     bool m_confirmSly3 = false, m_sly3Confirmed = false, m_sly3DontShow = false;
     std::optional<steam::Installation> m_steam;

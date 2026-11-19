@@ -112,5 +112,10 @@ controls settings. Bindings for keyboard, mouse and controller are in each game'
 3. Open **Log folder** there and attach `launcher.log` to an [issue](https://github.com/FridiNaTor1/SafeHouse/issues),
    with the game, its region and what you were doing.
 
+A game that crashed or stopped responding leaves a report in the log folder even with **Save logs** off: the
+launcher shows "closed unexpectedly" with an **Open log folder** button. Attach `last-failure.log` (the game's last
+output) and the newest `Sly2-Release-crash-<date>.txt` / `.dmp` (Windows: the crash's stack and a minidump; a game
+that stopped responding writes `-hang-` files) to the issue.
+
 Stuck in a job in Sly 2? With **Debug mode** on, **F9** completes the current job (see
 [DEBUG-MENU.md](DEBUG-MENU.md#debug-keys)); its log line names the job, which helps the report.

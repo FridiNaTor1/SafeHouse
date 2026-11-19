@@ -3,6 +3,7 @@
 #include "fastpaths.h"
 #include "texmod.h"
 #include "render.h"
+#include "rtgtdiag.h"
 #include "simdmat.h"
 #include "drawdist.h"
 
@@ -4941,6 +4942,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         PrefetchRecordsAhead(arec, size_t(&rec - arec.data()));
 #endif
         if (s_grfSkipKinds && rec.kind >= 0 && rec.kind < 64 && ((s_grfSkipKinds >> rec.kind) & 1)) continue;
+        ++g_renderstats.crec;
         const GLOB& glob = *rec.pglob;
         const GLOB& geom = *rec.pglobGeom;
         if (fFadeSkyOpen && rec.kind > 1) addFadeSky();
@@ -6024,6 +6026,8 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             }
             s_glstats.crun += 1; s_glstats.cpass += run.cdei;
             g_renderstats.cpass += int(run.cdei);
+            for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei; ++i) g_renderstats.ctri += s_adei[i].count / 3;
+            if (run.fNoClip) g_renderstats.cnoclip += int(run.cdei);
             ++g_renderstats.cbatch;
             break;
         }
@@ -6263,8 +6267,23 @@ void RenderRenderTargets(const SCENE& scene, const RENDEROPTS& opts)
         pv.rgbaClear = 0;   // 0x1BE398's clear: RGBAQ 0, Z 0
         pv.alphaClear = 0;
         pv.gCelWidth = float(g_display.outlineThickness) / 100.0f;
+        // (SLY2N_RTGTDUMP: the pass's numbers and picture, rtgtdiag.h)
+        const bool fDiag = FRtgtDiagPass(i);
+        const RENDERSTATS rs0 = g_renderstats;
         RenderPass(scene, pv, opts);
+        if (fDiag)
+        {
+            RTGTDIAG d;
+            d.irtgt = i, d.powner = p->powner, d.dx = p->dx, d.dy = p->dy, d.fbo = p->fbo;
+            d.pos = p->pos, d.dirForward = p->dirForward, d.dirUp = p->dirUp, d.radFovY = p->radFovY, d.sNear = p->sNear;
+            d.matWorldToClip = pv.matWorldToClip;
+            d.crec = g_renderstats.crec - rs0.crec, d.cculled = g_renderstats.cculled - rs0.cculled, d.cmrd = g_renderstats.cmrd - rs0.cmrd;
+            d.cdraw = g_renderstats.cdraw - rs0.cdraw, d.cpass = g_renderstats.cpass - rs0.cpass, d.cbatch = g_renderstats.cbatch - rs0.cbatch;
+            d.cfailAll = g_renderstats.cfailAll - rs0.cfailAll, d.ctri = g_renderstats.ctri - rs0.ctri, d.cnoclip = g_renderstats.cnoclip - rs0.cnoclip;
+            RtgtDiagReport(d);
+        }
     }
+    RtgtDiagEndTargets();
 }
 }  // namespace
 
@@ -6272,6 +6291,7 @@ void RenderScene(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts)
 {
     g_renderstats.cdraw = g_renderstats.cpass = g_renderstats.ccel = g_renderstats.cfailAll = 0;
     g_renderstats.cbatch = g_renderstats.cculled = g_renderstats.cmrd = 0;
+    g_renderstats.crec = g_renderstats.cnoclip = 0, g_renderstats.ctri = 0;
     s_ring.BeginFrame();
     TakeStreamedTextureMods();
     if (FGpuMarks()) GpuMark("render targets");
@@ -6350,6 +6370,7 @@ void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& 
 {
     g_renderstats.cdraw = g_renderstats.cpass = g_renderstats.ccel = g_renderstats.cfailAll = 0;
     g_renderstats.cbatch = g_renderstats.cculled = g_renderstats.cmrd = 0;
+    g_renderstats.crec = g_renderstats.cnoclip = 0, g_renderstats.ctri = 0;
     s_ring.BeginFrame();
     TakeStreamedTextureMods();
     RenderRenderTargets(scene, opts);
