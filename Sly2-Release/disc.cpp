@@ -625,6 +625,12 @@ bool CDisc::FReadImage(uint64_t ib, void* pv, std::size_t cb) const
     return fRead;
 }
 
+bool CDisc::FInstalledFile(uint32_t isector) const
+{
+    const FILEENT* pent = m_fConverted ? PentFind(isector) : nullptr;
+    return pent && !pent->fMod;
+}
+
 const CDisc::FILEENT* CDisc::PentFind(uint32_t isector) const
 {
     const auto it = std::lower_bound(m_afile.begin(), m_afile.end(), isector, [](const auto& e, uint32_t s) { return e.first < s; });
@@ -813,16 +819,37 @@ void CDisc::ReportModScriptWarnings(const std::vector<std::string>& arelScripts,
     }
 }
 
+[[noreturn]] void FailDamagedInstall(const std::string& why)
+{
+    // (the launcher shows a failed game's last line that reads as an error, with the exit code: launcher/backend.h
+    // explainedProcess. Nothing of the run is left to save: the world did not load.)
+    const std::string msg = "error: Sly 2's installation is damaged or incomplete (" + why +
+                            "). Install Sly 2 again from your disc in the launcher (Re-extract)";
+    std::fflush(stdout);
+    std::fprintf(stderr, "%s\n", msg.c_str());
+    std::fflush(stderr);
+    std::_Exit(3);
+}
+
 std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
 {
     // (format 3) a world's parts put back together (worldparts.h): each part the mods folder's, else the installed one
     if (const FILEENT* pent = m_fConverted ? PentFind(fk.isector) : nullptr; pent && pent->fParts)
     {
+        // (an installed world that cannot be put back together: a part missing or cut short, an index that does not
+        // parse: an install that did not finish, a copy or a disk error. The game cannot go on with that world:
+        // DAMAGEDINSTALL, which main.cpp's terminate handler turns into the "install again" error and exit code 3, not
+        // an abort the player sees as a crash)
+        auto damaged = [&](const std::string& why) {
+            return DAMAGEDINSTALL(pent->fMod ? "a mod's level " + pent->rel + " did not load: " + why
+                                             : "the installed level " + pent->rel + " did not load: " + why);
+        };
         nlohmann::json index;
         {
             std::ifstream in(cane::paths::ioPath(cane::path(pent->path)));
-            if (!in) throw std::runtime_error("cannot read " + pent->path);
-            in >> index;
+            if (!in) throw damaged("cannot read " + pent->path);
+            index = nlohmann::json::parse(in, nullptr, false);
+            if (!index.is_object()) throw damaged("its index is not readable (" + pent->path + ")");
         }
         const std::string relDir = pent->rel.substr(0, pent->rel.rfind('/') == std::string::npos ? 0 : pent->rel.rfind('/'));
         std::vector<uint8_t> ab;
@@ -849,11 +876,17 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
             return ab;
         }
         std::set<std::string> setSkip;   // the mods' parts left out (they did not compile)
+        bool fModPart = false;           // (the last ravel took a part from the mods folder)
         auto ravel = [&](bool fMods) {
+            fModPart = false;
             return FRavelWorld(index, relDir, [&](const std::string& rel) {
                 const std::string key = RelCanonical(rel);
                 if (fMods && !setSkip.count(key))
-                    if (const auto it = m_mpModPath.find(key); it != m_mpModPath.end()) return it->second;
+                    if (const auto it = m_mpModPath.find(key); it != m_mpModPath.end())
+                    {
+                        fModPart = true;
+                        return it->second;
+                    }
                 return cane::utf8(root / cane::path(rel));
             }, ab, error, pfnKeep, setDrop.empty() ? nullptr : &setDrop);
         };
@@ -872,10 +905,16 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
         }
         if (!fOk)
         {
+            // (no mod part in it: the installed files themselves; else without the mods, as installed)
+            if (!fModPart) throw damaged(error);
             std::fprintf(stderr, "mods: %s: %s: the world loads without its mods\n", pent->rel.c_str(), error.c_str());
             PostModNotice("A mod of " + pent->rel.substr(pent->rel.rfind('/') + 1) + " did not load: " + error.substr(0, 90));
-            if (!ravel(false)) throw std::runtime_error(pent->rel + ": " + error);
+            if (!ravel(false)) throw damaged(error);
         }
+        // (the installed parts alone, the whole world: the index's size, else a part was cut short or replaced)
+        if (!fModPart && setDrop.empty() && !index.contains("template") && index.contains("size") &&
+            ab.size() != index.value("size", std::size_t(0)))
+            throw damaged("its parts make " + std::to_string(ab.size()) + " bytes, not " + std::to_string(index.value("size", std::size_t(0))));
         if (std::getenv("SLY2N_WORLDHASH")) std::fprintf(stderr, "world bytes: %s %zu fnv %s\n", pent->rel.c_str(), ab.size(), StrFnv64(ab.data(), ab.size()).c_str());
         if (fOk)
         {
@@ -887,10 +926,24 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
         }
         return ab;
     }
-    std::vector<uint8_t> ab = ReadFile(fk);
-    if (m_fConverted)
-        if (const FILEENT* pent = PentFind(fk.isector); pent && pent->fDecompressed) return ab;
-    return cane::decompressBrx(ab);
+    // (a whole world file, formats 1 and 2: one that cannot be read or decompressed, from the installation itself, is
+    // a damaged installation too)
+    try
+    {
+        std::vector<uint8_t> ab = ReadFile(fk);
+        if (m_fConverted)
+            if (const FILEENT* pent = PentFind(fk.isector); pent && pent->fDecompressed) return ab;
+        return cane::decompressBrx(ab);
+    }
+    catch (const DAMAGEDINSTALL&)
+    {
+        throw;
+    }
+    catch (const std::exception& e)
+    {
+        if (!FInstalledFile(fk.isector)) throw;
+        throw DAMAGEDINSTALL("the installed level " + PentFind(fk.isector)->rel + " did not load: " + e.what());
+    }
 }
 
 namespace

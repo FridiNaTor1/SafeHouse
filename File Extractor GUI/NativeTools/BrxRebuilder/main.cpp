@@ -1,4 +1,5 @@
 #include "BrxWalker.h"
+#include "../../../platform/crash_report.h"
 
 #include <exception>
 #include <filesystem>
@@ -33,6 +34,7 @@ int Run(int argc, Character** argv)
 #ifdef _WIN32
 int wmain(int argc, wchar_t** argv)
 {
+    cane::crash::install("Sly1BrxRebuilder");
     if (argc < 2 || argc > 4) {
         std::wcerr << L"Usage: Sly1BrxRebuilder <level.brx> [ntsc|pal|japanese] [level-identity-map]\n";
         return 2;
@@ -49,6 +51,7 @@ int wmain(int argc, wchar_t** argv)
 #else
 int main(int argc, char** argv)
 {
+    cane::crash::install("Sly1BrxRebuilder");
     if (argc < 2 || argc > 4) {
         std::cerr << "Usage: Sly1BrxRebuilder <level.brx> [ntsc|pal|japanese] [level-identity-map]\n";
         return 2;

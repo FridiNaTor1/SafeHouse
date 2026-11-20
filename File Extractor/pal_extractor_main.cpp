@@ -8,6 +8,7 @@
 //
 // PalIsoExtractor.cpp is compiled here (not separately).
 #include "PalIsoExtractor.cpp"
+#include "../platform/crash_report.h"
 
 #include <exception>
 #include <filesystem>
@@ -46,7 +47,13 @@ int Run(int argc, Character** argv) {
 } // namespace
 
 #ifdef _WIN32
-int wmain(int argc, wchar_t** argv) { return Run(argc, argv); }
+int wmain(int argc, wchar_t** argv) {
+    cane::crash::install("Sly1PalExtractor");
+    return Run(argc, argv);
+}
 #else
-int main(int argc, char** argv) { return Run(argc, argv); }
+int main(int argc, char** argv) {
+    cane::crash::install("Sly1PalExtractor");
+    return Run(argc, argv);
+}
 #endif

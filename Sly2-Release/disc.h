@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,6 +55,16 @@ struct REGIONPATCH
 
 // Decodes a 64-byte record as the original does (0x20E890, 0x1B3BD0, 0x1FC510).
 FK FkFromRecord(const void* record64);
+
+// (PC) a level of the installation that cannot be read back: a part missing or cut short, an index that does not parse
+// (an install that did not finish, a copied or damaged folder). The world's load (transition.cpp) turns it into the
+// "reinstall Sly 2" error and a clean exit instead of a crash or an empty world.
+struct DAMAGEDINSTALL : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+// Says why on stderr (the launcher shows the last error line) and ends the process with exit code 3.
+[[noreturn]] void FailDamagedInstall(const std::string& why);
 
 class CDisc
 {
@@ -131,6 +142,9 @@ public:
     [[nodiscard]] std::string SzFileName(uint32_t isector) const;
     // True: the converted files; false: a disc image (the developer option).
     [[nodiscard]] bool FConverted() const { return m_fConverted; }
+    // (PC) the installation's own file at isector (converted files, not a mod's): a level that does not load is then
+    // a damaged installation (DAMAGEDINSTALL)
+    [[nodiscard]] bool FInstalledFile(uint32_t isector) const;
     // The boot executable's name (SCUS_973.16, SCES_525.29, SCPS_150.90).
     [[nodiscard]] const std::string& SzExecutable() const { return m_szExe; }
     // A file of the image's ISO 9660 root (the converter: the executable, SYSTEM.CNF); false with converted files.

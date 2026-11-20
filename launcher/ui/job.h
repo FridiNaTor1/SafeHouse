@@ -43,15 +43,40 @@ public:
     }
     void write(std::string line) {
         std::lock_guard lock(mutex);
-        if (full || (!output.is_open() && !open())) return;
+        if (full || failed || (!output.is_open() && !open())) return;
         written += line.size() + 12;
         output << '[' << timestamp("%H:%M:%S") << "] " << redact(std::move(line)) << '\n';
         output.flush();
+        if (!output) {
+            m_error = "cannot write " + redact(utf8(directory / "launcher.log"));
+            output.close();
+            failed = true;
+            return;
+        }
         if (written > limit) {
             output << "[log size limit reached; further output is not saved]\n";
             output.close();
             full = true;
         }
+    }
+
+    // The output of a task that failed, always (also with "Save logs" off): logs/last-failure.log, the last lines with
+    // their times and the failure, for a bug report (the game's crash report sits beside it, crash_report.h).
+    void writeFailure(const std::string& title, const std::deque<std::string>& lines, const std::string& failure) {
+        std::lock_guard lock(mutex);
+        std::error_code ec;
+        fs::create_directories(directory, ec);
+        std::ofstream file(directory / "last-failure.log", std::ios::trunc);
+        file << "SafeHouse: \"" << title << "\" failed " << timestamp("%Y-%m-%d %H:%M:%S %z") << " (" << redact(utf8(executableDirectory())) << ")\n";
+        for (const auto& line : lines) file << redact(line) << '\n';
+        file << "== Failed: " << redact(failure) << '\n';
+        file.flush();
+        if (!file) m_error = "cannot write " + redact(utf8(directory / "last-failure.log"));
+    }
+    // Why the log could not be written (empty: it could, or nothing was written yet); Settings shows it.
+    std::string error() {
+        std::lock_guard lock(mutex);
+        return m_error;
     }
 
 private:
@@ -71,7 +96,12 @@ private:
                 fs::rename(current, directory / "launcher.previous.log", ec);
         }
         output.open(current, std::ios::app);
-        if (!output) return false;
+        if (!output) {
+            // (said in Settings > Save logs; tried again at the next session)
+            m_error = "cannot write " + redact(utf8(current)) + (ec ? " (" + ec.message() + ")" : std::string());
+            failed = true;
+            return false;
+        }
 #ifdef _WIN32
         const char* platform = "Windows";
 #elif defined(__linux__)
@@ -93,7 +123,8 @@ private:
     std::mutex mutex;
     std::ofstream output;
     std::uintmax_t written = 0;
-    bool rotated = false, full = false;
+    bool rotated = false, full = false, failed = false;
+    std::string m_error;
 };
 struct Job {
     std::atomic<bool> busy{false}, cancel{false};
@@ -102,6 +133,11 @@ struct Job {
     std::deque<std::string> lines;
     std::string message = "Ready", stage, item, label;
     float progress = 0;
+    // The last task crashed or hung (ProcessFailure::crashed, process.h): main.cpp says so with the log folder.
+    bool crashed = false;
+    std::string report;   // (its crash report, when the program wrote one)
+    // The last lines with their times, kept also with "Save logs" off: SessionLog::writeFailure.
+    std::deque<std::string> recent;
     // Set once by main.cpp; output is saved only while *logging is true.
     SessionLog* sessionLog = nullptr;
     const std::atomic<bool>* logging = nullptr;
@@ -114,6 +150,9 @@ struct Job {
             lines.clear();
             message = title;
             label = title;
+            crashed = false;
+            report.clear();
+            recent.clear();
             stage.clear();
             item.clear();
             progress = 0;
@@ -123,6 +162,9 @@ struct Job {
             std::string loggedStage;
             auto save = [&](const std::string& line) {
                 if (sessionLog && logging && *logging) sessionLog->write(line);
+                std::lock_guard lock(mutex);
+                recent.push_back('[' + timestamp("%H:%M:%S") + "] " + line);
+                if (recent.size() > 400) recent.pop_front();
             };
             try {
                 save("== " + title);
@@ -159,8 +201,20 @@ struct Job {
                 }
             } catch (const std::exception& e) {
                 save(std::string("== Failed: ") + e.what());
+                const auto* failure = dynamic_cast<const ProcessFailure*>(&e);
+                if (sessionLog && !cancel) {
+                    std::deque<std::string> copy;
+                    {
+                        std::lock_guard lock(mutex);
+                        copy = recent;
+                    }
+                    if (!copy.empty()) copy.pop_back();   // (the "== Failed" line: written last by writeFailure)
+                    sessionLog->writeFailure(title, copy, e.what());
+                }
                 std::lock_guard lock(mutex);
                 message = cancel ? "Cancelled" : e.what();
+                crashed = !cancel && failure && failure->crashed;
+                report = failure ? failure->report : std::string();
                 lines.push_back(e.what());
             }
             busy = false;

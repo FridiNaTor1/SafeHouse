@@ -2,8 +2,12 @@
 #include <atomic>
 #include <cerrno>
 #include <functional>
+#include <optional>
+#include <stdexcept>
+#include <utility>
 
 #include "platform.h"
+#include "crash_report.h"
 #if defined(CANE_ANDROID) || defined(CANE_IOS)
 #include "mobile_app.h"
 #endif
@@ -261,12 +265,75 @@ inline int runProcess(const std::vector<std::string>& arguments, const fs::path&
     if (cancelled) throw std::runtime_error("Cancelled");
     return code;
 }
+// A child's exit code as the launcher's messages show it: "exit 1", "exit 0xC0000005, access violation" (Windows: an
+// NTSTATUS or exception code, crash_report.h exceptionName), "exit 139, segmentation fault" (runProcess: 128 + signal).
+inline std::string describeExitCode(int code) {
+#ifdef _WIN32
+    const auto value = static_cast<uint32_t>(code);
+    if (value >= 0x40000000u) {
+        char text[16];
+        std::snprintf(text, sizeof(text), "0x%08X", value);
+        const char* name = crash::exceptionName(value);
+        return std::string("exit ") + text + (name[0] ? std::string(", ") + name : std::string());
+    }
+#else
+    static const std::pair<int, const char*> signals[] = {{4, "illegal instruction"}, {6, "abort"},        {7, "bus error"},
+                                                          {8, "arithmetic exception"}, {9, "killed"},    {11, "segmentation fault"},
+                                                          {15, "terminated"}};
+    for (const auto& [number, name] : signals)
+        if (code == 128 + number) return "exit " + std::to_string(code) + ", " + name;
+#endif
+    return "exit " + std::to_string(code);
+}
+// The exit code of a crash (not an ordinary failure the program reported): Windows' error codes, a fatal signal.
+inline bool crashExitCode(int code) {
+#ifdef _WIN32
+    return static_cast<uint32_t>(code) >= 0xC0000000u || static_cast<uint32_t>(code) == 0x80000003u;
+#else
+    return code == 128 + 4 || code == 128 + 6 || code == 128 + 7 || code == 128 + 8 || code == 128 + 11;
+#endif
+}
+// A program that failed: `crashed` when it crashed or hung (its "crash:" / "hang:" report, or a crash's exit code), with
+// its report file (crash_report.h: the minidump in the log folder) when there is one.
+struct ProcessFailure : std::runtime_error {
+    bool crashed = false;
+    std::string report;
+    ProcessFailure(const std::string& message, bool crashed, std::string report = {})
+        : std::runtime_error(message), crashed(crashed), report(std::move(report)) {}
+};
+// Watches a program's output for its crash report (crash_report.h): the "crash: ... crashed: ..." / "hang: ... is not
+// responding ..." line and the minidump's path. feed() is false for the report's own lines.
+struct CrashWatch {
+    std::string crash, hang, report;
+    bool feed(const std::string& line) {
+        const bool crashLine = line.rfind("crash: ", 0) == 0, hangLine = line.rfind("hang: ", 0) == 0;
+        if (!crashLine && !hangLine) return true;
+        const std::string text = line.substr(crashLine ? 7 : 6);
+        if (crashLine && crash.empty() && text.find(" crashed: ") != std::string::npos) crash = text;
+        if (hangLine && hang.empty() && text.find(" is not responding") != std::string::npos) hang = text;
+        if (text.rfind("minidump: ", 0) == 0 && text.find("could not") == std::string::npos) report = text.substr(10);
+        return false;
+    }
+    // The failure of a program that ended with `code` (not 0): the crash's message, or none (an ordinary failure).
+    std::optional<ProcessFailure> failure(const std::string& program, int code) const {
+        const std::string exit = " (" + program + ", " + describeExitCode(code) + ")";
+        if (!crash.empty()) return ProcessFailure(crash + exit, true, report);
+        if (!hang.empty() && !crashExitCode(code)) return std::nullopt;
+        if (!hang.empty()) return ProcessFailure(hang + exit, true, report);
+        if (crashExitCode(code)) return ProcessFailure(program + " ended unexpectedly" + exit, true, report);
+        return std::nullopt;
+    }
+};
 inline void checkedProcess(const std::vector<std::string>& arguments, const fs::path& directory,
                            const std::atomic<bool>& cancelled, const LogFunction& log) {
-    auto code = runProcess(arguments, directory, cancelled, log);
-    if (code)
-        throw std::runtime_error(arguments[0] + " failed (exit " + std::to_string(code) +
-                                 "). Details are in the launcher output.");
+    CrashWatch watch;
+    auto code = runProcess(arguments, directory, cancelled, [&](const std::string& line) {
+        watch.feed(line);
+        log(line);
+    });
+    if (!code) return;
+    if (auto failure = watch.failure(utf8(path(arguments[0]).filename()), code)) throw *failure;
+    throw ProcessFailure(arguments[0] + " failed (" + describeExitCode(code) + "). Details are in the launcher output.", false);
 }
 inline void openFolder(const fs::path& directory) {
 #if defined(CANE_MOBILE)

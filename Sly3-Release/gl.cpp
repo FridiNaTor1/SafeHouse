@@ -20,10 +20,12 @@
 #include "vr.h"
 #include "renderer.h"
 #include "fsr.h"
+#include "nearclipcheck.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -486,72 +488,129 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     g_fBlend1 = g_fDrawUniform && FRendererVulkan() && cDualSource > 0 &&
                 !(std::getenv("SLY2N_VKBLEND1") && std::atoi(std::getenv("SLY2N_VKBLEND1")) == 0);
     const std::string pullDef = g_fDrawUniform && FRendererVulkan() ? "#define CANE_PULL 1\n#define CANE_BLEND1 1\n" : "";
-    auto initGlob = [&](const char* szPrefix) {
-        globPrefix = szPrefix + pullDef;
-        fGlobGeom = s_fNearClip && glGlobShader.FInit("glob.vert", "glob.geom", "glob.frag", (globPrefix + "#define GEOM 1\n").c_str());
-        return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", globPrefix.c_str());
-    };
-    g_fGlobBindless = fBindlessWanted && FBindlessWorks() && initGlob("#extension GL_ARB_bindless_texture : require\n#define BINDLESS 1\n");
-    // (perf-5) without bindless textures: the pass draws' textures as layers of array textures (render.cpp LayerRefOfTex),
-    // so runs join across textures of one size; needs glCopyImageSubData and glTexStorage3D (GL 4.3 / GLES 3.2).
-    // SLY2N_NOTEXARRAYS=1: each run binds its texture as before. Not on the Switch (its programs are built offline).
+    // (all the glob programs, with the near-clip stage or (fNearClip false, the check below failed) without it: the
+    // GLSHADERs reset first, as at the start)
+    auto buildGlob = [&](bool fNearClip) {
+        for (GLSHADER* psh : {&glGlobShader, &glGlobShaderNoKill, &glGlobShaderVol, &glGlobShaderVolNoGeom, &glGlobShaderNoGeom, &glGlobShaderNoKillNoGeom})
+        {
+            if (psh->ID && !FRendererVulkan()) psh->Delete();
+            *psh = GLSHADER();
+        }
+        g_fGlobBindless = g_fGlobArrays = false;
+        auto initGlob = [&](const char* szPrefix) {
+            globPrefix = szPrefix + pullDef;
+            fGlobGeom = fNearClip && glGlobShader.FInit("glob.vert", "glob.geom", "glob.frag", (globPrefix + "#define GEOM 1\n").c_str());
+            return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", globPrefix.c_str());
+        };
+        g_fGlobBindless = fBindlessWanted && FBindlessWorks() && initGlob("#extension GL_ARB_bindless_texture : require\n#define BINDLESS 1\n");
+        // (perf-5) without bindless textures: the pass draws' textures as layers of array textures (render.cpp LayerRefOfTex),
+        // so runs join across textures of one size; needs glCopyImageSubData and glTexStorage3D (GL 4.3 / GLES 3.2).
+        // SLY2N_NOTEXARRAYS=1: each run binds its texture as before. Not on the Switch (its programs are built offline).
 #ifndef __SWITCH__
-    if (!g_fGlobBindless && glCopyImageSubData && glTexStorage3D && !(std::getenv("SLY2N_NOTEXARRAYS") && std::atoi(std::getenv("SLY2N_NOTEXARRAYS")) != 0))
-        g_fGlobArrays = initGlob("#define TEXARRAY 1\n");
+        if (!g_fGlobBindless && glCopyImageSubData && glTexStorage3D && !(std::getenv("SLY2N_NOTEXARRAYS") && std::atoi(std::getenv("SLY2N_NOTEXARRAYS")) != 0))
+            g_fGlobArrays = initGlob("#define TEXARRAY 1\n");
 #endif
-    if (!g_fGlobBindless && !g_fGlobArrays && !initGlob(""))
+        if (!g_fGlobBindless && !g_fGlobArrays && !initGlob(""))
+        {
+            glGlobShader.Init("glob.vert", "glob.frag");
+            globPrefix.clear();
+            fGlobGeom = false;
+        }
+        std::printf("OpenGL: textures %s\n", g_fGlobBindless ? "bindless (ARB_bindless_texture)" : g_fGlobArrays ? "bound, as array layers" : "bound");
+        // The glob program without its fragment discards (NOKILL: no alpha test, no DATE), for the runs that need neither
+        // (render.cpp): the GPU then tests depth and stencil before the fragments. ID 0 if it does not build: glGlobShader.
+        const std::string prefixNoKill = globPrefix + (fGlobGeom ? "#define GEOM 1\n" : "") + "#define NOKILL 1\n";
+        if (!(fGlobGeom ? glGlobShaderNoKill.FInit("glob.vert", "glob.geom", "glob.frag", prefixNoKill.c_str())
+                        : glGlobShaderNoKill.FInit("glob.vert", "glob.frag", prefixNoKill.c_str())))
+            glGlobShaderNoKill.ID = 0;
+        // (the Vulkan renderer's pulled programs, CANE_BLEND1) the no-discard program without CANE_BLEND1's second output, for
+        // the projected volumes' colour draws (render.cpp FDrawProjVolumePackets): the Quest 3S's Adreno hangs the GPU drawing
+        // the volumes' fill with that output (a blend that doesn't read it) while its video capture preempts the GPU (notes/
+        // STATUS-VK.md volume-dim). Same pictures. SLY2N_VKVOLPROG=0: the volumes with the glob program as before.
+        glGlobShaderVol.ID = 0;
+        std::string prefixVol;
+        if (!pullDef.empty() && glGlobShaderNoKill.ID && !(std::getenv("SLY2N_VKVOLPROG") && std::atoi(std::getenv("SLY2N_VKVOLPROG")) == 0))
+        {
+            prefixVol = prefixNoKill;
+            static const char szBlend1[] = "#define CANE_BLEND1 1\n";
+            if (const size_t i = prefixVol.find(szBlend1); i != std::string::npos) prefixVol.erase(i, sizeof(szBlend1) - 1);
+            if (!(fGlobGeom ? glGlobShaderVol.FInit("glob.vert", "glob.geom", "glob.frag", prefixVol.c_str())
+                            : glGlobShaderVol.FInit("glob.vert", "glob.frag", prefixVol.c_str())))
+                glGlobShaderVol.ID = 0;
+            std::printf("OpenGL: projected volumes %s\n", glGlobShaderVol.ID ? "with the program without CANE_BLEND1" : "with the glob program (no variant)");
+        }
+        // (perf-4) both without the near-clip stage, for the runs whose draws are all wholly in front of the near plane
+        // (render.cpp): glob.geom passes their triangles through unchanged, and a geometry stage costs GPU time on every draw
+        // (the Switch leaves it out altogether; tile GPUs and Zink pay most). SLY2N_GLOBNOGEOM=0: the stage everywhere.
+        glGlobShaderNoGeom.ID = glGlobShaderNoKillNoGeom.ID = 0;
+        g_fGlobNoGeom = false;
+        if (fGlobGeom && !(std::getenv("SLY2N_GLOBNOGEOM") && std::atoi(std::getenv("SLY2N_GLOBNOGEOM")) == 0))
+        {
+            if (!glGlobShaderNoGeom.FInit("glob.vert", "glob.frag", globPrefix.c_str())) glGlobShaderNoGeom.ID = 0;
+            if (!glGlobShaderNoKill.ID || !glGlobShaderNoKillNoGeom.FInit("glob.vert", "glob.frag", (globPrefix + "#define NOKILL 1\n").c_str()))
+                glGlobShaderNoKillNoGeom.ID = 0;
+            g_fGlobNoGeom = glGlobShaderNoGeom.ID != 0;
+        }
+        // (the volumes' colour program without the near-clip stage too, for the passes whose glob runs draw without it (VR on
+        // Android and tile GPUs: render.cpp FVrNoNearClip): the fill then takes the same triangles as its stencil mask, and a
+        // two-view pass gets no geometry stage, which needs multiviewGeometryShader: the Quest 3S's Adreno has none, and with
+        // it the right eye's flashlight beams / light shafts were filled wrongly (mostly missing, flickering))
+        glGlobShaderVolNoGeom.ID = 0;
+        if (glGlobShaderVol.ID && fGlobGeom && glGlobShaderNoKillNoGeom.ID)
+        {
+            static const char szGeom[] = "#define GEOM 1\n";
+            if (const size_t i = prefixVol.find(szGeom); i != std::string::npos) prefixVol.erase(i, sizeof(szGeom) - 1);
+            if (!glGlobShaderVolNoGeom.FInit("glob.vert", "glob.frag", prefixVol.c_str())) glGlobShaderVolNoGeom.ID = 0;
+            if (!glGlobShaderVolNoGeom.ID) std::printf("OpenGL: projected volumes: no program without the near-clip stage (the glob program there)\n");
+        }
+    };
+    buildGlob(s_fNearClip);
+    // The near-clip stage checked (nearclipcheck.h): a small scene with triangles wholly in front of the near plane and
+    // ones crossing it drawn with each program that has the stage, compared with what the stage must give; if it is
+    // wrong (a driver's compiler miscompiled it), every program without the stage: the GPU's own clipping. Once per
+    // driver and build (remembered in the user folder). SLY2N_NEARCLIPCHECK=0: not checked; =1: checked again;
+    // =fail: taken as failed (a test of the fallback).
+    const char* szCheck = std::getenv("SLY2N_NEARCLIPCHECK");
+    const std::string check = szCheck ? szCheck : "";
+    const char* szRendererNow = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    const std::string driver = szRendererNow ? szRendererNow : "?";
+    if (fGlobGeom && check != "0")
     {
-        glGlobShader.Init("glob.vert", "glob.frag");
-        globPrefix.clear();
-        fGlobGeom = false;
+        const std::string variant = globPrefix + (g_fBlend1 ? "blend1;" : "") + (FRendererVulkan() ? "vulkan" : "opengl");
+        const std::string key = NearClipKey(variant);
+        int cached = check == "fail" ? 0 : check == "1" ? -1 : NearClipCached(key);
+        std::string detail = check == "fail" ? "SLY2N_NEARCLIPCHECK=fail" : "the result remembered for this driver and build";
+        if (cached < 0)
+        {
+            const GLSHADER* apsh[] = {&glGlobShader, &glGlobShaderNoKill, &glGlobShaderVol};
+            const auto t0 = std::chrono::steady_clock::now();
+            const NEARCLIPCHECK r = NearClipCheck(apsh, int(std::size(apsh)), g_fDrawUniform, g_fGlobBindless, g_fGlobArrays,
+                                                  g_fGlobBindless && g_fDrawUniform && FRendererVulkan());
+            cached = r.fOk ? 1 : 0;
+            detail = r.detail + "; " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) + " ms";
+            NearClipRemember(key, r.fOk);
+        }
+        // (SLY2N_NEARCLIPDUMP=dir: the pictures written there, and the programs without the stage checked against the same
+        // pixels for comparison: the GPU's own clipping differs from the stage's on the crossing triangles)
+        if (const char* szDump = std::getenv("SLY2N_NEARCLIPDUMP"); szDump && *szDump && g_fGlobNoGeom)
+        {
+            const GLSHADER* apsh[] = {&glGlobShaderNoGeom, &glGlobShaderNoKillNoGeom, &glGlobShaderVolNoGeom};
+            const NEARCLIPCHECK r = NearClipCheck(apsh, int(std::size(apsh)), g_fDrawUniform, g_fGlobBindless, g_fGlobArrays,
+                                                  g_fGlobBindless && g_fDrawUniform && FRendererVulkan());
+            std::printf("near clip: (for comparison) the GPU's clipping %s the check (%s)\n", r.fOk ? "passes" : "fails", r.detail.c_str());
+        }
+        if (cached)
+            std::printf("near clip: geometry stage (glob.geom), passed its check (%s)\n", detail.c_str());
+        else
+        {
+            std::printf("near clip: geometry stage failed its check on %s, using the GPU's clipping (%s)\n", driver.c_str(), detail.c_str());
+            buildGlob(false);
+        }
     }
-    std::printf("OpenGL: textures %s\n", g_fGlobBindless ? "bindless (ARB_bindless_texture)" : g_fGlobArrays ? "bound, as array layers" : "bound");
-    // The glob program without its fragment discards (NOKILL: no alpha test, no DATE), for the runs that need neither
-    // (render.cpp): the GPU then tests depth and stencil before the fragments. ID 0 if it does not build: glGlobShader.
-    const std::string prefixNoKill = globPrefix + (fGlobGeom ? "#define GEOM 1\n" : "") + "#define NOKILL 1\n";
-    if (!(fGlobGeom ? glGlobShaderNoKill.FInit("glob.vert", "glob.geom", "glob.frag", prefixNoKill.c_str())
-                    : glGlobShaderNoKill.FInit("glob.vert", "glob.frag", prefixNoKill.c_str())))
-        glGlobShaderNoKill.ID = 0;
-    // (the Vulkan renderer's pulled programs, CANE_BLEND1) the no-discard program without CANE_BLEND1's second output, for
-    // the projected volumes' colour draws (render.cpp FDrawProjVolumePackets): the Quest 3S's Adreno hangs the GPU drawing
-    // the volumes' fill with that output (a blend that doesn't read it) while its video capture preempts the GPU (notes/
-    // STATUS-VK.md volume-dim). Same pictures. SLY2N_VKVOLPROG=0: the volumes with the glob program as before.
-    glGlobShaderVol.ID = 0;
-    std::string prefixVol;
-    if (!pullDef.empty() && glGlobShaderNoKill.ID && !(std::getenv("SLY2N_VKVOLPROG") && std::atoi(std::getenv("SLY2N_VKVOLPROG")) == 0))
-    {
-        prefixVol = prefixNoKill;
-        static const char szBlend1[] = "#define CANE_BLEND1 1\n";
-        if (const size_t i = prefixVol.find(szBlend1); i != std::string::npos) prefixVol.erase(i, sizeof(szBlend1) - 1);
-        if (!(fGlobGeom ? glGlobShaderVol.FInit("glob.vert", "glob.geom", "glob.frag", prefixVol.c_str())
-                        : glGlobShaderVol.FInit("glob.vert", "glob.frag", prefixVol.c_str())))
-            glGlobShaderVol.ID = 0;
-        std::printf("OpenGL: projected volumes %s\n", glGlobShaderVol.ID ? "with the program without CANE_BLEND1" : "with the glob program (no variant)");
-    }
-    // (perf-4) both without the near-clip stage, for the runs whose draws are all wholly in front of the near plane
-    // (render.cpp): glob.geom passes their triangles through unchanged, and a geometry stage costs GPU time on every draw
-    // (the Switch leaves it out altogether; tile GPUs and Zink pay most). SLY2N_GLOBNOGEOM=0: the stage everywhere.
-    glGlobShaderNoGeom.ID = glGlobShaderNoKillNoGeom.ID = 0;
-    g_fGlobNoGeom = false;
-    if (fGlobGeom && !(std::getenv("SLY2N_GLOBNOGEOM") && std::atoi(std::getenv("SLY2N_GLOBNOGEOM")) == 0))
-    {
-        if (!glGlobShaderNoGeom.FInit("glob.vert", "glob.frag", globPrefix.c_str())) glGlobShaderNoGeom.ID = 0;
-        if (!glGlobShaderNoKill.ID || !glGlobShaderNoKillNoGeom.FInit("glob.vert", "glob.frag", (globPrefix + "#define NOKILL 1\n").c_str()))
-            glGlobShaderNoKillNoGeom.ID = 0;
-        g_fGlobNoGeom = glGlobShaderNoGeom.ID != 0;
-    }
-    // (the volumes' colour program without the near-clip stage too, for the passes whose glob runs draw without it (VR on
-    // Android and tile GPUs: render.cpp FVrNoNearClip): the fill then takes the same triangles as its stencil mask, and a
-    // two-view pass gets no geometry stage, which needs multiviewGeometryShader: the Quest 3S's Adreno has none, and with
-    // it the right eye's flashlight beams / light shafts were filled wrongly (mostly missing, flickering))
-    glGlobShaderVolNoGeom.ID = 0;
-    if (glGlobShaderVol.ID && fGlobGeom && glGlobShaderNoKillNoGeom.ID)
-    {
-        static const char szGeom[] = "#define GEOM 1\n";
-        if (const size_t i = prefixVol.find(szGeom); i != std::string::npos) prefixVol.erase(i, sizeof(szGeom) - 1);
-        if (!glGlobShaderVolNoGeom.FInit("glob.vert", "glob.frag", prefixVol.c_str())) glGlobShaderVolNoGeom.ID = 0;
-        if (!glGlobShaderVolNoGeom.ID) std::printf("OpenGL: projected volumes: no program without the near-clip stage (the glob program there)\n");
-    }
+    else if (fGlobGeom)
+        std::printf("near clip: geometry stage (glob.geom), not checked (SLY2N_NEARCLIPCHECK=0)\n");
+    else
+        std::printf("near clip: the GPU's clipping (%s)\n", !s_fNearClip ? "no geometry stage on this platform or SLY2N_NEARCLIP=0" : "the geometry stage did not build");
     glCelBorderShader.Init("celborder.vert", "celborder.frag");
     glHudShader.Init("hud.vert", "hud.frag");
     glOverlayShader.Init("overlay.vert", "overlay.frag");

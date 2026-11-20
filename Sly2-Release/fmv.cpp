@@ -508,7 +508,19 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         }
     };
 
-    auto feedVideo = [&](const uint8_t* pb, std::size_t cb) {
+    // (FFmpeg's parser reads up to AV_INPUT_BUFFER_PADDING_SIZE bytes past its input: each packet goes through a copy
+    // with zeroed padding. Fed in place (the reader's file buffer or the mapped file), it read past the buffer's end:
+    // ASan heap-buffer-overflow in ff_combine_frame at every movie, and an access violation on Windows where the end
+    // fell on an unmapped page)
+    std::vector<uint8_t> abPadded;
+    auto feedVideo = [&](const uint8_t* pbIn, std::size_t cb) {
+        const uint8_t* pb = pbIn;
+        if (pbIn)
+        {
+            abPadded.assign(pbIn, pbIn + cb);
+            abPadded.resize(cb + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+            pb = abPadded.data();
+        }
         while (cb > 0 || pb == nullptr)
         {
             uint8_t* out = nullptr;
@@ -574,6 +586,8 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
     auto tStart = clock::now();
     double tNext = 0.0;  // when the next picture is due (s since the start)
     uint64_t cframeQueuedAudio = 0;
+    double tClockLast = -1.0, tWallClockMoved = 0.0;   // (the sound clock's last value, the wall time it last moved)
+    bool fClockStalled = false;
     (void)cframeQueuedAudio;
     while (fOk && !fQuit)
     {
@@ -603,7 +617,19 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         queueAudio(fEof && audio.FWavDone());
         // The clock: the sound played (when there is sound), else the wall clock.
         const double tWall = std::chrono::duration<double>(clock::now() - tStart).count();
-        const double t = pcm.FIsOpen() && pcm.CFramePlayed() > 0 ? double(pcm.CFramePlayed()) / audio.m_rate : tWall;
+        const double tSound = pcm.FIsOpen() && pcm.CFramePlayed() > 0 ? double(pcm.CFramePlayed()) / audio.m_rate : tWall;
+        double t = tSound;
+        // (PC) a sound clock that stops (the device stalled or lost: the voice plays no more) froze the picture for
+        // good, with the window still up: after 1 s of wall time without the sound advancing, the wall clock goes on
+        // from there (the pictures, then the end), as for a movie without sound
+        if (fClockStalled) {}
+        else if (tSound != tClockLast) { tClockLast = tSound; tWallClockMoved = tWall; }
+        else if (pcm.FIsOpen() && tWall - tWallClockMoved > 1.0)
+        {
+            std::fprintf(stderr, "movie %u: the sound stopped at %.2f s: the wall clock goes on\n", fk.id, tSound);
+            fClockStalled = true;
+        }
+        if (fClockStalled) t = tClockLast + (tWall - tWallClockMoved);
         if (t >= tMax) break;
         if (!apicture.empty() && t >= tNext)
         {
@@ -633,7 +659,7 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         if (apicture.empty() && fEof)
         {
             // The pictures are done: let the sound finish.
-            if (!pcm.FIsOpen() || (audio.m_pcm.empty() && audio.FWavDone() && pcm.CBufferQueued() == 0)) break;
+            if (!pcm.FIsOpen() || fClockStalled || (audio.m_pcm.empty() && audio.FWavDone() && pcm.CBufferQueued() == 0)) break;
         }
         if (!pfnPresent(nullptr, 0, 0, pv))
         {

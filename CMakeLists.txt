@@ -537,6 +537,9 @@ if(BUILD_TESTING)
  find_package(Python3 QUIET COMPONENTS Interpreter)
  if(Python3_FOUND)
   add_test(NAME extractor-rejection COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-extractor.py" "$<TARGET_FILE:cane-extractor>")
+  # The crash reports of the programs the launcher runs (platform/crash_report.h): the output before a crash kept, the
+  # "crash:" line, its context and stack.
+  add_test(NAME crash-report COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-crash-report.py" "$<TARGET_FILE:cane-extractor>")
   if(CANE_BUILD_SLY2 AND TARGET Sly2-Release)
    # Japanese chosen on a USA / European installation shows Japanese text (the user's own data: SLY2_TEST_USA and
    # SLY2_TEST_LANGUAGES or SLY2_TEST_JAPAN; skipped without them)

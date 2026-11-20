@@ -112,6 +112,7 @@ public:
     std::function<void(float)> setScale;
     std::function<void(bool)> setLogging; // "Save logs"
     std::function<bool()> logging;
+    std::function<std::string()> logError;   // (why launcher.log / last-failure.log could not be written: ui/job.h)
     // "Install another region" of a game (main.cpp opens its install page in that mode).
     std::function<void(GameId)> installRegion;
     bool* showLogs = nullptr;
@@ -2272,6 +2273,8 @@ private:
         bool save = logging ? logging() : false;
         if (toggleRow(tr("Save logs"), &save) && setLogging && !m_fixture) setLogging(save);
         describe(tr("Off by default. When on, launcher and game output is saved to launcher.log in the log folder, for bug reports."));
+        if (const std::string error = logError ? logError() : std::string(); !error.empty())
+            caption(trf("Could not write the log: %s", error.c_str()).c_str(), color::warning);
         bool logs = showLogs ? *showLogs : false;
         if (toggleRow(tr("Show activity log"), &logs)) {
             if (showLogs) *showLogs = logs;
@@ -2283,7 +2286,11 @@ private:
         m_saveFolderHelp = trf("Opens the folder with your %s saves and settings.", cane::game(m_game).shortName);
         describe(m_saveFolderHelp.c_str());
         if (linkRow(tr("Log folder"), nullptr, nullptr, Icon::Folder)) openSafe(m_backend.locations.logs);
-        describe(tr("Opens the folder with the launcher and game logs."));
+        // (the folder's path in the help: findable without the button)
+        m_logFolderText = std::string(tr("Opens the folder with the launcher and game logs.")) + " " +
+                          tr("Crash reports and the output of a task that failed are always saved there.") + "\n" +
+                          shortcut::displayPath(m_backend.locations.logs);
+        describe(m_logFolderText.c_str());
         const bool custom = m_backend.config.contains("runtime_dir");
 #ifndef CANE_LAUNCHER_SOURCE_BUILD
         // The packages players download run the bundled programs (built by CI): the section is only the way back from
@@ -2361,7 +2368,7 @@ private:
     bool m_captureController = false, m_captureArmed = false, m_saveOk = true, m_volumeDirty = false, m_debug = false;
     bool m_focusRows = false;
     bool m_paneFocused = false, m_focusRail = false, m_scrollTop = false, m_fixture = false;
-    std::string m_help, m_captureNote, m_saveFolderHelp;
+    std::string m_help, m_captureNote, m_saveFolderHelp, m_logFolderText;
     GameId m_game = GameId::Sly1;
     char m_source[4096]{};
     std::array<std::vector<Installation>, kGameCount> m_installs;

@@ -115,13 +115,16 @@ void SetRtgtCamera(int irtgt, const glm::vec3& pos, const glm::vec3& b0, const g
 }
 
 // QoL (U25): the original's targets are 128 x 128 for a 448-line frame; natively they follow the render height
-// (128 per 224 lines: twice the original's texel density, so the speaker windows stay sharp up to 4K).
-// SLY2N_RTGT128=1: the original's 128 x 128.
+// (about 128 per 224 lines: twice the original's texel density, so the speaker windows stay sharp up to 4K), as the
+// power of two nearest that (128 .. 2048: 1009 lines 512, 1440 1024). Only powers of two: AMD's Windows drivers
+// (RX 7700S, 26.11.2, Vulkan and OpenGL) showed the windows empty with the exact size (960 lines: 549, 1009: 577),
+// drawn with 128. SLY2N_RTGT128=1: the original's 128 x 128.
 int DxRtgtForDisplay()
 {
     static const bool s_f128 = std::getenv("SLY2N_RTGT128") != nullptr;
     if (s_f128 || g_gl.renderHeight <= 0) return 128;
-    return std::clamp(int(std::lround(128.0 * g_gl.renderHeight / 224.0)), 128, 2048);
+    const double dx = 128.0 * g_gl.renderHeight / 224.0;
+    return std::clamp(1 << int(std::lround(std::log2(std::max(dx, 1.0)))), 128, 2048);
 }
 
 unsigned GlTextureOfRtgt(int irtgt)
@@ -130,14 +133,19 @@ unsigned GlTextureOfRtgt(int irtgt)
     if (!p) return 0;
     if (const int dx = DxRtgtForDisplay(); g_gl.window && dx != p->dx)
     {
-        if (p->fbo)
-        {
-            GlDeleteFramebuffers(1, &p->fbo);
-            GlDeleteTexture(p->tex);
-            GlDeleteRenderbuffer(p->rboDepth);
-            p->fbo = p->tex = p->rboDepth = 0;
-        }
+        // (the new target made before the old one is deleted: its names are new ones, never the old target's, which
+        // a cache keyed by name (a texture's handle or descriptor, its parameters) may still hold)
+        const RTGT old = *p;
+        p->fbo = p->tex = p->rboDepth = 0;
         p->dx = p->dy = dx;
+        EnsureFbo(*p);
+        if (old.fbo)
+        {
+            GLuint fbo = old.fbo;
+            GlDeleteFramebuffers(1, &fbo);
+            GlDeleteTexture(old.tex);
+            GlDeleteRenderbuffer(old.rboDepth);
+        }
     }
     EnsureFbo(*p);
     return p->tex;

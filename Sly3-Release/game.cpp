@@ -111,6 +111,8 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "vehicle.h"
 #include "../platform/game_sched.h"
 #include "transition.h"
+#include "../platform/crash_context.h"
+const char* SzConvertWorldName(int iwrec);   // convert.cpp
 #include "po.h"
 #include "shop.h"
 #include "step.h"
@@ -1022,6 +1024,15 @@ int RunGame(const GAMEOPTS& go)
     for (int frame = 0; go.cframe < 0 || frame < go.cframe;)
     {
         const double t0 = now();
+        // (crash_context.h: the world and the frame in a crash or hang report)
+        cane::crash::frame(frame);
+        if (static int s_iwrecReported = -2; g_transition.iwrecCur != s_iwrecReported)
+        {
+            s_iwrecReported = g_transition.iwrecCur;
+            const char* szWorld = ([] { const char* sz = SzConvertWorldName(g_transition.iwrecCur); return sz ? sz : ""; })();
+            cane::crash::context("world %d (%s)", s_iwrecReported, szWorld);
+            cane::crash::note("frame %d: world %d (%s)", frame, s_iwrecReported, szWorld);
+        }
         if (fWindow && glfwWindowShouldClose(g_gl.window)) break;
         if (vr::FExitRequested()) break;   // (the headset's system menu: Quit)
         // (debug: SLY2N_HEAPCHECK=N: every N frames the heap's free lists consolidated (glibc checks their links), with a

@@ -1,6 +1,7 @@
 // See moviegl.h.
 
 #include "moviegl.h"
+#include "stallwatch.h"
 
 #include "display.h"
 #include "gl.h"
@@ -130,6 +131,7 @@ bool PresentMovieGl(const uint8_t* prgba, int cx, int cy, void* pv)
     if (m.fWindowed)
     {
         glfwPollEvents();
+        stall::Beat();
         GLFWwindow* w = g_gl.window;
         if (glfwWindowShouldClose(w)) return false;
         GLFWgamepadstate pad{};

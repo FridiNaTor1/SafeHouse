@@ -456,8 +456,18 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     t.iwrecCur = iwrec;
     t.req = req;
     std::size_t cbRead = 0, cbFile = 0;
+    // (PC) an installed level that cannot be read back (an install that did not finish, a damaged folder): the
+    // "reinstall" error and a clean exit, not a crash (an uncaught exception) or an empty world the game waits in for good
+    // (a part that cannot be read throws DAMAGEDINSTALL: main.cpp's terminate handler says the same)
     if (fk.cb && !FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile))
+    {
         std::fprintf(stderr, "transition: world record %d did not load\n", iwrec);
+        if (g_disc.FInstalledFile(fk.isector))
+        {
+            const std::string name = g_disc.SzFileName(fk.isector);
+            FailDamagedInstall("the level " + (name.empty() ? "at sector " + std::to_string(fk.isector) : name) + " did not load");
+        }
+    }
     OnReplayWorldLoaded(iwrec, req.flags);   // (QoL Replay Jobs: the front end / the title end a replay)
     LoadSoundBank();  // orig 0x1FD5E8 (the end of 0x13DA18)
     if (!psw->awrec.empty())

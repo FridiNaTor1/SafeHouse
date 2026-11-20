@@ -363,6 +363,10 @@ void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
     static const int s_frameSkipAt = std::getenv("SLY2N_SKIPAT") ? std::atoi(std::getenv("SLY2N_SKIPAT")) : -1;
     bool fStart = FUpdateHold(s_skip, dtReal, grfHeld, grfPressed, fSkippable);
     if (s_frameSkipAt >= 0 && g_frameJoy >= s_frameSkipAt && g_frameJoy < s_frameSkipAt + 1 && fSkippable) fStart = true;
+    // (tests: SLY2N_SKIPALL=s: every skippable scene skipped s seconds of real time after it began, through the same
+    // acknowledged start as the player's hold: a play-through that skips the cutscenes)
+    static const float s_tSkipAll = std::getenv("SLY2N_SKIPALL") ? float(std::atof(std::getenv("SLY2N_SKIPALL"))) : -1.0f;
+    if (s_tSkipAll >= 0.0f && fSkippable && s_skip.tScene >= s_tSkipAll) fStart = true;
     // (tests: SLY2N_SKIPHINT=1 shows the hint while a cutscene can be skipped, as after a press: its screenshots)
     static const bool s_fHintAlways = std::getenv("SLY2N_SKIPHINT") != nullptr;
     if (s_fHintAlways && fSkippable) { s_skip.fHint = true; s_skip.tHint = 0.0f; }

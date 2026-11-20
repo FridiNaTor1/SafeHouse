@@ -471,7 +471,17 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         }
     };
 
-    auto feedVideo = [&](const uint8_t* pb, std::size_t cb) {
+    // (FFmpeg's parser reads up to AV_INPUT_BUFFER_PADDING_SIZE bytes past its input: each packet through a copy with
+    // zeroed padding, as Sly2-Release/fmv.cpp; fed in place it read past the reader's buffer)
+    std::vector<uint8_t> abPadded;
+    auto feedVideo = [&](const uint8_t* pbIn, std::size_t cb) {
+        const uint8_t* pb = pbIn;
+        if (pbIn)
+        {
+            abPadded.assign(pbIn, pbIn + cb);
+            abPadded.resize(cb + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+            pb = abPadded.data();
+        }
         while (cb > 0 || pb == nullptr)
         {
             uint8_t* out = nullptr;
