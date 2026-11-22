@@ -148,6 +148,8 @@ def main(argv=None):
     for name in ('ffmpeg', 'sdl2', 'faudio'):
         build = target / (name + '-build')
         identity = {**common_identity, 'dependency': manifest[name]}
+        if name == 'ffmpeg':
+            identity['recipe'] = 2   # (2: FLAC decoder / encoder / parser for multi-language discs' audio)
         required = {'ffmpeg': [install / ('lib/lib' + lib + '.so') for lib in ('avformat', 'avcodec', 'avutil', 'swscale')],
                     'sdl2': [install / 'lib/libSDL2.so', install / 'lib/cmake/SDL2/SDL2Config.cmake'],
                     'faudio': [install / 'lib/libFAudio.a']}[name]
@@ -166,8 +168,8 @@ def main(argv=None):
                     '--disable-programs', '--disable-doc', '--disable-network', '--disable-avdevice',
                     '--disable-avfilter', '--disable-everything', '--enable-avcodec', '--enable-avformat',
                     '--enable-avutil', '--enable-swscale', '--enable-protocol=file',
-                    '--enable-demuxer=mpegvideo,mov', '--enable-decoder=mpeg1video,mpeg2video,h264',
-                    '--enable-parser=mpegvideo,h264', '--disable-debug', '--cc=' + str(compiler),
+                    '--enable-demuxer=mpegvideo,mov', '--enable-decoder=mpeg1video,mpeg2video,h264,flac',
+                    '--enable-encoder=flac', '--enable-parser=mpegvideo,h264,flac', '--disable-debug', '--cc=' + str(compiler),
                     '--cxx=' + str(compiler) + '++', '--ar=' + str(tool_root / 'bin/llvm-ar'),
                     '--ranlib=' + str(tool_root / 'bin/llvm-ranlib'), '--nm=' + str(tool_root / 'bin/llvm-nm'),
                     '--strip=' + str(tool_root / 'bin/llvm-strip'), '--extra-cflags=-fPIC -ffp-contract=off',
