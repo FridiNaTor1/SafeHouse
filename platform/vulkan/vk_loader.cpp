@@ -11,6 +11,13 @@
 #else
 #include <dlfcn.h>
 #endif
+#if defined(__ANDROID__)
+#include <cstdio>
+#include "android/vulkan_driver.h"
+#endif
+#if defined(CANE_ADRENOTOOLS)
+#include <adrenotools/driver.h>
+#endif
 
 namespace cane::vk {
 
@@ -31,7 +38,75 @@ void* Symbol(const char* name) { return reinterpret_cast<void*>(GetProcAddress(g
 void* g_library = nullptr;
 void* Symbol(const char* name) { return dlsym(g_library, name); }
 #endif
+bool g_customDriver = false;   // (Android: a driver package loaded through libadrenotools, android/vulkan_driver.h)
+std::string g_customName;
+
+#if defined(__ANDROID__)
+// The player's custom driver (Settings > Display > Vulkan driver), or nullptr: the system's driver.
+void* OpenCustomDriver()
+{
+    namespace drv = cane::android::vkdriver;
+    const drv::Selection chosen = drv::selection();
+    if (chosen.empty()) return nullptr;
+    if (cane::android::openXrRuntimeInstalled())
+    {
+        std::printf("Vulkan: custom driver %s not used on a VR headset (the system's driver)\n", chosen.name.c_str());
+        return nullptr;
+    }
+    std::string why;
+    if (drv::previousStartCrashed(&why))
+    {
+        drv::disable("The custom Vulkan driver " + chosen.name + " crashed while a game was starting (" + why +
+                     "): SafeHouse uses the system's driver again");
+        return nullptr;
+    }
+#if defined(CANE_ADRENOTOOLS)
+    std::error_code ec;
+    const std::filesystem::path tmp = drv::root() / ".tmp";
+    std::filesystem::create_directories(tmp, ec);
+    const std::string libs = cane::android::nativeLibraryDirectory() + "/";
+    const std::string dir = (drv::root() / chosen.id).string() + "/";
+    const std::string tmpDir = tmp.string() + "/";
+    void* handle = adrenotools_open_libvulkan(RTLD_NOW, ADRENOTOOLS_DRIVER_CUSTOM, tmpDir.c_str(), libs.c_str(), dir.c_str(),
+                                              chosen.library.c_str(), nullptr, nullptr);
+    if (!handle)
+    {
+        std::printf("Vulkan: the custom driver %s could not be loaded (adrenotools): the system's driver\n", chosen.name.c_str());
+        return nullptr;
+    }
+    std::printf("Vulkan: custom driver %s (%s, through libadrenotools)\n", chosen.name.c_str(), chosen.library.c_str());
+    drv::beginStart();
+    g_customDriver = true;
+    g_customName = chosen.name;
+    return handle;
+#else
+    std::printf("Vulkan: custom drivers need an arm64 build: the system's driver\n");
+    return nullptr;
+#endif
+}
+#endif
 }  // namespace
+
+bool CustomDriverActive() { return g_customDriver; }
+
+void NoteStartFinished()
+{
+#if defined(__ANDROID__)
+    if (g_customDriver) cane::android::vkdriver::endStart();
+#endif
+}
+
+void NoteStartFailed(const std::string& why)
+{
+#if defined(__ANDROID__)
+    if (!g_customDriver || why.empty()) return;
+    cane::android::vkdriver::endStart();
+    cane::android::vkdriver::disable("The custom Vulkan driver " + g_customName + " did not start (" + why +
+                                     "): SafeHouse uses the system's driver again");
+#else
+    (void)why;
+#endif
+}
 
 bool LoadLoader(std::string* error)
 {
@@ -55,7 +130,8 @@ bool LoadLoader(std::string* error)
     g_library = dlopen("libvulkan.1.dylib", RTLD_NOW | RTLD_LOCAL);
     if (!g_library) g_library = dlopen("libMoltenVK.dylib", RTLD_NOW | RTLD_LOCAL);
 #elif defined(__ANDROID__)
-    g_library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);   // (the system's loader: no .so.1 on Android)
+    g_library = OpenCustomDriver();
+    if (!g_library) g_library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);   // (the system's loader: no .so.1 on Android)
 #else
     g_library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!g_library) g_library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);

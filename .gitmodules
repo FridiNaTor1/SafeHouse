@@ -1,0 +1,4 @@
+[submodule "Sly1"]
+	path = Sly1
+	url = https://github.com/FridiNaTor1/Sly1-safehouse.git
+	branch = safehouse

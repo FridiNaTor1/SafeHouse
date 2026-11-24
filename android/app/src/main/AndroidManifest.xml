@@ -16,14 +16,23 @@
     </queries>
     <!-- the launcher's update check only (Settings > Launcher > Check for updates: GitHub's latest release) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- the launcher's update (Settings > Launcher > Check for updates: the release's APK, launcher/update.h) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- optional, asked only from Settings > Games (launcher/install_location.h): folders anywhere on the shared storage
+         or an SD card for disc images and installations. Android 11+: All files access; Android 6-10: the storage
+         permission. Without it the app uses its private folder and its own folders on the storage / SD card. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <!-- the USB Headset option's microphone (SDL asks at run time when the headset is turned on) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <application android:label="SafeHouse" android:icon="@drawable/safehouse_icon" android:appCategory="game"
         android:theme="@style/SafeHouseTheme" android:allowBackup="false"
-        android:hasFragileUserData="true" android:resizeableActivity="true">
+        android:hasFragileUserData="true" android:resizeableActivity="true"
+        android:requestLegacyExternalStorage="true">
         <!-- Samsung DeX: keep the processes when the app moves between the phone and the desktop display -->
         <meta-data android:name="com.samsung.android.multidisplay.keep_process_alive" android:value="true" />
         <!-- Meta Quest: the launcher is a 2D panel, the game (GameActivity) the immersive part (a hybrid app) -->
@@ -58,6 +67,7 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density|colorMode">
             <layout android:defaultWidth="1280dp" android:defaultHeight="800dp" android:minWidth="320dp" android:minHeight="240dp" android:gravity="center" />
         </activity>
+        <receiver android:name=".InstallResultReceiver" android:exported="false" />
         <service android:name=".ExtractorService" android:exported="false" android:process=":extract" />
         <service android:name=".RuntimeToolService" android:exported="false" android:process=":tool" />
         <service android:name=".LauncherKeeperService" android:exported="false" />

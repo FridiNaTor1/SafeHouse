@@ -1,0 +1,6 @@
+# Upstream contributors whose commits the Sly1 submodule's series carries unchanged (cherry-picked from public pull
+# requests to theclub654/ProjectCane, with their own authorship). tools/export-public.sh's guard accepts exactly these
+# author lines ("Name <e-mail>", as on their public GitHub commits) as the author of a series commit, and nowhere else.
+# One per line; add a contributor only with the pull request that made their commit public.
+Jung Hyun Kim <jidoc01@gmail.com>   # theclub654/ProjectCane#78 (Korean support)
+razziedazzel <68195773+razziedazzel@users.noreply.github.com>   # FridiNaTor1/SafeHouse#89 (Sly 1 USA sound banks)

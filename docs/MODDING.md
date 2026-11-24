@@ -1262,7 +1262,8 @@ To try a different Mods folder, use `--mods DIR`, or set the environment variabl
    ```
 
    The game starts, goes to that level, writes every texture it loaded as `dump/<W>x<H>_<hash>.png`, and quits.
-   The name identifies the texture by its contents. The level name is the level's folder name.
+   The name identifies the texture by its contents. The level name is the level's folder name (in quotes when it has
+   spaces), or its number in hex as the debug menu's Warps page shows it (`103` is Into the Machine).
 
    Without a level name, the game runs normally and writes every texture it loads while you play, so you can
    collect the textures of a whole run. Files already in the folder are kept.
@@ -1382,8 +1383,8 @@ Sly1-Release --export-wav "<installation>/Worlds/Music/MUSID_51.mus" original.wa
 ```
 
 This plays the track through the game's own music engine for that many seconds and records it, so it takes that
-long. It records the track as it starts in its level. On Windows it needs an audio output device (the recording
-itself is silent).
+long. It records the track as it starts in its level. On Windows a recording is at most 30 seconds long (it is taken
+from the game's own final mix, which holds 30 seconds); use the Linux or macOS build for a longer one.
 
 ### Dialog and sounds
 
@@ -1429,14 +1430,14 @@ the installed one:
   language's version. On the Japanese disc, the language folders are the voice languages, `Japanese` and
   `English`.
 
-The `Sly1BrxRebuilder` tool, next to SafeHouse's extractor, rebuilds a decompressed retail-format level into
-PCBRX v17:
+SafeHouse's extractor (`cane-extractor`, in the launcher's tools folder) rebuilds a decompressed retail-format level
+into PCBRX v17, written beside it as `<name>_Rebuilt.brx`:
 
 ```sh
-Sly1BrxRebuilder MyLevel.brx ntsc
+cane-extractor --rebuild-level MyLevel.brx ntsc
 ```
 
-The tool prints the path of the rebuilt file. Editing levels needs community tools for the retail Sly 1 format.
+The region is `ntsc`, `pal`, `japanese` or `korean`. It prints the path of the rebuilt file. Editing levels needs community tools for the retail Sly 1 format.
 This is the advanced end of modding: the game expects every object it refers to to still exist, and saves refer
 to the level's progress. Start from small changes, and test with a fresh save.
 

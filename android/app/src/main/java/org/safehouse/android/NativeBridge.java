@@ -30,8 +30,6 @@ import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.UnknownHostException;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -40,8 +38,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Private application bridge. Native game and tools keep their existing JSONL IPC. */
 public final class NativeBridge {
-    static final int PICK_ISO = 301, PICK_MOD = 302;
-    static final int EVENT_PID = 1, EVENT_EXIT = 2;
+    static final int PICK_ISO = 301, PICK_MOD = 302, PICK_DRIVER = 303;
+    static final int EVENT_PID = 1, EVENT_EXIT = 2, EVENT_CLOSING = 3;
     private static final Handler UI = new Handler(Looper.getMainLooper());
     private static final AtomicLong NEXT_CHILD = new AtomicLong(1);
     private static final ConcurrentHashMap<Long, Child> CHILDREN = new ConcurrentHashMap<>();
@@ -50,6 +48,7 @@ public final class NativeBridge {
     private static volatile boolean reportedExit;
     private static volatile ImportState iso = new ImportState();
     private static volatile ImportState mod = new ImportState();
+    private static volatile ImportState driver = new ImportState();
 
     // This process's token: the process that started it watches the token's death (startChild).
     private static final Binder ALIVE = new Binder();
@@ -81,6 +80,11 @@ public final class NativeBridge {
         ServiceConnection keepalive;
         PipeBinder pipes;
         volatile boolean game;         // the game's activity (GameActivity), not a tool service
+        volatile boolean reported;     // its exit code arrived (EVENT_EXIT)
+        volatile boolean closing;      // its activity is finishing (EVENT_CLOSING: Back, swiped away): not brought back
+        volatile String closeReason;   // why its activity closed without the game's exit code (GameActivity.onDestroy)
+        volatile String exitReason;    // childExitReason's answer, once asked
+        volatile String program = "";
     }
     private static final class PipeBinder extends Binder {
         private ParcelFileDescriptor input, output;
@@ -116,12 +120,12 @@ public final class NativeBridge {
     // The game activity this process started or runs (GameActivity, or FlatGameActivity for a game without VR), for
     // bringing it back to the front.
     static volatile Class<? extends GameActivity> gameActivity = GameActivity.class;
-    // A game's activity: Sly 3 has no VR mode yet and is a flat window also on a headset.
+    // A game's activity: Sly 1 and Sly 3 have no VR mode yet and are flat windows also on a headset.
     static Class<? extends GameActivity> gameActivityFor(String program) {
-        return "Sly3-Release".equals(program) ? FlatGameActivity.class : GameActivity.class;
+        return "Sly3-Release".equals(program) || "Sly1-Release".equals(program) ? FlatGameActivity.class : GameActivity.class;
     }
     // The games this package runs: their JNI libraries (cmake/android.cmake), started by name ("Sly2-Release").
-    static final java.util.Set<String> GAMES = new java.util.HashSet<>(Arrays.asList("Sly2-Release", "Sly3-Release"));
+    static final java.util.Set<String> GAMES = new java.util.HashSet<>(Arrays.asList("Sly1-Release", "Sly2-Release", "Sly3-Release"));
     // The game library an activity / tool intent asks for ("program"; debuggable builds: "debug-program" from adb),
     // Sly 2 when none or an unknown one is named.
     static String gameLibrary(Intent intent) {
@@ -136,6 +140,9 @@ public final class NativeBridge {
     static void initialize(Activity current) {
         activity = current;
         starter = current;
+        // (the app's own folders on the shared storage / SD cards exist only once Android made them: installations and
+        // disc images there, externalFolders; a native mkdir is refused on Android 11+)
+        new Thread(() -> { try { current.getExternalFilesDirs(null); } catch (RuntimeException ignored) { } }, "SafeHouse storage").start();
         nativeInitialize(current.getFilesDir().getAbsolutePath(), current.getApplicationInfo().nativeLibraryDir);
     }
     static void initializeService(Context service) {
@@ -143,11 +150,13 @@ public final class NativeBridge {
         nativeInitialize(service.getFilesDir().getAbsolutePath(), service.getApplicationInfo().nativeLibraryDir);
     }
     static void attachChild(Intent intent) throws IOException {
-        owner = intent.getParcelableExtra("owner");
-        reportedExit = false;
         Bundle channel = intent.getBundleExtra("channel");
         IBinder pipes = channel == null ? null : channel.getBinder("pipes");
+        // (checked before the session's statics change: an activity started without a session (a stray start while the
+        // game's own activity was closing) must not take over the running game's owner and exit report)
         if (pipes == null) throw new IOException("The private session channel is missing");
+        owner = intent.getParcelableExtra("owner");
+        reportedExit = false;
         Parcel request = Parcel.obtain(), reply = Parcel.obtain();
         try {
             request.writeInterfaceToken("org.safehouse.android.SessionPipes");
@@ -181,6 +190,7 @@ public final class NativeBridge {
             throw new IOException("This Android package runs Sly 2 and Sly 3 only (" + executable + ")");
         long handle = NEXT_CHILD.getAndIncrement();
         Child state = new Child(); CHILDREN.put(handle, state);
+        state.program = executable;
         ParcelFileDescriptor[] input = ParcelFileDescriptor.createPipe();
         ParcelFileDescriptor[] output = ParcelFileDescriptor.createPipe();
         state.pipes = new PipeBinder(input[0], output[1]);
@@ -195,8 +205,12 @@ public final class NativeBridge {
                         try { alive.linkToDeath(() -> UI.post(() -> state.running = false), 0); }
                         catch (RemoteException gone) { UI.post(() -> state.running = false); }
                     }
+                } else if (resultCode == EVENT_CLOSING) {
+                    state.closing = true;
                 } else if (resultCode == EVENT_EXIT) {
                     state.exitCode = result.getInt("code", 1); state.running = false;
+                    state.reported = true;
+                    state.closeReason = result.getString("reason");
                 }
             }
         };
@@ -257,6 +271,184 @@ public final class NativeBridge {
         if (child != null) releaseChild(child);
         return child == null ? 1 : child.exitCode;
     }
+    /**
+     * Why a child ended without its exit code (android_app.h processExitReason): the reason its activity gave when it
+     * closed (GameActivity.onDestroy), else Android's record of its process (a native crash's signal, low memory, ...),
+     * which also sets the exit code a crash's signal gives on the desktop (128 + signal). "" when the child reported
+     * its code or was cancelled. Called on the launcher's worker thread: waits up to a second for Android's record.
+     */
+    public static String childExitReason(long handle) {
+        Child child = CHILDREN.get(handle);
+        if (child == null || child.supervised) return "";
+        if (child.exitReason != null) return child.exitReason;
+        String text = "";
+        if (child.closeReason != null && !child.closeReason.isEmpty())
+            text = "exit reason: " + child.program + " ended without its exit code: " + child.closeReason;
+        else if (!child.reported && child.pid != 0) {
+            String[] record = null;
+            for (int i = 0; i < 10 && record == null; ++i) {
+                record = processExitRecord(child.pid);
+                if (record == null) try { Thread.sleep(100); } catch (InterruptedException stop) { break; }
+            }
+            if (record == null)
+                text = "exit reason: " + child.program + "'s process ended without its exit code (Android has no record of why)";
+            else {
+                final int reason = Integer.parseInt(record[1]), status = Integer.parseInt(record[2]);
+                if (reason == 5 /* REASON_CRASH_NATIVE */ || reason == 2 /* REASON_SIGNALED */) {
+                    if (status > 0 && status < 64) child.exitCode = 128 + status;
+                } else if (reason == 3 /* REASON_LOW_MEMORY */) child.exitCode = 128 + 9;
+                text = "1".equals(record[0]) ? "crash: " + child.program + " crashed: " + record[3] + " (Android's record)"
+                    : "exit reason: Android closed " + child.program + ": " + record[3];
+            }
+        }
+        child.exitReason = text;
+        return text;
+    }
+    /**
+     * Android's record of how this app's process `pid` ended (API 30+): {crash "1"/"0", reason, status, description}
+     * (android_app.h ExitRecord), or null. Crash: a Java or native crash, a fatal signal, a hang (ANR) or a failed start;
+     * the system or the user closing the process is not one.
+     */
+    public static String[] processExitRecord(int pid) {
+        if (android.os.Build.VERSION.SDK_INT < 30 || pid <= 0) return null;
+        Context current = activity != null ? activity : starter;
+        if (current == null) return null;
+        try {
+            android.app.ActivityManager manager =
+                (android.app.ActivityManager)current.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) return null;
+            java.util.List<android.app.ApplicationExitInfo> list =
+                manager.getHistoricalProcessExitReasons(current.getPackageName(), pid, 1);
+            if (list == null || list.isEmpty() || list.get(0).getPid() != pid) return null;
+            return describeExit(list.get(0));
+        } catch (RuntimeException error) { return null; }
+    }
+    /**
+     * An OpenXR runtime is on this device (android_app.h openXrRuntimeInstalled): the Khronos runtime brokers (the
+     * manifest's queries), a runtime manifest where the loader looks for one, or a headset maker whose runtime is part
+     * of the system. A phone has none, and the games skip the OpenXR loader there.
+     */
+    public static boolean openXrRuntimeInstalled() {
+        if (GameActivity.vrHeadset()) return true;
+        final String maker = android.os.Build.MANUFACTURER == null ? "" : android.os.Build.MANUFACTURER.toLowerCase(java.util.Locale.ROOT);
+        for (String headset : new String[] {"pico", "bytedance", "htc", "lynx", "magicleap", "varjo", "playfor"})
+            if (maker.contains(headset)) return true;
+        Context current = activity != null ? activity : starter;
+        if (current != null) {
+            try {
+                android.content.pm.PackageManager pm = current.getPackageManager();
+                for (String authority : new String[] {"org.khronos.openxr.runtime_broker", "org.khronos.openxr.system_runtime_broker"})
+                    if (pm.resolveContentProvider(authority, 0) != null) return true;
+            } catch (RuntimeException ignored) { }
+        }
+        for (String root : new String[] {"/product", "/odm", "/oem", "/vendor", "/system"})
+            for (String name : new String[] {"active_runtime.json", "active_runtime.arm64-v8a.json", "active_runtime.x86_64.json"})
+                if (new File(root + "/etc/openxr/1/" + name).isFile()) return true;
+        return false;
+    }
+    /**
+     * Storage the app can write without a permission besides its private folder (launcher/install_location.h): its own
+     * folders on the shared storage and on SD cards (Context.getExternalFilesDirs: .../Android/data/org.safehouse.android/
+     * files), as {path, "primary" | "removable", ...}. Android removes them with the app, as the private folder.
+     * With all files access (allFilesAccess) also the storage volumes' roots, as {path, "shared" | "card"}.
+     */
+    public static String[] externalFolders() {
+        Context current = activity != null ? activity : starter;
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        if (current == null) return new String[0];
+        try {
+            File[] dirs = current.getExternalFilesDirs(null);
+            for (File dir : dirs) {
+                if (dir == null) continue;
+                if (!dir.isDirectory()) dir.mkdirs();
+                if (!dir.isDirectory() || !dir.canWrite()) continue;
+                boolean removable = false;
+                try { removable = android.os.Environment.isExternalStorageRemovable(dir); } catch (RuntimeException ignored) { }
+                out.add(dir.getAbsolutePath()); out.add(removable ? "removable" : "primary");
+                if (allFilesAccess()) {
+                    // (the volume's root: the folder above Android/data/<package>/files)
+                    String path = dir.getAbsolutePath();
+                    int at = path.indexOf("/Android/data/");
+                    if (at > 0) {
+                        File root = new File(path.substring(0, at));
+                        if (root.canWrite()) { out.add(root.getAbsolutePath()); out.add(removable ? "card" : "shared"); }
+                    }
+                }
+            }
+        } catch (RuntimeException ignored) { }
+        return out.toArray(new String[0]);
+    }
+    /** Access to all files on the shared storage (Android 11+: "All files access"; Android 6-10: the storage permission;
+     * Android 5: granted at install): folders anywhere for disc images and installations. */
+    public static boolean allFilesAccess() {
+        Context current = activity != null ? activity : starter;
+        if (current == null) return false;
+        if (android.os.Build.VERSION.SDK_INT >= 30) return android.os.Environment.isExternalStorageManager();
+        if (android.os.Build.VERSION.SDK_INT >= 23)
+            return current.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        return true;
+    }
+    /** Asks for allFilesAccess: Android 11+ opens its "All files access" page for SafeHouse, Android 6-10 asks for the
+     * storage permission. */
+    public static void requestAllFilesAccess() {
+        Activity current = activity;
+        if (current == null) return;
+        UI.post(() -> {
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    try {
+                        current.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            Uri.parse("package:" + current.getPackageName())));
+                    } catch (RuntimeException noPage) {
+                        current.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                    }
+                } else if (android.os.Build.VERSION.SDK_INT >= 23) {
+                    current.requestPermissions(new String[] {android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 304);
+                }
+            } catch (RuntimeException ignored) { }
+        });
+    }
+    static String signalName(int signal) {
+        switch (signal) {
+            case 4: return " (illegal instruction)";
+            case 6: return " (abort)";
+            case 7: return " (bus error)";
+            case 8: return " (arithmetic exception)";
+            case 9: return " (killed)";
+            case 11: return " (segmentation fault)";
+            case 15: return " (terminated)";
+            default: return "";
+        }
+    }
+    @android.annotation.TargetApi(30)   // (processExitRecord: Android 11+)
+    static String[] describeExit(android.app.ApplicationExitInfo info) {
+        final int reason = info.getReason(), status = info.getStatus();
+        boolean crash = false;
+        String text;
+        switch (reason) {
+            case 5: crash = true; text = "native crash, signal " + status + signalName(status); break;          // REASON_CRASH_NATIVE
+            case 4: crash = true; text = "Java crash"; break;                                                   // REASON_CRASH
+            case 6: crash = true; text = "not responding (ANR)"; break;                                         // REASON_ANR
+            case 7: crash = true; text = "failed to start"; break;                                              // REASON_INITIALIZATION_FAILURE
+            case 2:                                                                                             // REASON_SIGNALED
+                crash = status == 4 || status == 6 || status == 7 || status == 8 || status == 11;
+                text = "signal " + status + signalName(status); break;
+            case 3: text = "low memory: Android closed it to free memory"; break;                               // REASON_LOW_MEMORY
+            case 1: text = "it exited (code " + status + ")"; break;                                            // REASON_EXIT_SELF
+            case 8: text = "a permission changed"; break;                                                       // REASON_PERMISSION_CHANGE
+            case 9: text = "it used too many resources in the background"; break;                               // REASON_EXCESSIVE_RESOURCE_USAGE
+            case 10: text = "the user closed it (force stop)"; break;                                           // REASON_USER_REQUESTED
+            case 11: text = "the user stopped the app"; break;                                                  // REASON_USER_STOPPED
+            case 12: text = "a process it depends on ended"; break;                                             // REASON_DEPENDENCY_DIED
+            case 14: text = "it was frozen in the background"; break;                                           // REASON_FREEZER
+            case 15: case 16: text = "the app was updated or changed"; break;                                   // REASON_PACKAGE_STATE_CHANGE / _UPDATED
+            default: text = "Android's exit reason " + reason + ", status " + status; break;
+        }
+        String detail = info.getDescription();
+        if (detail != null && !detail.isEmpty()) text += " [" + (detail.length() > 160 ? detail.substring(0, 160) : detail) + "]";
+        return new String[] {crash ? "1" : "0", Integer.toString(reason), Integer.toString(status), text};
+    }
     private static void releaseChild(Child child) {
         if (child.pipes != null) child.pipes.close();
         Context current = activity != null ? activity : starter;
@@ -272,12 +464,24 @@ public final class NativeBridge {
         child.exitCode = 143; child.running = false;
         if (child.pid != 0) android.os.Process.killProcess(child.pid);
     }
-    public static void reportExit(int code) {
+    public static void reportExit(int code) { reportExit(code, null); }
+    /** The child's exit code, with why it ended when the game did not say (its activity closed first: GameActivity). */
+    static void reportExit(int code, String reason) {
         if (reportedExit) return;
         reportedExit = true;
-        if (owner != null) { Bundle result = new Bundle(); result.putInt("code", code); owner.send(EVENT_EXIT, result); }
+        if (owner != null) {
+            Bundle result = new Bundle(); result.putInt("code", code);
+            if (reason != null) result.putString("reason", reason);
+            owner.send(EVENT_EXIT, result);
+        }
     }
     static boolean exitWasReported() { return reportedExit; }
+    /** The game's activity is finishing (GameActivity.onPause): the launcher's activity, which comes to the front now,
+     * must not bring the game back (resumeRunningGame) while its process ends. */
+    static void reportClosing() {
+        if (reportedExit || owner == null) return;
+        owner.send(EVENT_CLOSING, new Bundle());
+    }
 
     /**
      * The launcher's activity came to the front while its game still runs (Android's Recents shows only the launcher's
@@ -293,7 +497,7 @@ public final class NativeBridge {
         UI.postDelayed(() -> {
             boolean running = false;
             for (java.util.Map.Entry<Long, Child> entry : CHILDREN.entrySet())
-                if (entry.getValue().game && childRunning(entry.getKey())) running = true;
+                if (entry.getValue().game && !entry.getValue().closing && childRunning(entry.getKey())) running = true;
             if (!running || launcher.isFinishing() || launcher.isDestroyed()) return;
             if (!launcher.resumed) return;   // (left again in the meantime)
             launcher.startActivity(new Intent(launcher, gameActivity)
@@ -315,6 +519,7 @@ public final class NativeBridge {
             android.os.Vibrator vibrator = (android.os.Vibrator)current.getSystemService(Context.VIBRATOR_SERVICE);
             if (vibrator == null || !vibrator.hasVibrator()) return;
             if (amplitude <= 0) { vibrator.cancel(); return; }
+            if (android.os.Build.VERSION.SDK_INT < 26) { vibrator.vibrate(Math.max(1, milliseconds)); return; }   // (no strength before Android 8)
             int strength = vibrator.hasAmplitudeControl() ? Math.max(1, Math.min(255, amplitude))
                 : android.os.VibrationEffect.DEFAULT_AMPLITUDE;
             vibrator.vibrate(android.os.VibrationEffect.createOneShot(Math.max(1, milliseconds), strength),
@@ -377,6 +582,26 @@ public final class NativeBridge {
             } catch (Exception error) { mod.error = "No folder picker is available"; mod.pending = false; }
         });
     }
+    /** A custom Vulkan driver package (.zip, e.g. Mesa Turnip; platform/android/vulkan_driver.h) for the launcher to
+     * unpack: copied into files/drivers/ first (driverStatus' path). */
+    public static void importDriver() {
+        driver = new ImportState(); driver.pending = true;
+        Activity current = activity;
+        if (current == null) { driver.error = "Android launcher is unavailable"; driver.pending = false; return; }
+        UI.post(() -> {
+            try {
+                current.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/zip", "application/x-zip-compressed", "application/octet-stream"})
+                    .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), PICK_DRIVER);
+            } catch (Exception error) { driver.error = "No document picker is available"; driver.pending = false; }
+        });
+    }
+    public static String[] driverStatus() {
+        ImportState state = driver;
+        String[] fields = state.fields();
+        if (!state.pending) state.path = "";   // (handed over once)
+        return fields;
+    }
     public static String[] isoStatus() { return iso.fields(); }
     public static String[] modStatus() {
         ImportState state = mod;
@@ -385,8 +610,8 @@ public final class NativeBridge {
         return fields;
     }
     static void selectionResult(int request, int result, Intent data) {
-        if (request != PICK_ISO && request != PICK_MOD) return;
-        ImportState state = request == PICK_ISO ? iso : mod;
+        if (request != PICK_ISO && request != PICK_MOD && request != PICK_DRIVER) return;
+        ImportState state = request == PICK_ISO ? iso : request == PICK_DRIVER ? driver : mod;
         Activity current = activity;
         if (result != Activity.RESULT_OK || data == null || data.getData() == null || current == null) {
             state.pending = false; return;
@@ -399,7 +624,14 @@ public final class NativeBridge {
         new Thread(() -> {
             File staging = null;
             try {
-                if (request == PICK_ISO) {
+                if (request == PICK_DRIVER) {
+                    File drivers = new File(current.getFilesDir(), "drivers");
+                    if (!drivers.isDirectory() && !drivers.mkdirs()) throw new IOException("Cannot create the drivers folder");
+                    staging = new File(drivers, "import-" + System.nanoTime() + ".zip");
+                    copyFile(current, uri, staging, state, -1, 1L << 30);
+                    state.path = staging.getAbsolutePath();
+                    staging = null;
+                } else if (request == PICK_ISO) {
                     String name = "game.iso"; long size = -1;
                     try (Cursor cursor = current.getContentResolver().query(uri, new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}, null, null, null)) {
                         if (cursor != null && cursor.moveToFirst()) { name = cursor.getString(0); if (!cursor.isNull(1)) size = cursor.getLong(1); }
@@ -412,7 +644,8 @@ public final class NativeBridge {
                     staging = File.createTempFile("iso-", ".partial", imports);
                     copyFile(current, uri, staging, state, size, 16L << 30);
                     File destination = new File(imports, name);
-                    Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    if (destination.exists() && !destination.delete()) throw new IOException("Cannot replace " + destination.getName());
+                    if (!staging.renameTo(destination)) throw new IOException("Cannot store " + destination.getName());   // (same folder: atomic; java.nio.file needs API 26)
                     state.path = destination.getAbsolutePath();
                 } else {
                     Uri root = DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri));
@@ -429,7 +662,7 @@ public final class NativeBridge {
                     if (!new File(staging, "pack.json").isFile()) throw new IOException("Select the mod folder containing pack.json");
                     File destination = new File(mods, name);
                     for (int suffix = 2; destination.exists(); ++suffix) destination = new File(mods, name + "-" + suffix);
-                    Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE);
+                    if (!staging.renameTo(destination)) throw new IOException("Cannot store " + destination.getName());
                     state.path = destination.getAbsolutePath();
                 }
                 state.progress = 1;
@@ -507,7 +740,7 @@ public final class NativeBridge {
     /** A home-screen shortcut that starts the direct activity with these launcher arguments (Android 8+). */
     public static boolean pinShortcut(String id, String label, byte[] png, String[] arguments) {
         Context current = activity != null ? activity : starter;
-        if (current == null) return false;
+        if (current == null || android.os.Build.VERSION.SDK_INT < 26) return false;   // (pinned shortcuts: Android 8+)
         android.content.pm.ShortcutManager shortcuts = current.getSystemService(android.content.pm.ShortcutManager.class);
         if (shortcuts == null || !shortcuts.isRequestPinShortcutSupported()) return false;
         android.graphics.Bitmap bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.length);
@@ -526,12 +759,112 @@ public final class NativeBridge {
      * name was not found, -2 no connection, -3 timed out, -4 the answer is larger than maxBytes, -5 another failure.
      * The body when the status is 200, else null. Nothing but the User-Agent (and the API's Accept header) is sent.
      */
+    // The update download (httpDownload): its expected length, and the cancel request the launcher's watcher sends.
+    private static volatile long downloadLength = -1;
+    private static volatile boolean downloadCancelled;
+    public static long downloadLength() { return downloadLength; }
+    public static void cancelDownload() { downloadCancelled = true; }
+    // HTTPS only; a debuggable build also takes http:// for local update tests (the emulator's host, 10.0.2.2).
+    private static boolean allowedUrl(URL url) {
+        if ("https".equals(url.getProtocol())) return true;
+        Context current = activity != null ? activity : starter;
+        return "http".equals(url.getProtocol()) && current != null
+            && (current.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+    /**
+     * The launcher's update download (launcher/update.h httpGet with a file): writes `address` to `path`, following
+     * redirects (GitHub's release assets). The HTTP status, or -1 server not found, -2 no connection, -3 timed out,
+     * -5 another failure, -6 cancelled. total[0]: the length the server announced (-1 unknown).
+     */
+    public static int httpDownload(String address, String path, String userAgent, long[] total) {
+        HttpURLConnection connection = null;
+        downloadCancelled = false;
+        downloadLength = -1;
+        total[0] = -1;
+        try {
+            URL url = new URL(address);
+            if (!allowedUrl(url)) return -5;
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(true);
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(30000);
+            connection.setRequestProperty("User-Agent", userAgent);
+            int status = connection.getResponseCode();
+            if (status != 200) return status;
+            downloadLength = total[0] = android.os.Build.VERSION.SDK_INT >= 24 ? connection.getContentLengthLong() : connection.getContentLength();
+            File file = new File(path);
+            if (file.getParentFile() != null) file.getParentFile().mkdirs();
+            try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(file)) {
+                byte[] buffer = new byte[1 << 16];
+                for (int n; (n = in.read(buffer)) > 0;) {
+                    if (downloadCancelled) return -6;
+                    out.write(buffer, 0, n);
+                }
+                out.getFD().sync();
+            }
+            return 200;
+        } catch (UnknownHostException error) {
+            return -1;
+        } catch (SocketTimeoutException error) {
+            return -3;
+        } catch (IOException error) {
+            return -2;
+        } catch (Exception error) {
+            return -5;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+    static final String INSTALL_ACTION = "org.safehouse.android.INSTALL_RESULT";
+    /**
+     * Hands a downloaded APK to Android's installer (launcher/update.h apply): a PackageInstaller session, committed
+     * with a result that opens the system's confirmation. API 26+: the first time Android asks to allow SafeHouse to
+     * install apps (its settings page opens; the update is tried again from the launcher afterwards). "" when the
+     * installer took it, else why not.
+     */
+    public static String installPackage(String path) {
+        Context current = activity != null ? activity : starter;
+        if (current == null) return "The launcher is not ready";
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 26 && !current.getPackageManager().canRequestPackageInstalls()) {
+                Intent allow = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + current.getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                UI.post(() -> { try { current.startActivity(allow); } catch (RuntimeException ignored) { } });
+                return "Allow SafeHouse to install apps (Android opened the setting), then choose Update again";
+            }
+            File apk = new File(path);
+            android.content.pm.PackageInstaller installer = current.getPackageManager().getPackageInstaller();
+            android.content.pm.PackageInstaller.SessionParams params = new android.content.pm.PackageInstaller.SessionParams(
+                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            params.setAppPackageName(current.getPackageName());
+            params.setSize(apk.length());
+            if (android.os.Build.VERSION.SDK_INT >= 31)
+                params.setRequireUserAction(android.content.pm.PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
+            int id = installer.createSession(params);
+            try (android.content.pm.PackageInstaller.Session session = installer.openSession(id)) {
+                try (InputStream in = new java.io.FileInputStream(apk);
+                     java.io.OutputStream out = session.openWrite("SafeHouse.apk", 0, apk.length())) {
+                    byte[] buffer = new byte[1 << 16];
+                    for (int n; (n = in.read(buffer)) > 0;) out.write(buffer, 0, n);
+                    session.fsync(out);
+                }
+                Intent result = new Intent(current, InstallResultReceiver.class).setAction(INSTALL_ACTION);
+                int flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+                if (android.os.Build.VERSION.SDK_INT >= 31) flags |= android.app.PendingIntent.FLAG_MUTABLE;
+                android.app.PendingIntent pending = android.app.PendingIntent.getBroadcast(current.getApplicationContext(), id, result, flags);
+                session.commit(pending.getIntentSender());
+            }
+            return "";
+        } catch (Exception error) {
+            return "Android's installer did not take the update: " + error.getMessage();
+        }
+    }
     public static byte[] httpGet(String address, boolean api, String userAgent, int maxBytes, int[] status) {
         HttpURLConnection connection = null;
         status[0] = -5;
         try {
             URL url = new URL(address);
-            if (!"https".equals(url.getProtocol())) return null;
+            if (!allowedUrl(url)) return null;
             connection = (HttpURLConnection) url.openConnection();
             connection.setInstanceFollowRedirects(true);
             connection.setConnectTimeout(10000);

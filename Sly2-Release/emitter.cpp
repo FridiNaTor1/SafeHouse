@@ -2908,7 +2908,7 @@ void ExplodeLo(LO* plo, const BURSTPARAMS* pparams)
     if ([] { static const bool f = std::getenv("SLY2_BURSTDBG") != nullptr; return f; }())
         std::printf("burst: oid %d cid 0x%X not an explosion emitter (pe %p), children %zu\n", plo->oid, plo->Cid(), (void*)pe,
                     dynamic_cast<const LOXCHILD*>(plo) ? dynamic_cast<const LOXCHILD*>(plo)->aploChild.size() : size_t(0));
-    // orig: 0x0015C3C0 (a grouper's slot 51): each child bursts in its frame relative to the group. A supplied
+    // orig: 0x0015C3C0 (a grouper's slot 51): each child bursts in its frame relative to the group (their +0x60 matrices). A supplied
     // frame is composed with that relative frame, and the group is the default source object.
     if (const LOXCHILD* pc = dynamic_cast<const LOXCHILD*>(plo))
     {
@@ -2921,12 +2921,17 @@ void ExplodeLo(LO* plo, const BURSTPARAMS* pparams)
         }
         for (LO* p : pc->aploChild)
         {
-            const glm::mat4 groupWorld = MatWorldOfLo(plo), childWorld = MatWorldOfLo(p);
+            // (the objects' own matrices (+0x60), not their world placements: a group placed by its owner's record
+            // whose children have none (every differing case in the 44 worlds: the groups under guards, breakables,
+            // oil drums, water) had its placement taken out of the frame, and the children burst near the world's
+            // origin; e.g. c_train_c's oil drum 8695, its explosion group 6797: no fire or flash at the drum)
+            const LOX* pcx = dynamic_cast<const LOX*>(p);
+            const glm::mat4 groupLocal = pc->mat, childLocal = pcx ? pcx->mat : glm::mat4(1.0f);
             cmm::MATRIX4 groupMatrix, childMatrix;
             for (int i = 0; i < 4; ++i)
             {
-                groupMatrix.r[i] = groupWorld[i];
-                childMatrix.r[i] = childWorld[i];
+                groupMatrix.r[i] = groupLocal[i];
+                childMatrix.r[i] = childLocal[i];
             }
             const cmm::MATRIX4 rel = cmm::MulMatrix4(cmm::InverseAffineMatrix4(groupMatrix), childMatrix);
             const glm::mat4 relative(rel.r[0], rel.r[1], rel.r[2], rel.r[3]);

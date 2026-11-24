@@ -14,6 +14,9 @@
 #include "transition.h"
 #include "update.h"
 #include "jt.h"
+#include "alo.h"
+#include "bsp.h"
+#include "so.h"
 
 #include <glm/glm.hpp>
 
@@ -82,6 +85,40 @@ CRef RefFindObjects(int kind, const CRef* a)
     return RefList(aref);
 }
 
+// orig: 0x001249A8 (bifs 123 hit-test-objects 0x124F00 / 124 hit-test-objects-first 0x124F80): the segment argv[1] ->
+// argv[2] against each entry of each object of the list argv[0] (entries off, bit 50, skipped; 0x14C6A0 with one piece):
+// 123 a list of (object start end) per entry it crosses, 124 (object end) of the first one (the piece's ends: where it
+// enters the entry and where it leaves it or the segment ends; the decomp's "normal" is the piece's end, +0x10 of the
+// LSG). Not a list: argv[0] itself; no hit: (). E.g. Ep7's Bear Cave: a touched ice patch (touch pads 34279..34313)
+// places the crack proxy 33449's instance at the end of a 100-unit drop through the patch from the toucher (job 3044's
+// set-position); the crack's noise (34506, radius 1500) wakes the bears. Unported, the instance was removed and its
+// noise made at the world's origin.
+CRef RefHitTestObjects(const CRef* argv, bool fAll)
+{
+    if (argv[0].m_tagk != TAGK_Pair) return argv[0];
+    const glm::vec3 a = argv[1].GetVector(), b = argv[2].GetVector();
+    std::vector<CRef> ahit;
+    for (const CPair* pp = argv[0].m_ppair.get(); pp; pp = pp->m_ppairNext.get())
+    {
+        LO* plo = PloOf(pp->m_ref);
+        if (!plo || !FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        ALO* palo = static_cast<ALO*>(plo);
+        for (SOE& e : palo->asoe)
+        {
+            if (e.f50) continue;
+            LSG lsg;
+            if (ClipSegmentEntry(&e, a, b, 1, &lsg) <= 0) continue;
+            CRef rlo, r0, r1;
+            rlo.SetBasic(plo);
+            r0.SetVector(lsg.pos0);
+            r1.SetVector(lsg.pos1);
+            if (!fAll) return RefList({rlo, r1});
+            ahit.push_back(RefList({rlo, r0, r1}));
+        }
+    }
+    return RefList(ahit);
+}
+
 // orig 0x001252D0: a list of symbols / ints as a progress key
 std::vector<int16_t> AkeyFromList(const CRef& ref)
 {
@@ -120,6 +157,8 @@ struct INITGAMEBIFS
         // 113 the objects of a name (relative 1 / global 5: 0x1241E8), 116 those under an object (4: 0x124578)
         SetBifGameHook(static_cast<BIFK>(113), [](int, CRef* argv, CFrame*) { return RefFindObjects(argv[1].m_pbasic ? 0x401 : 0x405, argv); });
         SetBifGameHook(static_cast<BIFK>(116), [](int, CRef* argv, CFrame*) { return RefFindObjects(0x404, argv); });
+        SetBifGameHook(static_cast<BIFK>(123), [](int, CRef* argv, CFrame*) { return RefHitTestObjects(argv, true); });
+        SetBifGameHook(static_cast<BIFK>(124), [](int, CRef* argv, CFrame*) { return RefHitTestObjects(argv, false); });
         // 125 / 126 / 127: a position / vector / matrix from one object's space to another's (0x1A6F00 / 0x1A6FC0 /
         // 0x1A71B0; null: the world)
         // orig: 0x00125000 / 0x00125060 / 0x001250D8 (convert-object-position / -vector / -matrix: 0x1A6F00 /

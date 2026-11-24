@@ -16,6 +16,7 @@ add_library(cane_gl_metal STATIC
   context.mm
   context_programs.mm
   context_render.mm
+  context_extended.mm
   context_resources.mm
   display_link.mm
   enum_translation.mm

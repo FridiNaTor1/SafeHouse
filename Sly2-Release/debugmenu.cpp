@@ -14,6 +14,7 @@
 #include "clock.h"
 #include "cls.h"
 #include "cm.h"
+#include "cplcy.h"
 #include "cmworld.h"
 #include "display.h"
 #include "frontend.h"
@@ -49,6 +50,8 @@
 #include <GLFW/glfw3.h>
 
 #include "../platform/controller_family.h"
+#include "../platform/debug_freeze.h"
+#include "../platform/debug_menu.h"
 
 #include <algorithm>
 #include <cmath>
@@ -74,56 +77,46 @@ namespace
 {
 // ------------------------------------------------------------ state
 enum PAGEK { PK_Root, PK_Cheats, PK_Episodes, PK_Worlds, PK_Character, PK_Teleport, PK_Jobs, PK_JobList, PK_Player, PK_Speed, PK_Display,
-             PK_Overlays, PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
-struct PAGE
-{
-    PAGEK pagek = PK_Root;
-    int arg = 0;
-    int isel = 0, itop = 0;
-};
-struct ITEM
-{
-    std::string label;
-    std::string value;          // shown after the label (a toggle's state, "(current)")
-    bool fSave = false;         // changes the save (marked "[save]")
-    bool fDim = false;          // informational / not available
-    std::function<void()> pfn;  // null: nothing to do
-    std::function<void(int)> pfnAdjust;   // a slider: left / right step it (-1 / +1) instead of paging
-};
-
-bool s_fOpen = false;
-std::vector<PAGE> s_apage;
+             PK_FreeCam, PK_Overlays, PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
+// (the pages, the rows, the navigation and the status line: platform/debug_menu.h, shared with Sly 1's menu)
+using PAGE = cane::debugmenu::Page;   // (kind: PAGEK)
+using ITEM = cane::debugmenu::Item;
+using cane::debugmenu::strSlider;
+using cane::debugmenu::gStep;
+cane::debugmenu::Menu s_menu;
 std::vector<std::function<void(SW*)>> s_apfnDeferred;   // run by the next world step (UpdateDebugTools)
 SW* s_psw = nullptr;
 
 // input (the step's buttons before the filter, the window's left stick)
-uint16_t s_grfRaw = 0, s_grfRawPrev = 0, s_grfMenuPrev = 0, s_grfMaskRelease = 0;
+uint16_t s_grfRaw = 0, s_grfRawPrev = 0, s_grfMenuPrev = 0;
 float s_xStick = 0, s_yStick = 0;
 bool s_fF10Prev = false, s_fF11Prev = false;
-int s_dirHeld = 0, s_cframeHeld = 0;
 double s_xMousePrev = -1, s_yMousePrev = -1;
-std::string s_strStatus;   // the last action's result, under the list
-int s_cframeStatus = 0;
 
 // tools
 bool s_fHudHidden = false;
 bool s_fPerf = false;
 bool s_fNoclipWant = false;
 float s_rSpeed = 1.0f;
+// the Free Camera page's freeze camera and the time keys (platform/debug_freeze.h)
+using cane::debugmenu::Freeze;
+Freeze s_freeze = Freeze::Off;
+bool s_fFreezeHave = false;    // (the frozen view taken: at the first frame drawn after it was chosen)
+CAMERA s_camFrozen;
+cane::debugmenu::FollowAim s_aimFollow;
+uint32_t s_serialFreeze = 0;   // (the world it was chosen in: a new world turns it off)
+bool s_fTimeFrozen = false;
+cane::debugmenu::Note s_note;  // (the short note after a key)
+bool s_fF1Prev = false, s_fF8Prev = false;
 LO* s_ploNoclip = nullptr;
 uint32_t s_serialNoclip = 0;
 glm::vec3 s_posNoclip(0.0f);   // the noclip's point: the actor's teleport point (its record less its base offset)
 float s_radNoclip = 0.0f;
 int s_f1044Saved = 0;          // (the actor's "camera target fixed" flag before the noclip)
 
-constexpr int CROW_SHOWN = 12;
+constexpr int CROW_SHOWN = cane::debugmenu::kRowsShown;
 
-void Status(const std::string& s)
-{
-    s_strStatus = s;
-    s_cframeStatus = 240;
-    std::printf("debug menu: %s\n", s.c_str());
-}
+void Status(const std::string& s) { s_menu.status(s); }
 
 bool FCanOpen()
 {
@@ -132,8 +125,7 @@ bool FCanOpen()
 
 void Open()
 {
-    s_fOpen = true;
-    s_apage.assign(1, PAGE{});
+    s_menu.open();
     g_fDebugFreeCam = false;   // (the free camera takes the window's input: the menu needs it)
     s_grfMenuPrev = s_grfRaw;  // (the keys that opened it are no presses for the menu)
     s_xMousePrev = s_yMousePrev = -1;
@@ -141,18 +133,10 @@ void Open()
 
 void Close()
 {
-    s_fOpen = false;
-    s_apage.clear();
-    s_grfMaskRelease = s_grfRaw;   // (whatever is held now reaches the game only once released and pressed again)
+    s_menu.close(s_grfRaw);   // (whatever is held now reaches the game only once released and pressed again)
 }
 
-void Push(PAGEK pagek, int arg = 0)
-{
-    PAGE p;
-    p.pagek = pagek;
-    p.arg = arg;
-    s_apage.push_back(p);
-}
+void Push(PAGEK pagek, int arg = 0) { s_menu.push(pagek, arg); }
 
 void Defer(std::function<void(SW*)> pfn, bool fClose = true)
 {
@@ -160,7 +144,52 @@ void Defer(std::function<void(SW*)> pfn, bool fClose = true)
     if (fClose) Close();
 }
 
-std::string StrOnOff(bool f) { return f ? "On" : "Off"; }
+std::string StrOnOff(bool f) { return cane::debugmenu::strOnOff(f); }
+
+// ------------------------------------------------------------ the free camera, the freeze camera, the time
+void SetFreeCam(bool fOn)
+{
+    if (fOn == g_fDebugFreeCam) return;
+    g_fDebugFreeCam = fOn;
+    // (the free camera starts from the picture: a frozen view too, which it replaces)
+    if (fOn && s_freeze != Freeze::Off) s_freeze = Freeze::Off;
+    s_note.show(std::string("Free Camera: ") + StrOnOff(fOn));
+}
+
+void SetFreeze(Freeze freeze)
+{
+    // (from Off: the view now drawn is the one kept, game.cpp's next frame (ApplyDebugFreezeCam); Fixed <-> Follow
+    // keep the place taken)
+    if (s_freeze == Freeze::Off || freeze == Freeze::Off) s_fFreezeHave = false;
+    if (s_freeze == Freeze::Off) s_serialFreeze = g_psw ? g_psw->serial : 0;
+    s_freeze = freeze;
+    s_note.show(std::string("Freeze Camera: ") + cane::debugmenu::freezeName(freeze));
+}
+
+bool FCanFreezeTime() { return !g_transition.fPending && g_transition.wipes == WIPES_Idle; }
+
+void SetTimeFrozen(bool fFrozen)
+{
+    if (fFrozen && !FCanFreezeTime()) return;
+    s_fTimeFrozen = fFrozen;
+    s_note.show(fFrozen ? "Time frozen" : "Time: " + cane::debugmenu::strSpeed(s_rSpeed));
+}
+
+void SetSpeed(float r)
+{
+    s_rSpeed = r;
+    s_fTimeFrozen = false;
+    s_note.show("Speed " + cane::debugmenu::strSpeed(r));
+}
+
+// The game's camera is its own (a cutscene, a conversation's or a scripted camera, the binocucom): the frozen view
+// waits (cplcy.h: the follow policy of the zones and the default one are the gameplay's)
+bool FFreezeWaits()
+{
+    if (FCutsceneActive()) return true;
+    const CPLCY* pcplcy = g_cm.ccpr > 0 ? g_cm.acpr[0].pcplcy : nullptr;
+    return pcplcy && pcplcy != &g_cmpolicies.cpfollow && pcplcy != &g_cmpolicies.cpdefault;
+}
 
 // ------------------------------------------------------------ names
 const char* PchzCharacter(const LO* plo)
@@ -490,30 +519,6 @@ void AddKindRows(std::vector<ITEM>& a, PCCHARK kind, int iep)
 const float s_agGravity[] = {0.1f, 0.17f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 5.0f};
 const float s_asScale[] = {0.05f, 0.1f, 0.2f, 0.33f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 5.0f, 10.0f, 25.0f};
 
-template <size_t N>
-int IStop(const float (&ag)[N], float g)
-{
-    int ibest = 0;
-    for (int i = 0; i < int(N); ++i)
-        if (std::fabs(std::log(ag[i] / g)) < std::fabs(std::log(ag[ibest] / g))) ibest = i;
-    return ibest;
-}
-
-// "|----+-----|  0.5x" (the bar's notch at the value, 1x a tick)
-template <size_t N>
-std::string StrSlider(const float (&ag)[N], float g)
-{
-    const int i = IStop(ag, g);
-    std::string s = "<";
-    for (int k = 0; k < int(N); ++k) s += k == i ? "O" : ag[k] == 1.0f ? "|" : "-";
-    char ach[24];
-    std::snprintf(ach, sizeof ach, ">  %gx", g);
-    return s + ach;
-}
-
-template <size_t N>
-float GStep(const float (&ag)[N], float g, int dir) { return ag[std::clamp(IStop(ag, g) + dir, 0, int(N) - 1)]; }
-
 std::string StrButtons(const uint32_t* an, int c)
 {
     std::string s;
@@ -546,7 +551,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         a.push_back(std::move(it));
         return &a.back();
     };
-    switch (page.pagek)
+    switch (PAGEK(page.kind))
     {
     case PK_Root:
         *pstrTitle = std::string("Sly 2: Band of Thieves PC Port (") + PchzPortVersion() + ")";
@@ -560,11 +565,9 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         item("Teleport...", [] { Push(PK_Teleport); });
         item("Jobs...", [] { Push(PK_Jobs); });
         item("Player...", [] { Push(PK_Player); });
-        {
-            char ach[16];
-            std::snprintf(ach, sizeof ach, "%gx", s_rSpeed);
-            item("Speed...", [] { Push(PK_Speed); }, ach);
-        }
+        item("Speed...", [] { Push(PK_Speed); }, s_fTimeFrozen ? std::string("Frozen") : cane::debugmenu::strSpeed(s_rSpeed));
+        item("Free Camera...", [] { Push(PK_FreeCam); },
+             g_fDebugFreeCam ? std::string("Free Camera") : s_freeze != Freeze::Off ? std::string("Freeze: ") + cane::debugmenu::freezeName(s_freeze) : std::string("Off"));
         item("Display...", [] { Push(PK_Display); });
         {
             int c = 0;
@@ -800,15 +803,15 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         *pstrTitle = "Player";
         item("Infinite Health and Power (F7)", [] { g_fDebugInfinite = !g_fDebugInfinite; }, StrOnOff(g_fDebugInfinite));
         // (debugphys.h) sliders: left / right; Cross back to 1x
-        item("Gravity", [] { SetDebugGravity(s_psw, 1.0f); Status("gravity 1x"); }, StrSlider(s_agGravity, GDebugGravity()))->pfnAdjust = [](int dir) {
-            const float g = GStep(s_agGravity, GDebugGravity(), dir);
+        item("Gravity", [] { SetDebugGravity(s_psw, 1.0f); Status("gravity 1x"); }, strSlider(s_agGravity, GDebugGravity()))->pfnAdjust = [](int dir) {
+            const float g = gStep(s_agGravity, GDebugGravity(), dir);
             SetDebugGravity(s_psw, g);
             char ach[64];
             std::snprintf(ach, sizeof ach, "gravity %gx (Sly, Bentley, Murray)", g);
             Status(ach);
         };
-        item("Character Scale", [] { SetDebugCharScale(1.0f); Status("character scale 1x"); }, StrSlider(s_asScale, SDebugCharScale()))->pfnAdjust = [](int dir) {
-            const float s = GStep(s_asScale, SDebugCharScale(), dir);
+        item("Character Scale", [] { SetDebugCharScale(1.0f); Status("character scale 1x"); }, strSlider(s_asScale, SDebugCharScale()))->pfnAdjust = [](int dir) {
+            const float s = gStep(s_asScale, SDebugCharScale(), dir);
             SetDebugCharScale(s);
             char ach[64];
             std::snprintf(ach, sizeof ach, "character scale %gx", s);
@@ -830,24 +833,42 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     case PK_Speed:
     {
         *pstrTitle = "Speed (game time scale)";
-        static const float s_ar[] = {0.1f, 0.25f, 0.5f, 1.0f, 1.5f, 2.0f};
-        for (float r : s_ar)
+        item(std::string("Freeze Time (") + cane::debugmenu::kKeyFreezeTime + ")", [] {
+            SetTimeFrozen(!s_fTimeFrozen);
+            if (s_fTimeFrozen) Close();
+        }, StrOnOff(s_fTimeFrozen));
+        for (float r : cane::debugmenu::kSpeedStops)
         {
-            char ach[16];
-            std::snprintf(ach, sizeof ach, "%gx", r);
-            item(ach, [r, ach = std::string(ach)] { s_rSpeed = r; Status("speed " + ach); s_apage.pop_back(); },
-                 r == s_rSpeed ? "(current)" : "");
+            const std::string str = cane::debugmenu::strSpeed(r);
+            item(str, [r, str] { SetSpeed(r); Status("speed " + str); s_menu.apage.pop_back(); },
+                 r == s_rSpeed ? "(current)" : r == 1.0f ? "(normal)" : "");
         }
+        item("Keys", nullptr, std::string(cane::debugmenu::kKeyFaster) + " faster, " + cane::debugmenu::kKeySlower + " slower")->fDim = true;
         break;
     }
     case PK_Display:
         *pstrTitle = "Display";
         item("Hide HUD (F11)", [] { s_fHudHidden = !s_fHudHidden; }, StrOnOff(s_fHudHidden));
         item("Perf Display (FPS, Position)", [] { s_fPerf = !s_fPerf; }, StrOnOff(s_fPerf));
-        item("Free Camera (F1)", [] {
-            g_fDebugFreeCam = !g_fDebugFreeCam;
+        break;
+    case PK_FreeCam:
+        *pstrTitle = "Free Camera";
+        item(std::string("Free Camera (") + cane::debugmenu::kKeyFreeCam + ")", [] {
+            SetFreeCam(!g_fDebugFreeCam);
             if (g_fDebugFreeCam) Close();
         }, StrOnOff(g_fDebugFreeCam) + "  (W A S D, Q E, right mouse; pad: sticks, R2 / L2, Select)");
+        {
+            // (Select steps through the modes, Left / Right too; choosing one closes the menu: the player plays on)
+            ITEM* pit = item(std::string("Freeze Camera (") + cane::debugmenu::kKeyFreezeCam + ")", [] {
+                SetFreeze(cane::debugmenu::freezeNext(s_freeze));
+                if (s_freeze != Freeze::Off) Close();
+            }, std::string("<  ") + cane::debugmenu::freezeName(s_freeze) + "  >");
+            pit->pfnAdjust = [](int dir) {
+                SetFreeze(dir > 0 ? cane::debugmenu::freezeNext(s_freeze) : cane::debugmenu::freezeNext(cane::debugmenu::freezeNext(s_freeze)));
+            };
+        }
+        item("  Fixed: the view stays. Follow: it turns to the player", nullptr)->fDim = true;
+        item("  You keep the controls; cutscenes use their own camera", nullptr)->fDim = true;
         break;
     // (debugvis.h) what the game keeps hidden, drawn over the picture: each its own toggle, remembered
     case PK_Overlays:
@@ -943,7 +964,9 @@ uint16_t GrfDebugMenuFilter(uint16_t grf, float* pxl, float* pyl, float* pxr, fl
 {
     if (!g_pcinput.fDebugKeys)
     {
-        s_fOpen = false;
+        s_menu.fOpen = false;
+        s_fTimeFrozen = false;
+        s_freeze = Freeze::Off;
         return grf;
     }
     s_psw = g_psw;
@@ -963,25 +986,47 @@ uint16_t GrfDebugMenuFilter(uint16_t grf, float* pxl, float* pyl, float* pxr, fl
     s_xStick = *pxl;
     s_yStick = *pyl;
     const bool fCombo = (grf & BTN_R1) && (grfNew & BTN_Select);   // R1 + Select (the prototype's keys)
-    bool fTake = s_fOpen;
+    bool fTake = s_menu.fOpen;
     if (fF10Pressed || fCombo)
     {
-        if (s_fOpen) Close();
+        if (s_menu.fOpen) Close();
         else if (FCanOpen()) Open();
         fTake = true;   // (the keys that toggled it are the menu's)
-        if (!s_fOpen) s_grfMaskRelease = grf;
+        if (!s_menu.fOpen) s_menu.grfMaskRelease = grf;
     }
+    // F1 / Shift+F1 / F8 / Shift+F8 / Ctrl+F8 (platform/debug_freeze.h; the menu closed)
+    {
+        const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1), fF8 = FDebugKeyHeld(w, GLFW_KEY_F8);
+        const bool fShift = FDebugKeyHeld(w, GLFW_KEY_LEFT_SHIFT) || FDebugKeyHeld(w, GLFW_KEY_RIGHT_SHIFT);
+        const bool fCtrl = FDebugKeyHeld(w, GLFW_KEY_LEFT_CONTROL) || FDebugKeyHeld(w, GLFW_KEY_RIGHT_CONTROL);
+        using cane::debugmenu::TimeCamKey;
+        const TimeCamKey key = s_menu.fOpen ? TimeCamKey::None : cane::debugmenu::timeCamKey(fF1 && !s_fF1Prev, fF8 && !s_fF8Prev, fShift, fCtrl);
+        s_fF1Prev = fF1;
+        s_fF8Prev = fF8;
+        switch (key)
+        {
+        case TimeCamKey::FreeCam: SetFreeCam(!g_fDebugFreeCam); break;
+        case TimeCamKey::FreezeCam: SetFreeze(cane::debugmenu::freezeNext(s_freeze)); break;
+        case TimeCamKey::FreezeTime: SetTimeFrozen(!s_fTimeFrozen); break;
+        case TimeCamKey::Faster: SetSpeed(cane::debugmenu::speedFaster(s_rSpeed)); break;
+        case TimeCamKey::Slower: SetSpeed(cane::debugmenu::speedSlower(s_rSpeed)); break;
+        case TimeCamKey::None: break;
+        }
+    }
+    // the time frozen: the world takes no input (as under the pause menu; the free camera's own input is not the game's:
+    // the window's is not read meanwhile, game.cpp, and its pad is read raw)
+    if (s_fTimeFrozen && !g_fDebugFreeCam) fTake = true;
     if (fTake)
     {
         *pxl = *pyl = *pxr = *pyr = 0.0f;
         for (int i = 0; i < 4; ++i) abAxis[i] = 0x80;
         return 0;
     }
-    s_grfMaskRelease &= grf;
-    return uint16_t(grf & ~s_grfMaskRelease);
+    s_menu.grfMaskRelease &= grf;
+    return uint16_t(grf & ~s_menu.grfMaskRelease);
 }
 
-bool FDebugMenuOpen() { return s_fOpen; }
+bool FDebugMenuOpen() { return s_menu.fOpen; }
 
 bool FDebugSkipUpdate(const SW* psw, const LO* plo)
 {
@@ -1034,7 +1079,7 @@ bool FUpdateDebugFreeCamPad(CAMERA& cam, int frame)
         // Select: back to the game (R1 + Select: the menu opens at the next step, GrfDebugMenuFilter); the buttons held
         // reach the game only once released
         g_fDebugFreeCam = false;
-        s_grfMaskRelease |= grf;
+        s_menu.grfMaskRelease |= grf;
         s_grfRawPrev &= uint16_t(~BTN_Select);
         std::printf("debug menu: free camera off (pad)\n");
         return false;
@@ -1052,48 +1097,73 @@ bool FUpdateDebugFreeCamPad(CAMERA& cam, int frame)
     return true;
 }
 
+void ApplyDebugFreezeCam(CAMERA& cam)
+{
+    static double s_tPrev = 0.0;
+    const double t = glfwGetTime();
+    const float dt = s_tPrev > 0.0 ? float(std::clamp(t - s_tPrev, 0.0, 0.25)) : 1.0f / 60.0f;
+    s_tPrev = t;
+    if (s_freeze != Freeze::Off && (!g_pcinput.fDebugKeys || !g_psw || g_psw->serial != s_serialFreeze))
+    {
+        s_freeze = Freeze::Off;   // (a new world: its own camera)
+        if (g_pcinput.fDebugKeys) s_note.show("Freeze Camera: Off (new world)");
+    }
+    if (s_freeze == Freeze::Off)
+    {
+        s_fFreezeHave = false;
+        return;
+    }
+    if (!s_fFreezeHave)
+    {
+        // the view drawn now (the free camera's, or the game's): kept; the free camera hands the controls back
+        s_camFrozen = cam;
+        s_fFreezeHave = true;
+        s_aimFollow.reset(cam.yaw, cam.pitch);
+        g_fDebugFreeCam = false;
+        std::printf("debug menu: freeze camera %s at %.0f %.0f %.0f yaw %.1f pitch %.1f\n", cane::debugmenu::freezeName(s_freeze),
+                    cam.pos.x, cam.pos.y, cam.pos.z, cam.yaw, cam.pitch);
+    }
+    if (g_fDebugFreeCam || FFreezeWaits()) return;   // (the game's own camera meanwhile)
+    if (s_freeze == Freeze::Follow)
+    {
+        if (LO* plo = PloPoCurrent(g_psw); plo && FIsLoDerivedFrom(plo, 0x30))
+        {
+            const glm::vec3 p = PosAloCenter(static_cast<ALO*>(plo));
+            s_aimFollow.step(s_camFrozen.pos.x, s_camFrozen.pos.y, s_camFrozen.pos.z, p.x, p.y, p.z, dt);
+        }
+        s_camFrozen.fMat = false;
+        s_camFrozen.yaw = s_aimFollow.yaw;
+        s_camFrozen.pitch = s_aimFollow.pitch;
+    }
+    const glm::vec4 rcPicture = cam.rcPicture;
+    cam = s_camFrozen;
+    cam.rcPicture = rcPicture;
+}
+
+bool FDebugTimeFrozen() { return g_pcinput.fDebugKeys && s_fTimeFrozen; }
+
 bool FDebugHudHidden() { return g_pcinput.fDebugKeys && s_fHudHidden; }
 
 
 void UpdateDebugMenu(SW* psw)
 {
     s_psw = psw;
-    if (!s_fOpen || s_apage.empty()) return;
+    if (!s_menu.fOpen || s_menu.apage.empty()) return;
     const uint16_t grfPressed = uint16_t(s_grfRaw & ~s_grfMenuPrev);
     s_grfMenuPrev = s_grfRaw;
-    PAGE& page = s_apage.back();
+    PAGE& page = s_menu.apage.back();
     std::string strTitle;
     std::vector<ITEM> aitem = AitemPage(page, &strTitle);
     const int c = int(aitem.size());
     if (c == 0) return;
-    page.isel = std::clamp(page.isel, 0, c - 1);
-    // up / down: the d-pad or the stick, repeating while held
-    int dir = 0;
-    if ((s_grfRaw & BTN_Up) || s_yStick > 0.5f) dir = -1;
-    else if ((s_grfRaw & BTN_Down) || s_yStick < -0.5f) dir = 1;
-    if (dir != s_dirHeld)
-    {
-        s_dirHeld = dir;
-        s_cframeHeld = 0;
-    }
-    else if (dir) ++s_cframeHeld;
-    const bool fStep = dir && (s_cframeHeld == 0 || (s_cframeHeld >= 18 && (s_cframeHeld - 18) % 4 == 0));
-    if (fStep) page.isel = (page.isel + dir + c) % c;
-    // left / right: a slider's step (repeating while held), else a page down / up
-    {
-        static int s_dirLR = 0, s_cframeLR = 0;
-        const int dirLR = (s_grfRaw & BTN_Right) || s_xStick > 0.5f ? 1 : (s_grfRaw & BTN_Left) || s_xStick < -0.5f ? -1 : 0;
-        if (dirLR != s_dirLR) s_dirLR = dirLR, s_cframeLR = 0;
-        else if (dirLR) ++s_cframeLR;
-        const bool fStepLR = dirLR && (s_cframeLR == 0 || (s_cframeLR >= 18 && (s_cframeLR - 18) % 6 == 0));
-        const ITEM& itSel = aitem[size_t(page.isel)];
-        if (itSel.pfnAdjust) { if (fStepLR) itSel.pfnAdjust(dirLR); }
-        else
-        {
-            if (grfPressed & BTN_Right) page.isel = std::min(c - 1, page.isel + CROW_SHOWN);
-            if (grfPressed & BTN_Left) page.isel = std::max(0, page.isel - CROW_SHOWN);
-        }
-    }
+    // (the navigation: platform/debug_menu.h; one call per 1/60 s step)
+    cane::debugmenu::NavInput in;
+    in.dirUpDown = (s_grfRaw & BTN_Up) || s_yStick > 0.5f ? -1 : (s_grfRaw & BTN_Down) || s_yStick < -0.5f ? 1 : 0;
+    in.dirLeftRight = (s_grfRaw & BTN_Right) || s_xStick > 0.5f ? 1 : (s_grfRaw & BTN_Left) || s_xStick < -0.5f ? -1 : 0;
+    in.fRightPressed = (grfPressed & BTN_Right) != 0;
+    in.fLeftPressed = (grfPressed & BTN_Left) != 0;
+    in.fSelect = (grfPressed & BTN_Cross) != 0;
+    in.fBack = (grfPressed & (BTN_Circle | BTN_Triangle | BTN_Start)) != 0;
     // the mouse: the row under the cursor once it moves
     if (GLFWwindow* w = g_gl.window)
     {
@@ -1111,27 +1181,12 @@ void UpdateDebugMenu(SW* psw)
             const float yc = (1.0f - (yn - d.uiOffset.y) / d.uiScale.y) * 224.0f;
             const LAYOUT& l = s_layout;
             if (xc >= l.x0 && xc < l.x1 && yc >= l.yFirst && yc < l.yFirst + DY_ROW * float(l.crow))
-            {
-                const int i = page.itop + int((yc - l.yFirst) / DY_ROW);
-                if (i >= 0 && i < c) page.isel = i;
-            }
+                in.irowMouse = page.itop + int((yc - l.yFirst) / DY_ROW);
         }
         s_xMousePrev = x;
         s_yMousePrev = y;
     }
-    if (page.isel < page.itop) page.itop = page.isel;
-    if (page.isel >= page.itop + CROW_SHOWN) page.itop = page.isel - CROW_SHOWN + 1;
-    if (grfPressed & BTN_Cross)
-    {
-        const ITEM& it = aitem[size_t(page.isel)];
-        if (it.pfn) it.pfn();
-        return;
-    }
-    if (grfPressed & (BTN_Circle | BTN_Triangle | BTN_Start))
-    {
-        s_apage.pop_back();
-        if (s_apage.empty()) Close();
-    }
+    s_menu.navigate(aitem, in, 1.0f / 60.0f, s_grfRaw);
 }
 
 void UpdateDebugTools(SW* psw)
@@ -1146,6 +1201,7 @@ void UpdateDebugTools(SW* psw)
     }
     if (!g_pcinput.fDebugKeys)
     {
+        if (g_clock.af[4] != 1.0f) SetClockFactor(&g_clock, 4, 1.0f);
         if (s_ploNoclip) EndNoclip(psw, false);
         // (the gravity and the character scale back to the original's)
         if (GDebugGravity() != 1.0f) SetDebugGravity(psw, 1.0f);
@@ -1169,7 +1225,21 @@ void UpdateDebugTools(SW* psw)
     apfn.swap(s_apfnDeferred);
     for (auto& pfn : apfn) pfn(psw);
     // the time scale (clock factor 4: none of the game's code sets it; a world load resets it to 1)
-    if (g_clock.af[4] != s_rSpeed) SetClockFactor(&g_clock, 4, s_rSpeed);
+    // (Freeze Time: the factor 0, the game's own pause as under the pause menu: the effects' sounds faded; not across a
+    // world change)
+    static uint32_t s_serialTime = 0;
+    if (s_fTimeFrozen && (psw->serial != s_serialTime || !FCanFreezeTime()))
+    {
+        s_fTimeFrozen = false;
+        s_note.show("Time: " + cane::debugmenu::strSpeed(s_rSpeed) + " (new world)");
+    }
+    s_serialTime = psw->serial;
+    if (const float r = s_fTimeFrozen ? 0.0f : s_rSpeed; g_clock.af[4] != r) SetClockFactor(&g_clock, 4, r);
+    s_note.tick(1.0f / 60.0f);
+    // (test aid: SLY2N_DEBUGTIMEPRINT=N prints the game clock every N steps, with the speed and the freeze)
+    if (static const int s_cTimePrint = std::getenv("SLY2N_DEBUGTIMEPRINT") ? std::atoi(std::getenv("SLY2N_DEBUGTIMEPRINT")) : 0;
+        s_cTimePrint > 0 && g_frameJoy % s_cTimePrint == 0)
+        std::printf("debug clock: step %d t %.4f speed %g frozen %d\n", g_frameJoy, g_clock.t, s_rSpeed, int(s_fTimeFrozen));
     if (g_fDebugInfinite) CheatRefillPlayers(psw);
     UpdateDebugCharScale(psw);   // (debugphys.h: the current player's hulls)
     // noclip: follows the current player (a character switch moves it to the new one)
@@ -1177,19 +1247,45 @@ void UpdateDebugTools(SW* psw)
     if (s_fNoclipWant && !s_ploNoclip && !g_transition.fPending) BeginNoclip(psw);
     if (s_ploNoclip) StepNoclip(psw);
     OnPcWorldStep(psw, true);   // (PC addition: kept worlds loaded, the guests placed on the player: pcloader.h)
-    if (s_cframeStatus > 0) --s_cframeStatus;
+    s_menu.tick(1.0f / 60.0f);
 }
 
 namespace
 {
+// the key's short note (top centre, about a second) and, while the time is not normal, a small corner note (not with
+// the HUD hidden: clean shots)
+std::string StrTimeIndicator() { return s_fHudHidden ? std::string() : cane::debugmenu::strTimeIndicator(s_rSpeed, s_fTimeFrozen); }
+
+void DrawTimeCamNotes(const FONTBRX& font, const FONTBRX* picons)
+{
+    if (s_note.shown() && !s_menu.fOpen)
+    {
+        const float size = 17.0f;
+        const float w = DxLine(font, picons, s_note.text, size);
+        const float x = (XCanvasPictureLeft() + XCanvasPictureRight()) * 0.5f - w * 0.5f, y = 96.0f;   // (under the hint bar)
+        const float a = s_note.alpha();
+        g_hud.FillScreenRect(x - 10.0f, y - 4.0f, x + w + 10.0f, y + size * 0.909f + 5.0f, glm::vec4(0, 0, 0, 96 * a), DEPTH / 16777216.0f - 1e-4f);
+        DrawLine(font, picons, s_note.text, x, y, size, glm::vec4(128, 128, 128, 0) * a);
+    }
+    if (const std::string str = StrTimeIndicator(); !str.empty())
+    {
+        const float size = 14.0f;
+        const float w = DxLine(font, picons, str, size);
+        const float x = XCanvasPictureLeft() + 12.0f, y = 410.0f;
+        g_hud.FillScreenRect(x - 6.0f, y - 3.0f, x + w + 6.0f, y + size * 0.909f + 4.0f, glm::vec4(0, 0, 0, 72), DEPTH / 16777216.0f - 1e-4f);
+        DrawLine(font, picons, str, x, y, size, glm::vec4(120, 110, 60, 0));
+    }
+}
+
 void DrawDebugMenu()
 {
     const FONTBRX* pfont = PfontHud();
     const FONTBRX* picons = PfontHudIcons();
     if (!pfont) return;
     if (s_fPerf) DrawPerf(*pfont, picons);
-    if (!s_fOpen || s_apage.empty()) return;
-    const PAGE& page = s_apage.back();
+    DrawTimeCamNotes(*pfont, picons);
+    if (!s_menu.fOpen || s_menu.apage.empty()) return;
+    const PAGE& page = s_menu.apage.back();
     std::string strTitle;
     const std::vector<ITEM> aitem = AitemPage(page, &strTitle);
     // the colours (the prototype's: a grey title, green rows, the selected one light green; the "[save]" mark orange)
@@ -1223,7 +1319,7 @@ void DrawDebugMenu()
     const bool fScroll = int(aitem.size()) > CROW_SHOWN;
     const float yFirst = Y_TOP + 8.0f + DY_ROW + 4.0f;
     const float yHint = yFirst + DY_ROW * float(crow) + 6.0f;
-    const bool fStatus = s_cframeStatus > 0 && !s_strStatus.empty();
+    const bool fStatus = s_menu.fStatusShown();
     const float yStatus = yHint + 20.0f;
     const float y1 = (fStatus ? yStatus + 20.0f : yHint + 20.0f);
     s_layout = LAYOUT{x0, Y_TOP, x0 + w + 20.0f, y1, yFirst, crow};
@@ -1251,7 +1347,7 @@ void DrawDebugMenu()
     if (fScroll) hint += "    " + std::to_string(page.isel + 1) + " / " + std::to_string(aitem.size());
     if (page.isel >= 0 && page.isel < int(aitem.size()) && aitem[size_t(page.isel)].pfnAdjust) hint += "    Left / Right: adjust";
     DrawLine(*pfont, picons, hint, xText, yHint, sizeHint, offHint);
-    if (fStatus) DrawLine(*pfont, picons, s_strStatus, xText, yStatus, sizeHint, offValue);
+    if (fStatus) DrawLine(*pfont, picons, s_menu.strStatus, xText, yStatus, sizeHint, offValue);
 }
 }  // namespace
 
@@ -1260,7 +1356,8 @@ void DrawDebugOverlay(int width, int height)
     // (Extras: Carmelita's aim mode crosshair, pccharacter.h)
     const bool fCross = g_pcinput.fDebugKeys && FPcCarmCrosshair();
     const bool fVis = FDebugVisAny();   // (debugvis.h; the test aid SLY2N_DEBUGVIS without Debug mode too)
-    if (!fVis && (!g_pcinput.fDebugKeys || !(s_fOpen || s_fPerf || fCross))) return;
+    const bool fNotes = s_note.shown() || !StrTimeIndicator().empty();
+    if (!fVis && (!g_pcinput.fDebugKeys || !(s_menu.fOpen || s_fPerf || fCross || fNotes))) return;
     g_hud.Begin();
     if (fVis) DrawDebugVis(g_psw);
     if (fCross) DrawPcCarmCrosshair();

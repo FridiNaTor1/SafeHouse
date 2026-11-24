@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Sly 1's deko3d shaders (Project Cane's cmake/switch_shaders.py).
 
-    switch_shaders_sly1.py --source REPO --output DIR --uam PATH/uam [--gpu maxwell|ampere]
+    switch_shaders_sly1.py --source REPO --game SLY1_GAME_DIR --output DIR --uam PATH/uam [--gpu maxwell|ampere]
 
+--game: the game's shader folder (the Sly1/ submodule's Sly1-Release; default REPO/Sly1/Sly1-Release).
 --gpu: maxwell (the Switch, uam) or ampere (the Switch 2, uam2).
 """
 
@@ -20,9 +21,8 @@ UNIFORM = re.compile(r'\buniform\s+(\w+)\s+(\w+)\s*(?:\[\s*(\w+)\s*\])?\s*;')
 STRUCT = re.compile(r'\bstruct\s+(\w+)\s*\{([^}]+)\}\s*;', re.S)
 FIELD = re.compile(r'\b(\w+)\s+(\w+)\s*(?:\[\s*(\w+)\s*\])?\s*;')
 
-def program_sources(root, name):
+def program_sources(root, game, name):
     native = root / 'platform/switch/sly1/deko/shaders'
-    game = root / 'Sly1-Release'
     directory = native if name in NATIVE else game
     paths = tuple(directory / f'{name}.{stage}' for stage in ('vert', 'frag'))
     return [path.read_text(encoding='utf-8-sig') for path in paths]
@@ -215,6 +215,7 @@ def transform(source, stage, layout, samplers):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--game', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--uam', type=Path, required=True)
     parser.add_argument('--gpu', choices=('maxwell', 'ampere'), default='maxwell')
@@ -254,7 +255,7 @@ def main():
         header.append('};')
 
     for name in PROGRAMS:
-        sources = program_sources(args.source, name)
+        sources = program_sources(args.source, args.game or args.source / 'Sly1' / 'Sly1-Release', name)
         layout, members, samplers, size = program_layout(sources)
         resources = []
         for stage, source in zip(('vert', 'frag'), sources):

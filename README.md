@@ -35,7 +35,7 @@ SafeHouse installs each game from **your own PlayStation 2 disc image** and runs
 | **Sly 3: Honor Among Thieves** | **Early in development, not fully playable.** Rebuilt on the finished Sly 2 port's engine and being ported episode by episode. Expect missing features, visual and audio problems, and crashes; progress may stop at points the port cannot handle yet. |
 
 Supported discs: Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01), Japan and
-Korea. On macOS the packages carry the launcher, Sly 2 and Sly 3; on Android and the Meta Quest, the launcher and Sly 2.
+Korea. Every platform carries the launcher and all three games, and takes every one of these discs.
 
 ## Download and play
 

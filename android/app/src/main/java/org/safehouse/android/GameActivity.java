@@ -14,7 +14,7 @@ import android.os.Build;
 import android.os.PowerManager;
 import org.libsdl.app.SDLActivity;
 
-/** The game (Sly 2: libSly2-Release.so, Sly 3: libSly3-Release.so; the intent's "program") in its own process
+/** The game (Sly 1: libSly1-Release.so, Sly 2: libSly2-Release.so, Sly 3: libSly3-Release.so; the intent's "program") in its own process
  * (":game"), started by the launcher through NativeBridge.startChild. One game per process: the process ends with it. */
 public class GameActivity extends SDLActivity {
     static volatile boolean visibleRequested;
@@ -22,6 +22,13 @@ public class GameActivity extends SDLActivity {
     private DebugCapture capture;
     private ServiceConnection launcherKeeper;
     private volatile boolean nativeShutdownRequested;
+    // Why this activity closes when the game did not end by itself (onDestroy reports it with exit code 1).
+    private volatile String closeReason;
+    // A session attached in this process (attachChild succeeded in some activity of it), and this activity is one
+    // started without its session (a stray start: the launcher brought the game back while its activity was finishing).
+    // A stray activity closes quietly: no exit report, and the process (the real game's) is left alone.
+    private static volatile boolean sessionAttached;
+    private boolean stray;
     private PowerManager.OnThermalStatusChangedListener thermalListener;
     @Override protected String[] getLibraries() { return new String[] {"SDL2", NativeBridge.gameLibrary(getIntent())}; }
     // The immersive activity of the hybrid app on a VR headset (the manifest's VR category; the game's OpenXR session
@@ -44,17 +51,29 @@ public class GameActivity extends SDLActivity {
     }
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        if (mBrokenLibraries) { NativeBridge.reportExit(1); return; }
+        if (mBrokenLibraries) { NativeBridge.reportExit(1, "the game's native libraries could not be loaded"); return; }
         try {
             visibleRequested = false;
             NativeBridge.gameActivity = getClass();
             SDLActivity.nativeSetenv("SDL_ANDROID_BLOCK_ON_PAUSE", "0");
             NativeBridge.initialize(this);
             DesktopMode.apply(this);
-            if (!debugStart()) NativeBridge.attachChild(getIntent());   // (a debug start: its output to logcat)
+            if (!debugStart()) {   // (a debug start: its output to logcat)
+                if (getIntent().getBundleExtra("channel") == null) {
+                    stray = true;
+                    System.err.println("GameActivity started without a session: closed");
+                    finish();
+                    return;
+                }
+                NativeBridge.attachChild(getIntent());
+                sessionAttached = true;
+            }
             launcherKeeper = new ServiceConnection() {
                 @Override public void onServiceConnected(ComponentName name, IBinder binder) { }
-                @Override public void onServiceDisconnected(ComponentName name) { finish(); }
+                @Override public void onServiceDisconnected(ComponentName name) {
+                    closeReason = "the launcher's process ended (Android closed it)";
+                    finish();
+                }
             };
             bindService(new Intent(this, LauncherKeeperService.class), launcherKeeper,
                 Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT);
@@ -75,7 +94,7 @@ public class GameActivity extends SDLActivity {
             capture = DebugCapture.start(this, mSurface, controls);
         } catch (Exception error) {
             System.err.println("Cannot attach the private launcher session pipes");
-            NativeBridge.reportExit(1); finish();
+            NativeBridge.reportExit(1, "the game could not connect to the launcher (" + error.getMessage() + ")"); finish();
         }
     }
     @Override protected void onNewIntent(Intent intent) {
@@ -85,6 +104,7 @@ public class GameActivity extends SDLActivity {
     }
     @Override protected void onPause() {
         if (controls != null) controls.release();
+        if (isFinishing() && !stray) NativeBridge.reportClosing();
         super.onPause();
     }
     void prepareNativeShutdown() { nativeShutdownRequested = true; }
@@ -127,6 +147,11 @@ public class GameActivity extends SDLActivity {
         if (controls != null) controls.setGameContext(context);
     }
     @Override protected void onDestroy() {
+        if (stray) {
+            super.onDestroy();
+            if (!sessionAttached) android.os.Process.killProcess(android.os.Process.myPid());
+            return;
+        }
         if (controls != null) controls.close();
         if (capture != null) capture.stop();
         if (thermalListener != null && Build.VERSION.SDK_INT >= 29) {
@@ -134,8 +159,16 @@ public class GameActivity extends SDLActivity {
             if (power != null) power.removeThermalStatusListener(thermalListener);
         }
         if (launcherKeeper != null) try { unbindService(launcherKeeper); } catch (IllegalArgumentException ignored) { }
-        if (!NativeBridge.exitWasReported()) NativeBridge.reportExit(1);
+        final boolean finishing = isFinishing(), changing = isChangingConfigurations();
+        // (SDL's onDestroy sends the game its quit and waits for its thread: a game that ends by itself then (Back, swiped
+        // away) reports its own exit code first, and the launcher shows no warning for a game the player closed)
         super.onDestroy();
+        if (!NativeBridge.exitWasReported()) {
+            String reason = closeReason;
+            if (reason == null) reason = finishing ? "its window was closed (Back, or swiped away in Recents)"
+                : "Android closed its window" + (changing ? " (a display change)" : "");
+            NativeBridge.reportExit(1, reason);
+        }
         // A subsequent session must start with fresh native engine globals.
         android.os.Process.killProcess(android.os.Process.myPid());
     }

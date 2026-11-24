@@ -241,6 +241,65 @@ bool ShaderLibrary::Link(const GlslInterface& vertex_stage, const GlslInterface&
   return true;
 }
 
+bool ShaderLibrary::LinkPrebuilt(const prebuilt::Program& program, CompiledProgram* out,
+                                 std::string* log) {
+  out->name = program.key;
+  out->prebuilt = true;
+  out->layout = UniformLayout{};
+  out->layout.total_bytes = std::max<uint32_t>(program.uniform_bytes, 16);
+  out->layout.texture_slot_count = static_cast<int>(program.texture_slots);
+  for (uint32_t i = 0; i < program.field_count; ++i) {
+    const prebuilt::Field& field = program.fields[i];
+    if (!field.name) continue;
+    UniformField out_field;
+    out_field.name = field.name;
+    out_field.type = static_cast<GlslType>(field.type);
+    out_field.offset = field.offset;
+    out_field.size = field.size;
+    out_field.count = std::max<uint32_t>(field.count, 1);
+    out_field.stride = field.stride;
+    out_field.texture_slot = field.texture_slot;
+    out->layout.fields.push_back(out_field);
+  }
+  out->storage_bindings.clear();
+  out->storage_vertex = program.storage_vertex;
+  out->storage_fragment = program.storage_fragment;
+  out->blocks_vertex = program.blocks_vertex;
+  out->blocks_fragment = program.blocks_fragment;
+  out->block_names = program.block_names ? program.block_names : "";
+  out->input_mask = program.input_mask;
+  out->input_kinds = program.input_kinds;
+  out->lengths.assign(program.lengths, program.lengths + program.length_count);
+  // (the stages are separate libraries: each declares its own structs)
+  id<MTLFunction> functions[2] = {nil, nil};
+  const char* sources[2] = {program.vertex_msl, program.fragment_msl};
+  const char* entries[2] = {"vertex_main", "fragment_main"};
+  for (int stage = 0; stage < 2; ++stage) {
+    const std::string source = sources[stage];
+    id<MTLLibrary> library = nil;
+    const auto cached = libraries_.find(source);
+    if (cached != libraries_.end()) {
+      library = cached->second;
+    } else {
+      std::string error;
+      library = CompileSource(source, &error);
+      if (!library) {
+        if (log) *log = std::string(program.key) + (stage ? ".frag" : ".vert") + ": " + error;
+        return false;
+      }
+      libraries_[source] = library;
+    }
+    functions[stage] = [library newFunctionWithName:[NSString stringWithUTF8String:entries[stage]]];
+    if (!functions[stage]) {
+      if (log) *log = std::string("missing ") + entries[stage] + " in the prebuilt program " + program.key;
+      return false;
+    }
+  }
+  out->vertex = functions[0];
+  out->fragment = functions[1];
+  return true;
+}
+
 bool ShaderLibrary::CompileUtilities(UtilityFunctions* out, std::string* log) {
   id<MTLLibrary> library = CompileSource(Prefix() + CaneMetalShader("utility.metal"), log);
   if (!library) return false;

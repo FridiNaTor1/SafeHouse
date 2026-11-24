@@ -5996,6 +5996,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                     ps.srcColor = ps.srcAlpha = cane::draw::kFactorSrcAlpha;
                     ps.dstColor = ps.dstAlpha = cane::draw::kFactorOneMinusSrcAlpha;
                     ps.depthTest = 1;
+                    ps.depthWrite = s_fCelAlways ? 0 : 1;   // (the original's Z-only twin line: see the GL path below)
                     ps.depthCompare = s_fCelAlways ? cane::draw::kAlways : cane::draw::kGreaterEqual;
                     if (s_uc.edgeBase >= 0) ps.aconst[ps.cconst++] = {s_uc.edgeBase, 0};
                     s_idCel = ppackets->createState(ps);
@@ -6054,7 +6055,11 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(s_fCelAlways ? GL_ALWAYS : GL_GEQUAL);
-            glDepthMask(GL_FALSE);
+            // The border writes depth: the original draws each line twice (0x16E1A8's GIF, Sly 3's 0x194670 the same), the
+            // AA line with TEST 0x73001 (AFAIL RGB_ONLY: colour only) and a plain twin with TEST 0x72001 (AFAIL ZB_ONLY:
+            // depth only). Without the depth, a translucent surface drawn later behind the character (water, waterfalls,
+            // fire) passed the depth test on the border's pixels and covered the outline (c_train_ext's river).
+            glDepthMask(s_fCelAlways ? GL_FALSE : GL_TRUE);
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glBindVertexArray(s_vaoEmpty);
             glDrawArrays(GL_TRIANGLES, 0, geom.pgl->cedge * 6);

@@ -44,7 +44,7 @@ final class DebugCapture {
         if (stopped) return;
         File request = new File(activity.getFilesDir(), "capture-request");
         // (the focused activity answers: the launcher keeps polling behind the game)
-        if (activity.hasWindowFocus() && request.exists() && request.delete() && surface.getWidth() > 0 && surface.getHeight() > 0) {
+        if (android.os.Build.VERSION.SDK_INT >= 24 && activity.hasWindowFocus() && request.exists() && request.delete() && surface.getWidth() > 0 && surface.getHeight() > 0) {
             final Bitmap bitmap = Bitmap.createBitmap(surface.getWidth(), surface.getHeight(), Bitmap.Config.ARGB_8888);
             PixelCopy.request(surface, bitmap, result -> {
                 if (result != PixelCopy.SUCCESS) return;

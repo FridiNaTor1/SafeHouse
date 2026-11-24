@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <style name="SafeHouseTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowBackground">#091526</item>
         <item name="android:colorAccent">#FFBD42</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
+        <!-- (Android 6 / 8.1+; older versions ignore them) -->
+        <item name="android:windowLightStatusBar" tools:targetApi="23">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
     </style>
 </resources>

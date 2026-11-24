@@ -175,4 +175,19 @@ struct INITZONELOOK
         RegisterObjectSetter(204, [](LO* plo, const CRef& r) { SetZoneReturn1(plo, 0x174, r.GAsFloat()); });
     }
 } s_initzonelook;
+
+// EOPID 841 (a PIPE's bool option, grf 0x120: kept by the load, also set by scripts): its setter 0x1C3C08 stores
+// !value in +0x1AC, the description's players (+0x190 +0x1C), so a pipe with it set is nobody's to grab (the jump's
+// 0x19B110 and the candidates' 0x194688 AND the players' +0x1000 with it). The level designers set it on the paths
+// only the AI walk: p_prison_ext's drain pipe 77380, the one the Contessa climbs in Ep4 (JOBUSE 0x179FA0 ignores the
+// players' mask). Not ported, those pipes kept the constructor's 1 and Sly could climb them.
+struct INITPIPEOPTIONS
+{
+    INITPIPEOPTIONS()
+    {
+        RegisterObjectSetter(841, [](LO* plo, const CRef& r) {
+            plo->SetField(0, 0x190 + 0x1C, NArg({r}, 0, 0) == 0 ? 1u : 0u);
+        });
+    }
+} s_initpipeoptions;
 }  // namespace

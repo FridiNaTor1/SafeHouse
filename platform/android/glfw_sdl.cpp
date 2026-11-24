@@ -632,7 +632,29 @@ VkResult glfwCreateWindowSurface(VkInstance instance,GLFWwindow* w,const VkAlloc
     return VK_SUCCESS;
 }
 void glfwSwapInterval(int value){if(!current || !current->offscreen)SDL_GL_SetSwapInterval(value);}
+// Device tests (debuggable builds: files/env.txt, native_entry.cpp): SAFEHOUSE_ANDROID_TEST_KEYS="KEY@FIRST-LAST,..."
+// holds GLFW key KEY from the FIRST-th to the LAST-th glfwPollEvents call (about one per frame), focused or not, as
+// tools/sly1-smoke-hooks.cpp's keys on Linux: a game driven without anybody at the device. Unset in normal use.
+namespace {
+struct TestKey{int key=0;long first=0,last=-1;};
+long pollCount=0;
+const std::vector<TestKey>& testKeys(){
+    static const std::vector<TestKey> keys=[]{
+        std::vector<TestKey> out;const char* text=std::getenv("SAFEHOUSE_ANDROID_TEST_KEYS");
+        for(const char* p=text?text:"";*p;){
+            TestKey k;char* end=nullptr;k.key=int(std::strtol(p,&end,10));
+            if(end && *end=='@'){k.first=std::strtol(end+1,&end,10);k.last=k.first;if(end && *end=='-')k.last=std::strtol(end+1,&end,10);}
+            if(k.key>0 && k.key<=GLFW_KEY_LAST && k.last>=k.first)out.push_back(k);
+            p=end && end!=p?end:p+1;while(*p==',')++p;
+        }
+        if(!out.empty())std::cerr<<"Android test keys: "<<out.size()<<" ranges"<<std::endl;
+        return out;}();
+    return keys;
+}
+bool testKeyDown(int key){for(const auto& k:testKeys())if(k.key==key && pollCount>=k.first && pollCount<=k.last)return true;return false;}
+}  // namespace
 void glfwPollEvents(){
+    ++pollCount;
     installIme();detectImeDismissal();
     SDL_Event ev;while(SDL_PollEvent(&ev))event(ev);
     retainGraphicsContext(current);
@@ -679,7 +701,7 @@ int glfwGetError(const char** detail){if(detail)*detail=lastError.empty()?nullpt
 GLFWerrorfun glfwSetErrorCallback(GLFWerrorfun f){return std::exchange(errorCallback,f);}
 GLFWmonitorfun glfwSetMonitorCallback(GLFWmonitorfun f){return std::exchange(monitorCallback,f);}
 GLFWjoystickfun glfwSetJoystickCallback(GLFWjoystickfun f){return std::exchange(joystickCallback,f);}
-int glfwGetKey(GLFWwindow* w,int key){return w&&key>=0&&key<=GLFW_KEY_LAST&&w->focused?w->keys[key]:0;}
+int glfwGetKey(GLFWwindow* w,int key){if(w&&key>=0&&key<=GLFW_KEY_LAST&&!testKeys().empty()&&testKeyDown(key))return GLFW_PRESS;return w&&key>=0&&key<=GLFW_KEY_LAST&&w->focused?w->keys[key]:0;}
 const char* glfwGetKeyName(int key,int){static char result[2]{};if(key>=32&&key<127){result[0]=char(key);return result;}return nullptr;}
 int glfwGetMouseButton(GLFWwindow* w,int button){return w&&button>=0&&button<int(w->mouse.size())?w->mouse[button]:0;}
 void glfwGetCursorPos(GLFWwindow* w,double* x,double* y){if(x)*x=w?w->x:0;if(y)*y=w?w->y:0;}

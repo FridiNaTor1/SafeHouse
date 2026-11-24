@@ -29,7 +29,7 @@ android {
     compileSdk 36
     defaultConfig {
         applicationId 'org.safehouse.android'
-        minSdk providers.gradleProperty('safehouseMinSdk').getOrElse('26').toInteger()
+        minSdk providers.gradleProperty('safehouseMinSdk').getOrElse('21').toInteger()
         targetSdk 36
         versionCode safehouseVersionCode
         versionName safehouseVersionName

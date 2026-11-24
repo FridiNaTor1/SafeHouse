@@ -40,6 +40,7 @@ struct PipelineKey {
   std::array<VertexBufferKey, kVertexBufferCount> buffers;
   RenderTargetKey target;
   BlendState blend;
+  bool constant_attributes = false;  // (kConstantAttributeSlot in use: glVertexAttrib* values)
   std::string Hash() const;
 };
 

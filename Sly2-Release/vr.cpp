@@ -87,6 +87,7 @@ float UnitsPerMetre() { return 100.0f; }
 #include <stb/stb_image_write.h>
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -328,6 +329,32 @@ bool FStandalone()
 #endif
     if (const char* sz = std::getenv("SLY2N_VR_STANDALONE"); sz && *sz) f = std::atoi(sz) != 0;
     return f;
+}
+
+// The headset's name (xrGetSystemProperties), for the Quest 2 profile.
+std::string s_strHeadset;
+// A low-end standalone headset (2026-11-24): the Meta Quest 2 (Adreno 650; its runtime names it "Oculus Quest2"), or
+// SLY2N_VR_PROFILE=quest2 (tests on a Quest 3S; =default: none). Its Automatic choices are lower: 72 Hz, the eyes at
+// kLowEndEyeScale of the runtime's recommended size (dynamic eye resolution goes on down from there to its floor),
+// MSAA off (as on every standalone headset). Not measured on a real Quest 2.
+constexpr float kLowEndEyeScale = 0.8f;
+bool FLowEndHeadset()
+{
+    if (const char* sz = std::getenv("SLY2N_VR_PROFILE"); sz && *sz) return std::strcmp(sz, "quest2") == 0;
+    std::string name = s_strHeadset;
+    for (char& c : name) c = char(std::tolower(static_cast<unsigned char>(c)));
+    name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
+    return name.find("quest2") != std::string::npos;
+}
+// The eyes' size against the runtime's recommendation: SLY2N_VR_EYESCALE, else the profile's.
+float EyeScale()
+{
+    if (const char* sz = std::getenv("SLY2N_VR_EYESCALE"))
+    {
+        const float g = float(std::atof(sz));
+        if (g > 0.1f) return g;
+    }
+    return FLowEndHeadset() ? kLowEndEyeScale : 1.0f;
 }
 
 // (VR's log) where the frames' time goes, every SLY2N_VR_PERFLOG seconds (default 20, 0 off): the game thread's parts,
@@ -1172,11 +1199,7 @@ bool FCreateEyeTargets()
         // straight into the images
         const XrViewConfigurationView& v = s_aviewcfg[0];
         int dx = int(v.recommendedImageRectWidth), dy = int(v.recommendedImageRectHeight);
-        if (const char* sz = std::getenv("SLY2N_VR_EYESCALE"))
-        {
-            const float g = float(std::atof(sz));
-            if (g > 0.1f) dx = int(dx * g), dy = int(dy * g);
-        }
+        if (const float g = EyeScale(); g != 1.0f) dx = int(dx * g), dy = int(dy * g);
         dx = std::min(dx, int(v.maxImageRectWidth));
         dy = std::min(dy, int(v.maxImageRectHeight));
         if (!FCreateSwapchain(s_aeye[0], dx, dy, s_formatColor, 1, 2, true))
@@ -1227,11 +1250,7 @@ bool FCreateEyeTargets()
     {
         const XrViewConfigurationView& v = s_aviewcfg[0];
         int dx = int(v.recommendedImageRectWidth), dy = int(v.recommendedImageRectHeight);
-        if (const char* sz = std::getenv("SLY2N_VR_EYESCALE"))
-        {
-            const float g = float(std::atof(sz));
-            if (g > 0.1f) dx = int(dx * g), dy = int(dy * g);
-        }
+        if (const float g = EyeScale(); g != 1.0f) dx = int(dx * g), dy = int(dy * g);
         dx = std::min(dx, int(v.maxImageRectWidth));
         dy = std::min(dy, int(v.maxImageRectHeight));
         if (!FCreateSwapchain(s_aeye[0], dx, dy, s_formatColor, 1, 2)) return false;
@@ -1244,11 +1263,7 @@ bool FCreateEyeTargets()
     {
         const XrViewConfigurationView& v = s_aviewcfg[size_t(i)];
         int dx = int(v.recommendedImageRectWidth), dy = int(v.recommendedImageRectHeight);
-        if (const char* sz = std::getenv("SLY2N_VR_EYESCALE"))
-        {
-            const float g = float(std::atof(sz));
-            if (g > 0.1f) dx = int(dx * g), dy = int(dy * g);
-        }
+        if (const float g = EyeScale(); g != 1.0f) dx = int(dx * g), dy = int(dy * g);
         dx = std::min(dx, int(v.maxImageRectWidth));
         dy = std::min(dy, int(v.maxImageRectHeight));
         if (!FCreateSwapchain(s_aeye[i], dx, dy, s_formatColor, 1, 1, true)) return false;
@@ -1764,9 +1779,11 @@ void SetRefreshRate()
         if (want > 0 ? std::fabs(hz - float(want)) < 1.0f : (hz <= 120.5f && hz > hzWant)) hzWant = hz;
     // (Automatic on a standalone headset: 90 Hz where offered, the Quest 3S's measured best: 120 Hz never gave more
     // frames there, only twice the stale ones; else the best up to 120 Hz)
+    // (the Quest 2 profile, FLowEndHeadset: 72 Hz, its lowest, so the weaker GPU can keep up)
+    const float hzStandalone = FLowEndHeadset() ? 72.0f : 90.0f;
     if (want <= 0 && FStandalone())
         for (float hz : a)
-            if (std::fabs(hz - 90.0f) < 1.0f) hzWant = hz;
+            if (std::fabs(hz - hzStandalone) < 1.0f) hzWant = hz;
     if (hzWant > 0.0f && FCheck(pxrRequestDisplayRefreshRateFB(s_session, hzWant), "xrRequestDisplayRefreshRateFB")) s_hzDisplay = hzWant;
     Log("refresh rates: %s-> %.0f Hz", str.c_str(), double(s_hzDisplay));
 }
@@ -2246,7 +2263,8 @@ bool FCreateInstance(bool fVulkan)
     }
     XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
     pxrGetSystemProperties(s_inst, s_sys, &sp);
-    Log("runtime %s, headset %s", s_strRuntime.c_str(), sp.systemName);
+    s_strHeadset = sp.systemName;
+    Log("runtime %s, headset %s%s", s_strRuntime.c_str(), sp.systemName, FLowEndHeadset() ? " (the Quest 2 profile: 72 Hz, smaller eyes)" : "");
     c = 0;
     pxrEnumerateViewConfigurationViews(s_inst, s_sys, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &c, nullptr);
     s_aviewcfg.assign(c, {XR_TYPE_VIEW_CONFIGURATION_VIEW});

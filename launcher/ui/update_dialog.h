@@ -73,9 +73,15 @@ public:
     Phase phase() const { return m_seen; }
     const update::Release& release() const { return m_release; }
     // The update is downloaded and nothing runs: time to close the launcher and swap the files.
+#if defined(__ANDROID__)
+    // (Android: the system's installer replaces the app; nothing is finished when the launcher closes)
+    bool restartNow(bool) const { return false; }
+    std::optional<update::Plan> pendingPlan() const { return std::nullopt; }
+#else
     bool restartNow(bool busy) const { return m_seen == Phase::Ready && m_restart && !busy; }
     // The update to finish when the launcher closes (restart: start the new version afterwards).
     std::optional<update::Plan> pendingPlan() const { return m_seen == Phase::Ready ? m_plan : std::nullopt; }
+#endif
     bool restartAfterApply() const { return m_restart; }
 
     // Settings > Launcher.
@@ -209,6 +215,9 @@ private:
                     shared->done = done;
                     if (total) shared->total = total;
                 }, &shared->cancel, [](const std::string&) {});
+#if defined(__ANDROID__)
+                update::apply(plan, [](const std::string&) {});   // (Android's installer opens: update.h)
+#endif
                 result = Phase::Ready;
             } catch (const std::exception& e) {
                 error = e.what();
@@ -299,8 +308,13 @@ private:
         gap(4);
         const bool can = m_package.has_value();
         if (can) {
+#if defined(__ANDROID__)
+            const std::string what = trf("Downloads %s (%s) and opens Android's installer. Your games, saves and settings are kept.",
+                                         m_package->file.c_str(), megabytes(m_package->size).c_str());
+#else
             const std::string what = trf("Downloads %s (%s) and restarts SafeHouse. Your games, saves and settings are not changed.",
                                          m_package->file.c_str(), megabytes(m_package->size).c_str());
+#endif
             caption(what.c_str(), color::muted);
         } else {
             caption((m_install.reason.empty() ? std::string(tr("This release has no package that can update this copy of SafeHouse."))
@@ -354,6 +368,26 @@ private:
     void ready(bool busy, bool back) {
         const std::string title = trf("SafeHouse %s is ready", m_release.version.c_str());
         heading(title.c_str());
+#if defined(__ANDROID__)
+        (void)busy;
+        textWrapped(tr("Confirm the update in Android's installer. SafeHouse closes while it installs; open it again afterwards. "
+                       "Your games, saves and settings are kept."),
+                    fonts().body, color::text2);
+        gap(8);
+        int choice = -1;
+        buttonsRow({ { tr("Close"), Tone::Secondary }, { tr("Open the installer again"), Tone::Primary } }, &choice);
+        if (choice == 1 && !m_fixture && m_plan) {
+            try {
+                update::apply(*m_plan, [](const std::string&) {});
+            } catch (const std::exception& e) {
+                std::lock_guard lock(m_shared->mutex);
+                m_shared->error = e.what();
+                m_shared->phase = Phase::Failed;
+            }
+        }
+        if ((choice == 0 || back) && !m_fixture) ImGui::CloseCurrentPopup();
+        return;
+#endif
         textWrapped(busy || m_fixture ? tr("SafeHouse restarts to finish the update as soon as the game or the current task ends.")
                                       : tr("Restarting SafeHouse…"),
                     fonts().body, color::text2);

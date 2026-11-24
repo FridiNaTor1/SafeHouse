@@ -74,6 +74,14 @@ inline bool preferLauncherPicker() {
 // The folder a picker opens in when there is no last-used folder: Downloads, else the home folder.
 inline fs::path defaultFolder() {
     std::error_code ec;
+#if defined(__ANDROID__)
+    // (Android: the storage's Download folder with All files access, else the app's own folder on the storage, where a
+    // computer over USB can put disc images; install_location.h)
+    for (const auto& [folder, kind] : android::externalFolders())
+        if (kind == "shared" && fs::is_directory(path(folder) / "Download", ec)) return path(folder) / "Download";
+    for (const auto& [folder, kind] : android::externalFolders())
+        if (kind == "primary") return path(folder);
+#endif
 #ifdef _WIN32
     PWSTR known = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, nullptr, &known)) && known) {

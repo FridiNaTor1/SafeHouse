@@ -274,6 +274,9 @@ struct PAGE
     Family family = Family::PlayStation;
     int picture = 0;                     // the device picture (PdevlayoutOf): the family, or a VR controllers' picture
     bool fDrawn = false;                 // (the replacement drawn at the line sprite)
+    // (the page opening: the PS2 picture's pieces animate in before the line sprite and the labels are drawn; the
+    // device's picture is drawn in their place from the first frame, at the first picture piece, without lines)
+    bool fPictureOnly = false;
     const SELEM* plineSprite = nullptr;
     std::vector<LINE> aline;
     const SELEM* pdot = nullptr;         // (a dot's sprite and state: the replacement's dots look the same)
@@ -1073,19 +1076,24 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
     bool fBox = false;
     std::vector<CHud::SPRITEPOLY> apoly;
     std::vector<glm::vec2> aposDot;
+    float zPictureOnly = 0.0f, aPictureOnly = 0.0f;   // (the picture's own depth and fade, for the opening)
     for (const CTLPIECE& p : apiece)
     {
         if (!p.pelem || p.pelem->kind != SELEMK_Sprite) continue;
         if (p.igroup >= IGROUP_PICTURE_FIRST && p.igroup <= IGROUP_PICTURE_LAST)
         {
             CHud::SpritePolys(*p.pelem, p.st, apoly);
+            if (!fBox) zPictureOnly = p.st.depth / 16777216.0f;
             for (const auto& sp : apoly)
+            {
+                aPictureOnly = std::max(aPictureOnly, std::clamp(sp.rgba.a / 128.0f, 0.0f, 1.0f));
                 for (const glm::vec2& v : sp.apos)
                 {
                     if (!fBox) { s_page.lo = s_page.hi = v; fBox = true; }
                     s_page.lo = glm::min(s_page.lo, v);
                     s_page.hi = glm::max(s_page.hi, v);
                 }
+            }
         }
         else if (p.igroup == IGROUP_DOTS)
         {
@@ -1104,7 +1112,22 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
             s_page.zPicture = p.st.depth / 16777216.0f;
         }
     }
-    if (!s_page.plineSprite || !fBox) { s_page.mode = MODE_Off; return false; }
+    if (!fBox) { s_page.mode = MODE_Off; return false; }
+    if (!s_page.plineSprite)
+    {
+        // (the page opening, issue: the original PS2 controller zoomed in first and the device's picture only replaced
+        // it once the page was fully open) the device's picture (keyboard: none) in the animating picture's place, its
+        // depth and fade; the remapped PlayStation page shows the original picture until its lines come
+        if (s_page.mode == MODE_PsRemap) { s_page.mode = MODE_Off; return false; }
+        s_page.fPictureOnly = true;
+        s_page.zPicture = zPictureOnly;
+        s_page.alpha = aPictureOnly;
+        if (s_page.mode == MODE_Device) LayoutDevice(pfont, pfontIcons);
+        if (static const char* s_sz = std::getenv("SLY2N_CTLPAGEDBG"); s_sz)
+            std::printf("controls page: opening, box %.1f %.1f - %.1f %.1f alpha %.2f (the picture only)\n", s_page.lo.x,
+                        s_page.lo.y, s_page.hi.x, s_page.hi.y, s_page.alpha);
+        return true;
+    }
     // the labels' slots (the text elements: DrawTextBox's origin is the slot's (x - 320, y - 246.4); frame y =
     // text y / 1.1 + 224)
     for (const CTLPIECE& p : apiece)
@@ -1205,6 +1228,17 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
 bool FControlsPageSkip(const CTLPIECE& p)
 {
     if (s_page.mode == MODE_Off) return false;
+    if (s_page.fPictureOnly)
+    {
+        // (the opening: the picture's pieces give way to the device's picture, drawn once at the first of them)
+        const bool fPicture = (p.igroup >= IGROUP_PICTURE_FIRST && p.igroup <= IGROUP_PICTURE_LAST) || p.igroup == IGROUP_DOTS;
+        if (fPicture && !s_page.fDrawn && s_page.mode == MODE_Device)
+        {
+            s_page.fDrawn = true;
+            DrawDevice();
+        }
+        return fPicture;
+    }
     const bool fLine = p.pelem == s_page.plineSprite && FLineSprite(p);
     if (s_page.mode == MODE_PsRemap)
     {

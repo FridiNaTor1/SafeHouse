@@ -124,6 +124,8 @@ jobs:
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
       - name: Build dependencies
         run: |
           sudo apt-get update
@@ -219,6 +221,8 @@ jobs:
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
       - name: Build tools (Ninja, NSIS, ccache, osslsigncode)
         run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm glslang-tools osslsigncode   # (glslang: Sly 2's Vulkan SPIR-V)
       - name: Code-signing certificate (when the secrets are available and SignPath is not used)
@@ -493,6 +497,8 @@ jobs:
       CANE_GIT_HASH: ${{ needs.version.outputs.commit }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
       - name: glslang (Sly 2's Vulkan SPIR-V)
         run: sudo apt-get update && sudo apt-get install -y glslang-tools
       # (build-package.py builds Sly 2 and Sly 3 into the one APK and checks the APK has every library and both game
@@ -553,6 +559,8 @@ jobs:
       SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
       - name: Configure
         run: cmake --preset switch-release -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION"
       - name: Build
@@ -585,6 +593,8 @@ jobs:
       DEVKITPRO: /opt/devkitpro
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
       - name: devkitPro (the Switch job's image, devkitpro/devkita64:20260219)
         run: |
           set -eu

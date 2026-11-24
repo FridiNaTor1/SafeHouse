@@ -347,7 +347,7 @@ bool Held(PADCTL* pad, Action action, uint32_t original) {
     if (!Applies(pad)) return pad && (pad->grfbtn & original);
     return (Forced(pad) & original) || ((!ReconActive(pad->plo) || ReconAction(action)) && Held(action));
 }
-int CaptureController(GLFWwindow*) {
+int CaptureController(GLFWwindow*, bool fRightStick) {
     static bool armed = false;
     int found = -1;
     for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
@@ -357,6 +357,10 @@ int CaptureController(GLFWwindow*) {
             if (gp.buttons[b] == GLFW_PRESS && b != GLFW_GAMEPAD_BUTTON_GUIDE) { found = b; break; }
         if (gp.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0) found = cane::settings::kGamepadLeftTrigger;
         if (gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0) found = cane::settings::kGamepadRightTrigger;
+        // (an action that takes the right stick, input::stickBindable: the stick pushed well out)
+        if (fRightStick && gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] * gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] +
+                               gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] * gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] > 0.5f * 0.5f)
+            found = cane::settings::kGamepadRightStick;
     }
     if (found < 0) { armed = true; return -1; }
     if (!armed) return -1;

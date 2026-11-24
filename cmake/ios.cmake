@@ -9,6 +9,8 @@
 #   CaneExtractor          the disc extractor (cane-extractor)
 #   Sly2Release            Sly 2 (Sly2-Release, on Metal: platform/metal); package.py copies it to Sly2Tools
 #   Sly3Release            Sly 3 (Sly3-Release, the same way; CANE_BUILD_SLY3); package.py copies it to Sly3Tools
+#   Sly1Release            Sly 1 (Sly1-Release from the Sly1/ submodule, cmake/sly1.cmake; CANE_BUILD_SLY1), the same
+#                          way, its programs as MSL made at build time (glslang + spirv-cross); copied to Sly1Tools
 #
 # Like Android's JNI libraries, every program keeps its own image (iOS cannot start processes; ios_app.h).
 set(CANE_IOS ON)
@@ -91,7 +93,7 @@ cane_ios_framework(SafeHouseCore SafeHouseCore)
 set(imgui_root "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/include/imgui")
 add_library(cane_ui STATIC ${imgui_root}/imgui.cpp ${imgui_root}/imgui_draw.cpp ${imgui_root}/imgui_tables.cpp
  ${imgui_root}/imgui_widgets.cpp ${imgui_root}/imgui_impl_glfw.cpp ${imgui_root}/imgui_impl_opengl3.cpp
- ${imgui_root}/ImGuiFileDialog.cpp Sly1-Release/glad.c platform/ios/glfw_sdl_ios.cpp)
+ ${imgui_root}/ImGuiFileDialog.cpp Libraries/glad/glad.c platform/ios/glfw_sdl_ios.cpp)
 target_link_libraries(cane_ui PUBLIC cane_platform cane_sdl "-framework OpenGLES" "-framework QuartzCore" ${CMAKE_DL_LIBS})
 # The games and the launcher link "glfw" (Sly2-Release/CMakeLists.txt, cmake/prompts.cmake, platform/metal)
 add_library(glfw ALIAS cane_ui)
@@ -111,7 +113,9 @@ target_link_libraries(cane_chd PUBLIC cane_platform)
 # ---- CaneExtractor.framework
 add_library(cane-extractor SHARED "File Extractor/main.cpp")
 cane_ios_program(cane-extractor "${CMAKE_CURRENT_SOURCE_DIR}/File Extractor/main.cpp" cane_extractor_main extractor)
-target_link_libraries(cane-extractor PRIVATE cane_platform cane_chd cane_sdl Threads::Threads)
+# Sly 1's level tools in the extractor's own process (cmake/sly1_pcbrx.cmake)
+include(cmake/sly1_pcbrx.cmake)
+target_link_libraries(cane-extractor PRIVATE cane_platform cane_chd cane_sdl sly1_pcbrx Threads::Threads)
 cane_ios_framework(cane-extractor CaneExtractor)
 
 # ---- SafeHouseLauncher.framework (as cmake/android.cmake's launcher)
@@ -192,6 +196,13 @@ if(CANE_BUILD_SLY3)
  cane_ios_framework(Sly3-Release Sly3Release)
  target_include_directories(Sly3-Release PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/platform/apple")
  list(APPEND cane_ios_games Sly3-Release)
+endif()
+
+# ---- Sly1Release.framework (cmake/sly1.cmake's CANE_IOS branch; the Sly1/ submodule), on Metal as Sly 2
+option(CANE_BUILD_SLY1 "Build Sly 1 (Sly1-Release, the Sly1/ submodule) into the iOS app" ON)
+if(CANE_BUILD_SLY1)
+ include(cmake/sly1.cmake)
+ list(APPEND cane_ios_games Sly1-Release)
 endif()
 
 include(cmake/prompts.cmake OPTIONAL)

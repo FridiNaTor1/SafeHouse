@@ -17,6 +17,10 @@
 //   Linux folder (the tar.gz): the files are swapped in place; running programs keep their old files open.
 //   macOS: the new SafeHouse.app replaces the old bundle (two renames in the same folder).
 // On Linux and macOS the launcher swaps the files itself after its window closed, then starts the new version.
+//   Android (arm64, 2026-11-24): the release's APK (the manifest's "android-apk", the same signing key) is downloaded
+//     into the app's cache through Java's HTTPS, checked against the manifest's SHA-256, and handed to the system's
+//     installer (a PackageInstaller session, NativeBridge.installPackage): Android asks the player to confirm (the first
+//     time also to allow SafeHouse to install apps) and installs it over this one, keeping the app's data.
 #include <atomic>
 #include <cstdio>
 #include <cwchar>
@@ -229,13 +233,45 @@ inline void httpGet(const Request& r) {
     if (out && std::fflush(out) != 0) throw std::runtime_error(trf("Cannot write %s", utf8(r.file).c_str()));
 }
 #elif defined(__ANDROID__)
-// Android: Java's HTTPS (platform/android/android_app.h httpGet); the update check only (an Android installation is
-// updated by installing the new APK over it, see detectInstall).
+// Android: Java's HTTPS (platform/android/android_app.h httpGet / httpDownload): the update check, and the new APK
+// downloaded into a file (its progress read from the file's size while Java writes it).
 inline void httpGet(const Request& r) {
-    if (!r.body || !r.file.empty()) throw std::runtime_error(tr("Cannot start the download"));
     if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
     int status = -5;
-    std::string body = android::httpGet(r.url, r.api, userAgent(), r.maxBody, status);
+    std::string body;
+    if (!r.file.empty()) {
+        std::atomic<bool> finished{false};
+        uint64_t total = 0;
+        std::thread watcher([&] {
+            bool cancelSent = false;
+            while (!finished) {
+                std::error_code ec;
+                const auto size = fs::file_size(r.file, ec);
+                const uint64_t expected = android::downloadLength();
+                if (!ec && r.progress) r.progress(size, expected);
+                if (cancelled(r) && !cancelSent) android::cancelDownload(), cancelSent = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        });
+        try {
+            status = android::httpDownload(r.url, utf8(r.file), userAgent(), &total);
+        } catch (...) {
+            finished = true;
+            watcher.join();
+            throw;
+        }
+        finished = true;
+        watcher.join();
+        if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
+        if (status == 200) {
+            std::error_code ec;
+            if (r.progress) r.progress(fs::file_size(r.file, ec), total);
+            return;
+        }
+    } else {
+        if (!r.body) throw std::runtime_error(tr("Cannot start the download"));
+        body = android::httpGet(r.url, r.api, userAgent(), r.maxBody, status);
+    }
     if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
     if (status == 200) {
         r.body->append(body);
@@ -461,9 +497,14 @@ inline Release fetchLatest(const std::atomic<bool>* cancel = nullptr) {
 }
 
 // ------------------------------------------------------------ this installation
-enum class Kind { Unsupported, AppImage, LinuxFolder, WindowsPortable, WindowsInstalled, MacApp };
+enum class Kind { Unsupported, AppImage, LinuxFolder, WindowsPortable, WindowsInstalled, MacApp, AndroidApk };
 inline const char* kindKey(Kind k) {
     switch (k) {
+#if defined(__ANDROID__) && defined(__aarch64__)
+    case Kind::AndroidApk: return "android-apk";   // (scripts/release-manifest.py; arm64-v8a, the only APK released)
+#elif defined(__ANDROID__)
+    case Kind::AndroidApk: return "android-x86_64-apk";   // (the emulator ABI: no such package in a release yet)
+#endif
 #if defined(__aarch64__) || defined(__arm64__)
     case Kind::AppImage: return "linux-aarch64-appimage";
     case Kind::LinuxFolder: return "linux-aarch64-tar";
@@ -481,7 +522,7 @@ inline const char* kindKey(Kind k) {
     }
 }
 inline Kind kindFromKey(const std::string& key) {
-    for (Kind k : {Kind::AppImage, Kind::LinuxFolder, Kind::WindowsPortable, Kind::WindowsInstalled, Kind::MacApp})
+    for (Kind k : {Kind::AppImage, Kind::LinuxFolder, Kind::WindowsPortable, Kind::WindowsInstalled, Kind::MacApp, Kind::AndroidApk})
         if (key == kindKey(k)) return k;
     return Kind::Unsupported;
 }
@@ -505,9 +546,16 @@ inline Install detectInstall() {
                                                                                                                : Kind::WindowsInstalled;
     in.target = root;
     in.staging = root / ".update";
-#elif defined(__ANDROID__) || defined(CANE_IOS)
-    // (the system installs apps: the new APK / .ipa is downloaded from the release page and installed over this one;
-    // Android keeps the app's data when the new APK has a higher versionCode and the same signature)
+#elif defined(__ANDROID__)
+    // (the system installs apps: the release's APK, downloaded into the cache and handed to Android's installer; Android
+    // keeps the app's data as the new APK has a higher versionCode and the same signature)
+    (void)exe;
+    (void)ec;
+    in.kind = Kind::AndroidApk;
+    in.target = path(android::filesDirectory());
+    in.staging = in.target / "cache" / "safehouse-update";
+#elif defined(CANE_IOS)
+    // (iOS: the new version from the release page)
     (void)exe;
     (void)ec;
     in.reason = tr("Download the new version from the release page and install it over this one. Your games, saves and settings are kept.");
@@ -644,6 +692,11 @@ inline Plan stage(const Release& r, const Install& in, const Progress& progress,
     Plan plan{in.kind, {}, in.target, in.staging, r.version, current().version};
     const fs::path unpacked = in.staging / "new";
     switch (in.kind) {
+#if defined(__ANDROID__)
+    case Kind::AndroidApk:
+        plan.source = download;   // (apply: the system's installer)
+        break;
+#endif
     case Kind::AppImage: {
         plan.source = download;
         fs::permissions(download, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec | fs::perms::others_read |
@@ -685,7 +738,7 @@ inline Plan stage(const Release& r, const Install& in, const Progress& progress,
 #endif
     default: throw std::runtime_error(tr("This installation cannot update itself"));
     }
-    if (in.kind != Kind::AppImage) fs::remove(download, ec);
+    if (in.kind != Kind::AppImage && in.kind != Kind::AndroidApk) fs::remove(download, ec);
     writeJson(in.staging / "plan.json", toJson(plan));
     log("Ready: " + utf8(plan.source));
     return plan;
@@ -819,6 +872,15 @@ inline void updateUninstallEntry(const Plan& plan, const LogFunction& log) {
 #endif
 // Swaps the files. Throws with a message for the player; the previous version stays in place on failure.
 inline void apply(const Plan& plan, const LogFunction& log, int attempts = 40) {
+#if defined(__ANDROID__)
+    // (Android: the system installs the APK over this app after the player confirms; the app's data stays)
+    if (plan.kind == Kind::AndroidApk) {
+        const std::string error = android::installPackage(utf8(plan.source));
+        if (!error.empty()) throw std::runtime_error(error);
+        log("Android's installer opened for " + utf8(plan.source.filename()));
+        return;
+    }
+#endif
     const fs::path backup = plan.staging / "previous";
     std::error_code ec;
     fs::remove_all(backup, ec);

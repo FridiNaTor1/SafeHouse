@@ -26,6 +26,7 @@
 #include "gl_vulkan.h"
 #include "vk_loader.h"
 #include "vk_shaders.h"
+#include "../switch/sly1/deko/texture_decode.h"   // (CaneDeko::DecodeBc: BC1 / BC3 blocks to RGBA8)
 
 #include <GLFW/glfw3.h>
 
@@ -62,9 +63,14 @@ constexpr unsigned kFrameSlots = 2;          // frames in flight: the CPU runs a
 constexpr uint32_t kMaxImages = 16384, kMaxArrays = 1024, kMaxSamplers = 256;
 constexpr VkDeviceSize kBufferBlockSize = 64ull << 20, kImageBlockSize = 128ull << 20, kRingChunkSize = 8ull << 20;
 constexpr unsigned kMaxAttribs = 16, kGenericBinding = 15, kMaxUnits = 32, kMaxBindings = 16;
+constexpr unsigned kUniformSlot = 14;   // (GL_UNIFORM_BUFFER index i: storage slot kUniformSlot + i)
 constexpr unsigned kFetchBinding = kMaxBindings;   // (set 1: the in-place read's input attachment, after the storage buffers)
 constexpr GLenum kAnisotropyEnum = 0x84FE, kMaxAnisotropyEnum = 0x84FF;   // (GL 4.6 / EXT_texture_filter_anisotropic)
 constexpr uint32_t kPushBytes = 256;
+// (Sly 1: loose-uniform blocks up to this size, larger than any device's push constants (glob's poseWeights[64]),
+// are read from a uniform buffer in set 2 as the small-push devices read theirs)
+constexpr uint32_t kUniformBlockBytes = 2048;
+bool g_largeBlocks = false;   // a program of the table has a block over kPushBytes: set 2 exists on every device
 
 VkDeviceSize Align(VkDeviceSize v, VkDeviceSize a) { return (v + a - 1) / a * a; }
 
@@ -123,6 +129,8 @@ struct Features
     VkExtent2D fdmTexel{32, 32};   // (GL_SRC1_* factors: Sly 2's glob CANE_BLEND1 on Android)
     bool geometry = false, wideLines = false, anisotropy = false, mdi = false, firstInstance = false, nonUniform = false;
     bool fillModeNonSolid = false;
+    bool vertexStores = false;   // (Sly 1's glob.vert writes its cached lighting from the vertex stage)
+    bool largePoints = false;    // (Sly 1's TV flecks: gl_PointSize above 1)
     bool provokingLast = false;
     bool eds3 = false;
     bool float16 = false;           // (shaderFloat16: the SLY2N_VKFP16 experiment)
@@ -387,6 +395,7 @@ struct Buffer
     bool bound = false;            // a recorded command may read the current storage
     std::vector<uint8_t> shadow;   // a CPU copy (indirect command buffers without multi-draw-indirect)
     bool keepShadow = false;
+    bool persistentMap = false;    // glBufferStorage with GL_MAP_PERSISTENT_BIT (Options::persistentMaps): mapped for its life
     uint32_t version = 1;
 };
 struct Attrib
@@ -544,6 +553,7 @@ struct Bound
     VkDeviceSize indexOffset = 0;
     VkIndexType indexType = VK_INDEX_TYPE_UINT32;
     bool genericBound = false;
+    uint64_t genericVersion = 0;   // (g_genericVersion when bound)
     GLuint storageProgram = ~0u;
     bool storageMv = false;
     uint64_t storageEpoch = 0, storageAddrEpoch = 0;
@@ -1037,6 +1047,11 @@ uint32_t g_uniformAlign = 256;
 VkShaderStageFlags g_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 Alloc g_nullStorage;               // (a storage binding with nothing bound reads zeros)
 Alloc g_generic;                   // the disabled attributes' values: 16 x float (0, 0, 0, 1), then 16 x int (0, 0, 0, 1)
+// (glVertexAttrib4f, Sly 1) the disabled attributes' current values; while one differs from (0, 0, 0, 1) a draw that
+// reads one binds a copy in the frame's ring instead of g_generic
+float g_genericValues[16][4] = {};
+bool g_genericCustom = false;
+uint64_t g_genericVersion = 1;
 
 void BeginFrame();
 void BeginSegment();
@@ -2517,15 +2532,45 @@ void BufferSubDataOn(GLuint name, GLintptr offset, GLsizeiptr size, const void* 
 }
 void APIENTRY BufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data)
 { BufferSubDataOn(BufferBinding(target), offset, size, data, target == GL_DRAW_INDIRECT_BUFFER); }
-// (not supported: the caller falls back)
-void* APIENTRY MapBufferRange(GLenum, GLintptr, GLsizeiptr, GLbitfield) { return nullptr; }
+// (Options::persistentMaps) Immutable storage that may be mapped persistently: the buffer's own host-visible, coherent
+// memory, which never moves (a GL_STREAM_* buffer's would), so a mapping stays valid until the buffer is deleted. Writes
+// reach the GPU with the next submission; the game fences the ranges the GPU may still read itself, as GL requires.
+#ifndef GL_MAP_PERSISTENT_BIT
+#define GL_MAP_PERSISTENT_BIT 0x0040
+#endif
+bool g_persistentMaps = false;
+void APIENTRY BufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags)
+{
+    const GLuint name = BufferBinding(target);
+    BufferDataOn(name, size, data, GL_DYNAMIC_DRAW, target == GL_DRAW_INDIRECT_BUFFER);
+    if (Buffer* buf = g_buffers.Get(name)) buf->persistentMap = (flags & GL_MAP_PERSISTENT_BIT) != 0 && !buf->keepShadow;
+}
+// Only persistent mappings of such storage (else nullptr: the caller falls back to glBufferSubData)
+void* APIENTRY MapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access)
+{
+    Buffer* buf = g_buffers.Get(BufferBinding(target));
+    if (!g_persistentMaps || !buf || !buf->persistentMap || !buf->cpu || !(access & GL_MAP_PERSISTENT_BIT) || offset < 0 ||
+        length < 0 || uint64_t(offset) + uint64_t(length) > buf->size)
+        return nullptr;
+    return buf->cpu + offset;
+}
 GLboolean APIENTRY UnmapBuffer(GLenum) { return GL_TRUE; }
 GLboolean APIENTRY IsBuffer(GLuint name) { return g_buffers.Get(name) ? GL_TRUE : GL_FALSE; }
 void APIENTRY BindBufferRange(GLenum target, GLuint index, GLuint name, GLintptr offset, GLsizeiptr size)
 {
     if (index >= kMaxBindings || offset < 0 || size < 0) { SetError(GL_INVALID_VALUE); return; }
     if (name) g_buffers.Ensure(name);
-    if (target != GL_SHADER_STORAGE_BUFFER) { BufferBinding(target) = name; return; }   // (no uniform blocks in Sly 2)
+    if (target == GL_UNIFORM_BUFFER)
+    {
+        // (Sly 1's std140 uniform blocks: compiled as read-only storage blocks at kUniformSlot + their binding,
+        // cmake/vulkan_shaders.py UBO_SLOT)
+        if (index >= kMaxBindings - kUniformSlot) { SetError(GL_INVALID_VALUE); return; }
+        BufferBinding(target) = name;
+        s.storage[kUniformSlot + index] = {name, uint32_t(offset), uint32_t(size), size == 0};
+        ++g_storageEpoch;
+        return;
+    }
+    if (target != GL_SHADER_STORAGE_BUFFER) { BufferBinding(target) = name; return; }
     s.storage[index] = {name, uint32_t(offset), uint32_t(size), false};
     ++g_storageEpoch;
     BufferBinding(target) = name;
@@ -2603,6 +2648,20 @@ void APIENTRY DisableVertexAttribArray(GLuint index)
     VertexArray* vao = g_arrays.Get(s.vertexArray);
     if (vao->attribs[index].enabled) { vao->attribs[index].enabled = false; ++vao->version; }
 }
+void APIENTRY VertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+    if (index >= kGenericBinding) { SetError(GL_INVALID_VALUE); return; }
+    float* v = g_genericValues[index];
+    if (v[0] == x && v[1] == y && v[2] == z && v[3] == w) return;
+    v[0] = x, v[1] = y, v[2] = z, v[3] = w;
+    g_genericCustom = false;
+    for (unsigned i = 0; i < 16 && !g_genericCustom; ++i)
+        g_genericCustom = g_genericValues[i][0] != 0 || g_genericValues[i][1] != 0 || g_genericValues[i][2] != 0 || g_genericValues[i][3] != 1;
+    ++g_genericVersion;
+}
+void APIENTRY VertexAttrib1f(GLuint index, GLfloat x) { VertexAttrib4f(index, x, 0, 0, 1); }
+void APIENTRY VertexAttrib2f(GLuint index, GLfloat x, GLfloat y) { VertexAttrib4f(index, x, y, 0, 1); }
+void APIENTRY VertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) { VertexAttrib4f(index, x, y, z, 1); }
 void APIENTRY VertexAttribDivisor(GLuint index, GLuint divisor)
 {
     if (index >= kGenericBinding) return;
@@ -2832,6 +2891,23 @@ void APIENTRY TexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsize
     if (!t || !t->image || level < 0 || width < 0 || height < 0) { SetError(GL_INVALID_OPERATION); return; }
     UploadPixels(*t->image, unsigned(level), 0, x, y, unsigned(width), unsigned(height), format, type, pixels);
 }
+// (Sly 1's world textures: BC1 / BC3 blocks, decoded here into the RGBA8 image)
+void APIENTRY CompressedTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
+                                      GLsizei size, const void* data)
+{
+    ResTime rt;
+    Texture* t = BoundTexture(target);
+    if (!t || !t->image || level < 0 || width < 0 || height < 0 || !data) { SetError(GL_INVALID_OPERATION); return; }
+    const bool bc3 = format == 0x83F3 || format == 0x83F2;   // (DXT5 / DXT3 sizes; DXT1 RGB / RGBA 0x83F0 / 0x83F1)
+    if (format != 0x83F0 && format != 0x83F1 && format != 0x83F3) { SetError(GL_INVALID_ENUM); return; }
+    const size_t need = size_t((width + 3) / 4) * size_t((height + 3) / 4) * (bc3 ? 16 : 8);
+    if (size_t(size) < need) { SetError(GL_INVALID_VALUE); return; }
+    const std::vector<uint8_t> rgba = CaneDeko::DecodeBc(static_cast<const uint8_t*>(data), unsigned(width), unsigned(height), bc3);
+    UploadPixelsPitch(*t->image, unsigned(level), 0, x, y, unsigned(width), unsigned(height), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data(),
+                      size_t(width) * 4);
+}
+// (debug tools only: not supported here)
+void APIENTRY GetTexImage(GLenum, GLint, GLenum, GLenum, void*) { SetError(GL_INVALID_OPERATION); }
 void APIENTRY TexSubImage3D(GLenum target, GLint level, GLint x, GLint y, GLint z, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels)
 {
     ResTime rt;
@@ -4120,7 +4196,7 @@ VkDescriptorSet UniformSet(VkBuffer buffer)
     Frame& f = Cur();
     for (const auto& [b2, set] : f.uniformSets) if (b2 == buffer) return set;
     const VkDescriptorSet set = FrameSet(g_setLayoutUniforms);
-    VkDescriptorBufferInfo info{buffer, 0, kPushBytes};
+    VkDescriptorBufferInfo info{buffer, 0, g_largeBlocks ? kUniformBlockBytes : kPushBytes};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = set;
     w.dstBinding = 0;
@@ -4156,7 +4232,7 @@ void ApplyResources(Program& p)
         // (a block larger than the device's push constants: a copy in this frame's ring, bound with a dynamic offset)
         if (fProgram || p.dirtyLo < p.dirtyHi)
         {
-            const Upload u = Ring(kPushBytes, g_uniformAlign);
+            const Upload u = Ring(g_largeBlocks ? kUniformBlockBytes : kPushBytes, g_uniformAlign);
             std::memcpy(u.cpu, p.constants.data(), size);
             const VkDescriptorSet set = UniformSet(u.buffer);
             const uint32_t offset = uint32_t(u.offset);
@@ -4243,12 +4319,21 @@ void ApplyVertexInput()
     VkCommandBuffer cmd = g_main;
     VertexArray* vao = g_arrays.Get(s.vertexArray);
     const VertexLayout& l = g_layouts[b.layout];
-    if (l.genericMask && !b.genericBound)
+    if (l.genericMask && (!b.genericBound || b.genericVersion != g_genericVersion))
     {
-        const VkBuffer buf = g_generic.Buffer();
-        const VkDeviceSize off = g_generic.offset;
+        VkBuffer buf = g_generic.Buffer();
+        VkDeviceSize off = g_generic.offset;
+        if (g_genericCustom)
+        {
+            const Upload u = Ring(512, 16);
+            std::memcpy(u.cpu, g_genericValues, 256);
+            std::memcpy(u.cpu + 256, g_generic.Cpu() + 256, 256);
+            buf = u.buffer;
+            off = u.offset;
+        }
         vkCmdBindVertexBuffers(cmd, kGenericBinding, 1, &buf, &off);
         b.genericBound = true;
+        b.genericVersion = g_genericVersion;
     }
     if (b.vertexVao == vao && b.vertexVaoVersion == vao->version && b.vertexAddrEpoch == g_addrEpoch && b.vertexLayout == b.layout) return;
     for (unsigned i = 0; i < kGenericBinding; ++i)
@@ -5498,8 +5583,14 @@ void APIENTRY GetIntegerv(GLenum pname, GLint* v)
     case GL_MAX_VERTEX_ATTRIBS: *v = GLint(kGenericBinding); break;
     case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: case GL_MAX_UNIFORM_BUFFER_BINDINGS: *v = GLint(kMaxBindings); break;
     case GL_MAX_DUAL_SOURCE_DRAW_BUFFERS: *v = g_feat.dualSrcBlend ? 1 : 0; break;
+    // (the storage blocks a program can read: every stage sees the set-1 bindings)
+    case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
+    case GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS: *v = GLint(kMaxBindings); break;
+    case GL_MAX_VERTEX_OUTPUT_COMPONENTS: *v = GLint(g_props.limits.maxVertexOutputComponents); break;
     case GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: *v = GLint(std::max<VkDeviceSize>(g_props.limits.minStorageBufferOffsetAlignment, 4)); break;
-    case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: *v = GLint(std::max<VkDeviceSize>(g_props.limits.minUniformBufferOffsetAlignment, 4)); break;
+    case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT:   // (the uniform blocks are read as storage blocks)
+        *v = GLint(std::max<VkDeviceSize>({g_props.limits.minUniformBufferOffsetAlignment, g_props.limits.minStorageBufferOffsetAlignment, 4}));
+        break;
     case GL_MAX_SHADER_STORAGE_BLOCK_SIZE: *v = GLint(std::min<uint32_t>(g_props.limits.maxStorageBufferRange, 0x7FFFFFFF)); break;
     case GL_VERTEX_ARRAY_BINDING: *v = GLint(s.vertexArray); break;
     case GL_CURRENT_PROGRAM: *v = GLint(s.program); break;
@@ -5600,9 +5691,10 @@ const ProcEntry kProcs[] = {
     P("InvalidateFramebuffer", InvalidateFramebuffer),
     P("GenBuffers", GenBuffers), P("DeleteBuffers", DeleteBuffers), P("BindBuffer", BindBuffer), P("BindBufferBase", BindBufferBase),
     P("BindBufferRange", BindBufferRange), P("BufferData", BufferData), P("BufferSubData", BufferSubData), P("MapBufferRange", MapBufferRange),
+    P("BufferStorage", BufferStorage),
     P("UnmapBuffer", UnmapBuffer), P("IsBuffer", IsBuffer),
     P("GenTextures", GenTextures), P("DeleteTextures", DeleteTextures), P("ActiveTexture", ActiveTexture), P("BindTexture", BindTexture),
-    P("TexImage2D", TexImage2D), P("TexStorage2D", TexStorage2D), P("TexStorage3D", TexStorage3D), P("TexSubImage2D", TexSubImage2D),
+    P("TexImage2D", TexImage2D), P("TexStorage2D", TexStorage2D), P("TexStorage3D", TexStorage3D), P("TexSubImage2D", TexSubImage2D), P("CompressedTexSubImage2D", CompressedTexSubImage2D), P("GetTexImage", GetTexImage),
     P("TexSubImage3D", TexSubImage3D), P("TexParameteri", TexParameteri), P("TexParameterf", TexParameterf), P("GenerateMipmap", GenerateMipmap),
     P("GetTexLevelParameteriv", GetTexLevelParameteriv), P("IsTexture", IsTexture),
     P("GenSamplers", GenSamplers), P("DeleteSamplers", DeleteSamplers), P("BindSampler", BindSampler),
@@ -5614,6 +5706,7 @@ const ProcEntry kProcs[] = {
     P("GenVertexArrays", GenVertexArrays), P("DeleteVertexArrays", DeleteVertexArrays), P("BindVertexArray", BindVertexArray),
     P("EnableVertexAttribArray", EnableVertexAttribArray), P("DisableVertexAttribArray", DisableVertexAttribArray),
     P("VertexAttribPointer", VertexAttribPointer), P("VertexAttribIPointer", VertexAttribIPointer), P("VertexAttribDivisor", VertexAttribDivisor),
+    P("VertexAttrib1f", VertexAttrib1f), P("VertexAttrib2f", VertexAttrib2f), P("VertexAttrib3f", VertexAttrib3f), P("VertexAttrib4f", VertexAttrib4f),
     P("GenFramebuffers", GenFramebuffers), P("DeleteFramebuffers", DeleteFramebuffers), P("BindFramebuffer", BindFramebuffer),
     P("FramebufferTexture2D", FramebufferTexture2D), P("FramebufferTextureLayer", FramebufferTextureLayer),
     P("FramebufferRenderbuffer", FramebufferRenderbuffer), P("CheckFramebufferStatus", CheckFramebufferStatus),
@@ -6391,6 +6484,8 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
             g_feat.mdi = f2.features.multiDrawIndirect;
             g_feat.firstInstance = f2.features.drawIndirectFirstInstance;
             g_feat.fillModeNonSolid = f2.features.fillModeNonSolid;
+            g_feat.vertexStores = f2.features.vertexPipelineStoresAndAtomics;
+            g_feat.largePoints = f2.features.largePoints;
             g_feat.provokingLast = hasProvoking && fpv.provokingVertexLast;
             g_feat.msrtss = hasMsrtss;
             g_feat.tiler = tiler;
@@ -6497,6 +6592,8 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     f2.features.multiDrawIndirect = g_feat.mdi;
     f2.features.drawIndirectFirstInstance = g_feat.firstInstance;
     f2.features.fillModeNonSolid = g_feat.fillModeNonSolid;
+    f2.features.vertexPipelineStoresAndAtomics = g_feat.vertexStores;
+    f2.features.largePoints = g_feat.largePoints;
     f2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
     std::vector<const char*> deviceExtensions;
     if (g_feat.pushDescriptors) deviceExtensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
@@ -6576,7 +6673,10 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         bli.bindingCount = kMaxBindings + (g_feat.localRead || g_feat.classicFetch ? 1 : 0);
         bli.pBindings = sb.data();
         if (vkCreateDescriptorSetLayout(g_device, &bli, nullptr, &g_setLayoutBuffers) != VK_SUCCESS) return fail("push descriptor set layout");
-        if (g_feat.pushBytes < kPushBytes)
+        g_largeBlocks = false;
+        for (size_t i = 0; i < Shaders::programCount; ++i)
+            g_largeBlocks = g_largeBlocks || Shaders::programs[i].pushSize > kPushBytes;
+        if (g_feat.pushBytes < kPushBytes || g_largeBlocks)
         {
             const VkDescriptorSetLayoutBinding ub{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, g_stages, nullptr};
             VkDescriptorSetLayoutCreateInfo uli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -6677,6 +6777,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     {
         const float fv[4] = {0, 0, 0, 1};
         const int32_t iv[4] = {0, 0, 0, 1};
+        std::memcpy(g_genericValues[i], fv, 16);
         std::memcpy(g_generic.Cpu() + i * 16, fv, 16);
         std::memcpy(g_generic.Cpu() + 256 + i * 16, iv, 16);
     }
@@ -6719,6 +6820,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     InvalidateBound();
     g_frameIndex = 0;
     g_recording = false;
+    g_persistentMaps = options.persistentMaps;
     g_threaded = !options.singleThread && !(std::getenv("SLY2N_VKTHREAD") && std::atoi(std::getenv("SLY2N_VKTHREAD")) == 0);
     if (g_threaded)
     {
@@ -6803,7 +6905,7 @@ void PrewarmPipelines(int32_t scope, unsigned waitMs)
             const Shaders::Program* info = &Shaders::programs[i];
             if (!FProgramInUse(*info)) continue;
             const bool ub = info->pushSize > g_feat.pushBytes;
-            if (info->pushSize > kPushBytes || (ub && !info->spirvUbo[0]) || (info->geom && !g_feat.geometry)) continue;
+            if (info->pushSize > (g_largeBlocks ? kUniformBlockBytes : kPushBytes) || (ub && !info->spirvUbo[0]) || (info->geom && !g_feat.geometry)) continue;
             if (ProgramHashOf(info, ub) != e.program) continue;
             g_prePrograms.push_back(MakeProgram(info, ub));
             programs[e.program].push_back(g_prePrograms.back().get());
@@ -6896,6 +6998,29 @@ void SetSwapInterval(int interval)
     if (v == g_swapInterval) return;
     g_swapInterval = v;
     g_swapchainStale = true;
+}
+
+int SampleWindowPicture()
+{
+    Image* im = g_windowImage.get();
+    if (!g_device || !im || im->samples > 1 || im->width == 0 || im->height == 0) return -1;
+    const GLint w = GLint(im->width), h = GLint(im->height);
+    std::vector<uint8_t> px(size_t(w) * size_t(h) * 4);
+    const GLuint read = s.readFramebuffer;
+    const GLint pack = s.packAlignment;
+    s.readFramebuffer = 0;
+    s.packAlignment = 4;
+    ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    s.readFramebuffer = read;
+    s.packAlignment = pack;
+    // (every 7th pixel of every 7th row: any colour above near-black is a picture)
+    for (GLint y = 0; y < h; y += 7)
+        for (GLint x = 0; x < w; x += 7)
+        {
+            const uint8_t* p = &px[(size_t(y) * size_t(w) + size_t(x)) * 4];
+            if (p[0] > 8 || p[1] > 8 || p[2] > 8) return 1;
+        }
+    return 0;
 }
 
 void Present()
@@ -7323,7 +7448,7 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
         info = &p;
         break;
     }
-    if (!info || info->pushSize > kPushBytes) return 0;
+    if (!info || info->pushSize > (g_largeBlocks ? kUniformBlockBytes : kPushBytes)) return 0;
     // (fewer push-constant bytes than the block: the variant reading it from set 2)
     const bool uniformBuffer = info->pushSize > g_feat.pushBytes;
     if (uniformBuffer && !info->spirvUbo[0]) return 0;
@@ -7388,6 +7513,7 @@ std::unique_ptr<Program> MakeProgram(const Shaders::Program* info, bool uniformB
 void* ProcAddress(const char* name)
 {
     if (!name) return nullptr;
+    if (!g_persistentMaps && !std::strcmp(name, "glBufferStorage")) return nullptr;   // (Options::persistentMaps)
     for (const ProcEntry& e : kProcs)
         if (!std::strcmp(e.name, name)) return e.fn;
     return nullptr;

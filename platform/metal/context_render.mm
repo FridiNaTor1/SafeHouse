@@ -63,6 +63,7 @@ void Context::SetCapability(GLenum cap, bool enabled) {
     case gl::kPolygonOffsetFill:
     case gl::kLineSmooth:
     case gl::kDither:
+    case gl::kProgramPointSize:  // (always: the programs write their point size)
       break;
     default:
       SetError(gl::kInvalidEnum, __func__, cap);
@@ -172,6 +173,8 @@ bool Context::EnsureRenderEncoder(uint32_t framebuffer) {
   if (target.color) {
     MTLRenderPassColorAttachmentDescriptor* color = pass.colorAttachments[0];
     color.texture = target.color;
+    color.slice = static_cast<NSUInteger>(target.color_slice);
+    color.level = static_cast<NSUInteger>(target.color_level);
     color.storeAction = MTLStoreActionStore;
     if (clear && pending_clear_.color) {
       color.loadAction = MTLLoadActionClear;
@@ -183,6 +186,7 @@ bool Context::EnsureRenderEncoder(uint32_t framebuffer) {
   }
   if (target.depth) {
     pass.depthAttachment.texture = target.depth;
+    pass.depthAttachment.slice = static_cast<NSUInteger>(target.depth_slice);
     pass.depthAttachment.storeAction = MTLStoreActionStore;
     if (clear && pending_clear_.depth) {
       pass.depthAttachment.loadAction = MTLLoadActionClear;
@@ -216,6 +220,18 @@ MTLViewport Context::ViewportFor(const Rect& rect) const {
   viewport.height = rect.height;
   viewport.originY =
       encoder_target_.is_default ? encoder_target_.height - rect.y - rect.height : rect.y;
+  viewport.znear = state_.depth_range[0];
+  viewport.zfar = state_.depth_range[1];
+  return viewport;
+}
+
+MTLViewport Context::FullViewport(const RenderTarget& target) const {
+  // (clears and blits: the whole target and the whole depth range, whatever glDepthRange says)
+  MTLViewport viewport;
+  viewport.originX = 0;
+  viewport.originY = 0;
+  viewport.width = target.width;
+  viewport.height = target.height;
   viewport.znear = 0.0;
   viewport.zfar = 1.0;
   return viewport;
@@ -401,7 +417,7 @@ void Context::ClearWithDraw(GLbitfield mask) {
   [render_encoder_ setDepthStencilState:pipelines_->DepthStencil(ds)];
   [render_encoder_ setStencilReferenceValue:static_cast<uint32_t>(state_.clear.stencil & 0xFF)];
   [render_encoder_ setCullMode:MTLCullModeNone];
-  [render_encoder_ setViewport:ViewportFor({0, 0, target.width, target.height})];
+  [render_encoder_ setViewport:FullViewport(target)];
   [render_encoder_
       setScissorRect:state_.raster.scissor ? ScissorFor(state_.raster.scissor_box) : FullScissor()];
   [render_encoder_ setVertexBuffer:upload.buffer offset:upload.offset atIndex:kUniformBufferSlot];
@@ -484,7 +500,7 @@ void Context::BlitWithDraw(const RenderTarget& source, bool source_default, int 
   [render_encoder_ setRenderPipelineState:pipeline];
   [render_encoder_ setDepthStencilState:pipelines_->DepthStencil(ds)];
   [render_encoder_ setCullMode:MTLCullModeNone];
-  [render_encoder_ setViewport:ViewportFor({0, 0, target.width, target.height})];
+  [render_encoder_ setViewport:FullViewport(target)];
   [render_encoder_
       setScissorRect:state_.raster.scissor ? ScissorFor(state_.raster.scissor_box) : FullScissor()];
   [render_encoder_ setVertexBuffer:upload.buffer offset:upload.offset atIndex:kUniformBufferSlot];
@@ -685,9 +701,28 @@ bool Context::BuildPipeline(ProgramRecord* program, const VertexArrayRecord* vao
       key.attributes[i].buffer_index = static_cast<uint32_t>(slot);
     }
   }
+  // (prebuilt programs declare every input they read: an input without an enabled array reads the current value,
+  // glVertexAttrib*, from the constant buffer, as OpenGL's disabled arrays do)
+  if (program->compiled.prebuilt) {
+    for (int i = 0; i < kVertexAttributeCount; ++i) {
+      if (!((program->compiled.input_mask >> i) & 1u) || key.attributes[i].enabled) continue;
+      const uint32_t kind = (program->compiled.input_kinds >> (2 * i)) & 3u;
+      key.attributes[i].enabled = true;
+      key.attributes[i].format =
+          kind == 1 ? MTLVertexFormatInt4 : kind == 2 ? MTLVertexFormatUInt4 : MTLVertexFormatFloat4;
+      key.attributes[i].offset = static_cast<uint32_t>(16 * i);
+      key.attributes[i].buffer_index = kConstantAttributeSlot;
+      key.constant_attributes = true;
+    }
+  }
+  binding->constant_attributes = key.constant_attributes;
   std::string error;
   binding->pipeline =
       pipelines_->Pipeline(key, program->compiled.vertex, program->compiled.fragment, &error);
+  if (!binding->pipeline && !error.empty()) {
+    static int logged = 0;
+    if (logged++ < 8) NSLog(@"Metal: pipeline for %s failed: %s", program->compiled.name.c_str(), error.c_str());
+  }
   if (!binding->pipeline) {
     SetError(gl::kInvalidOperation);
     return false;
@@ -780,6 +815,81 @@ void Context::BindStorageBuffers(ProgramRecord* program) {
   }
 }
 
+size_t Context::RangeBytes(const BufferRange& range) const {
+  const BufferRecord* record = buffers_.Find(range.buffer);
+  if (!record || !record->buffer || range.offset >= record->size) return 0;
+  const size_t available = record->size - range.offset;
+  return range.size ? std::min(range.size, available) : available;
+}
+
+void Context::UpdateLengths(ProgramRecord* program) {
+  for (const prebuilt::Length& length : program->compiled.lengths) {
+    if (length.binding >= static_cast<uint32_t>(kStorageBufferCount) || !length.stride) continue;
+    const size_t bytes = RangeBytes(state_.storage_ranges[length.binding]);
+    const uint32_t count =
+        bytes > length.start ? static_cast<uint32_t>((bytes - length.start) / length.stride) : 0u;
+    if (length.offset + sizeof(count) > program->uniforms.size()) continue;
+    uint8_t* out = program->uniforms.data() + length.offset;
+    if (std::memcmp(out, &count, sizeof(count)) != 0) {
+      std::memcpy(out, &count, sizeof(count));
+      program->uniforms_dirty = true;
+    }
+  }
+}
+
+void Context::BindPrebuiltBuffers(ProgramRecord* program) {
+  const CompiledProgram& compiled = program->compiled;
+  auto resolve = [&](const BufferRange& range, id<MTLBuffer>* buffer, size_t* offset) {
+    BufferRecord* record = buffers_.Find(range.buffer);
+    const bool usable = record && record->buffer && range.offset < record->buffer.length;
+    *buffer = usable ? record->buffer : placeholder_buffer_;
+    *offset = usable ? range.offset : 0;
+    if (usable) TouchBuffer(record);
+  };
+  for (int binding = 0; binding < kStorageBufferCount; ++binding) {
+    const uint32_t bit = 1u << binding;
+    if (!((compiled.storage_vertex | compiled.storage_fragment) & bit)) continue;
+    id<MTLBuffer> buffer = nil;
+    size_t offset = 0;
+    resolve(state_.storage_ranges[static_cast<size_t>(binding)], &buffer, &offset);
+    const size_t slot = static_cast<size_t>(binding);
+    const NSUInteger index = static_cast<NSUInteger>(kStorageBufferBase + binding);
+    if ((compiled.storage_vertex & bit) &&
+        (applied_.storage_buffers[slot] != buffer || applied_.storage_offsets[slot] != offset)) {
+      [render_encoder_ setVertexBuffer:buffer offset:offset atIndex:index];
+      applied_.storage_buffers[slot] = buffer;
+      applied_.storage_offsets[slot] = offset;
+    }
+    if ((compiled.storage_fragment & bit) && (applied_.fragment_storage_buffers[slot] != buffer ||
+                                              applied_.fragment_storage_offsets[slot] != offset)) {
+      [render_encoder_ setFragmentBuffer:buffer offset:offset atIndex:index];
+      applied_.fragment_storage_buffers[slot] = buffer;
+      applied_.fragment_storage_offsets[slot] = offset;
+    }
+  }
+  for (int binding = 0; binding < kUniformBlockCount; ++binding) {
+    const uint32_t bit = 1u << binding;
+    if (!((compiled.blocks_vertex | compiled.blocks_fragment) & bit)) continue;
+    id<MTLBuffer> buffer = nil;
+    size_t offset = 0;
+    resolve(state_.uniform_ranges[static_cast<size_t>(binding)], &buffer, &offset);
+    const size_t slot = static_cast<size_t>(binding);
+    const NSUInteger index = static_cast<NSUInteger>(kUniformBlockBase + binding);
+    if ((compiled.blocks_vertex & bit) &&
+        (applied_.block_buffers[slot] != buffer || applied_.block_offsets[slot] != offset)) {
+      [render_encoder_ setVertexBuffer:buffer offset:offset atIndex:index];
+      applied_.block_buffers[slot] = buffer;
+      applied_.block_offsets[slot] = offset;
+    }
+    if ((compiled.blocks_fragment & bit) &&
+        (applied_.fragment_block_buffers[slot] != buffer || applied_.fragment_block_offsets[slot] != offset)) {
+      [render_encoder_ setFragmentBuffer:buffer offset:offset atIndex:index];
+      applied_.fragment_block_buffers[slot] = buffer;
+      applied_.fragment_block_offsets[slot] = offset;
+    }
+  }
+}
+
 bool Context::PrepareDraw(ProgramRecord** program_out) {
   ProgramRecord* program = CurrentProgram();
   if (!program) return false;
@@ -802,10 +912,24 @@ bool Context::PrepareDraw(ProgramRecord** program_out) {
       applied_.vertex_offsets[s] = binding.vertex_offsets[s];
     }
   }
+  if (binding.constant_attributes) {
+    // (the current values, glVertexAttrib*: float bits; an integer input reads the same bits as GL keeps them)
+    const size_t bytes = sizeof(state_.current_attributes);
+    const TransientAllocation constants = transient_->Allocate(bytes, 256);
+    std::memcpy(constants.cpu, state_.current_attributes.data(), bytes);
+    [render_encoder_ setVertexBuffer:constants.buffer
+                              offset:constants.offset
+                             atIndex:kConstantAttributeSlot];
+  }
   ApplyRasterState();
+  if (program->compiled.prebuilt) UpdateLengths(program);
   BindUniforms(program);
   BindTextures(program);
-  BindStorageBuffers(program);
+  if (program->compiled.prebuilt) {
+    BindPrebuiltBuffers(program);
+  } else {
+    BindStorageBuffers(program);
+  }
   *program_out = program;
   return true;
 }
@@ -817,6 +941,18 @@ void Context::DrawArrays(GLenum mode, int first, int count) {
   [render_encoder_ drawPrimitives:ToPrimitiveType(mode)
                       vertexStart:static_cast<NSUInteger>(first)
                       vertexCount:static_cast<NSUInteger>(count)];
+}
+
+void Context::DrawArraysInstancedBaseInstance(GLenum mode, int first, int count, int instances,
+                                              uint32_t base_instance) {
+  if (count <= 0 || instances <= 0) return;
+  ProgramRecord* program = nullptr;
+  if (!PrepareDraw(&program)) return;
+  [render_encoder_ drawPrimitives:ToPrimitiveType(mode)
+                      vertexStart:static_cast<NSUInteger>(first)
+                      vertexCount:static_cast<NSUInteger>(count)
+                    instanceCount:static_cast<NSUInteger>(instances)
+                     baseInstance:base_instance];
 }
 
 void Context::DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, int count, GLenum type,

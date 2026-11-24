@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Debug builds only: the game can be started from adb for device tests (GameActivity's "debug-arguments" extra:
-     notes/VR_2026-11-10.md), without the launcher's session. -->
+     notes/VR_2026-11-10.md), without the launcher's session. FlatGameActivity likewise for the flat games (Sly 1, Sly 3). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-    <application>
+    <!-- (and plain http for local update tests: NativeBridge.allowedUrl) -->
+    <application android:usesCleartextTraffic="true">
         <activity android:name=".GameActivity" android:exported="true" tools:replace="android:exported" />
+        <activity android:name=".FlatGameActivity" android:exported="true" tools:replace="android:exported" />
     </application>
 </manifest>

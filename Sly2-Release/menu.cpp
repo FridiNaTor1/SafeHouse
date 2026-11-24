@@ -2141,7 +2141,7 @@ void UpdateMenu(SW* psw)
         if (key == GLFW_KEY_ESCAPE || (s_fActionController && g_clock.tReal - s_tActionCapture > 6)) s_iActionCapture = -1;
         else {
             const bool clear = key == GLFW_KEY_DELETE;
-            const int binding = clear ? -1 : s_fActionController ? sly2actions::CaptureController(g_gl.window) : key;
+            const int binding = clear ? -1 : s_fActionController ? sly2actions::CaptureController(g_gl.window, cane::sly2input::stickBindable(cane::sly2input::Action(s_iActionCapture))) : key;
             if (clear || binding >= 0) {
                 auto& bindings = s_fActionController ? sly2actions::profile.gamepad : sly2actions::profile.keyboard;
                 bindings[size_t(s_iActionCapture)] = binding;

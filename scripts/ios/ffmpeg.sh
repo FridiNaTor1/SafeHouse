@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the FFmpeg libraries Sly 2 links on iOS (libavcodec, libavutil, libswscale) from the pinned release, with
+# Builds the FFmpeg libraries the games link on iOS (libavcodec, libavutil, libswscale; libavformat for Sly 1's .m2v
+# movies: the raw MPEG video demuxer and the file protocol only) from the pinned release, with
 # the same codecs as the macOS packages (scripts/macos/ffmpeg.sh: MPEG-2 video for the PSS movies, FLAC), LGPL, no
 # external libraries; static, so they live inside Sly 2's framework (an iOS app ships no loose dylibs).
 #
@@ -25,8 +26,9 @@ CONFIGURE_ARGS=(
   --disable-everything --disable-programs --disable-doc --disable-network --disable-autodetect
   --disable-shared --enable-static --enable-pic
   --disable-gpl --disable-nonfree --disable-version3 --disable-debug
-  --disable-avdevice --disable-avformat --disable-avfilter --disable-postproc --disable-swresample
+  --disable-avdevice --disable-avfilter --disable-postproc --disable-swresample
   --enable-avcodec --enable-avutil --enable-swscale
+  --enable-avformat --enable-protocol=file --enable-demuxer=mpegvideo
   --enable-decoder=mpeg2video --enable-decoder=mpeg1video --enable-parser=mpegvideo
   --enable-decoder=flac --enable-encoder=flac --enable-parser=flac
   --enable-cross-compile --target-os=darwin --arch=aarch64

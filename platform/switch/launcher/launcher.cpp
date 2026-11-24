@@ -29,8 +29,12 @@
 #include <string>
 #include <vector>
 
-// The games (Sly1-Release/main.cpp, Sly2-Release/main.cpp, Sly3-Release/main.cpp)
-extern "C" const CaneSwitch::Game cane_game_sly1, cane_game_sly2, cane_game_sly3;
+// The games (Sly1-Release/main.cpp, Sly2-Release/main.cpp, Sly3-Release/main.cpp). CANE_SWITCH_NO_SLY1 (cmake/Switch.cmake
+// CANE_SWITCH_SLY1 off): no Sly 1 object; its cover reads "not ported yet".
+#if !defined(CANE_SWITCH_NO_SLY1)
+extern "C" const CaneSwitch::Game cane_game_sly1;
+#endif
+extern "C" const CaneSwitch::Game cane_game_sly2, cane_game_sly3;
 
 namespace
 {
@@ -42,7 +46,11 @@ const ImU32 kOrange = IM_COL32(255, 170, 0, 230), kRed = IM_COL32(220, 70, 55, 2
 
 const Game* FindGame(const char* key)
 {
+#if defined(CANE_SWITCH_NO_SLY1)
+    for (const Game* g : {&cane_game_sly2, &cane_game_sly3})
+#else
     for (const Game* g : {&cane_game_sly1, &cane_game_sly2, &cane_game_sly3})
+#endif
         if (key && !std::strcmp(g->key, key)) return g;
     return nullptr;
 }

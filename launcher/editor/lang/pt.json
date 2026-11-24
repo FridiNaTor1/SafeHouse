@@ -217,7 +217,6 @@
   "Insert:": "Inserir:",
   "Its reference still sounds band-limited (an announcement or talk heard through the binocucom): switch the effect on if the dub should too.": "A referência soa filtrada mesmo assim (um anúncio ou conversa ouvida pelo binocucom): ative o efeito se a dobragem também deve soar assim.",
   "Levels not known yet": "Níveis ainda desconhecidos",
-  "Menus": "Menus",
   "No groups": "Sem grupos",
   "No microphone could be opened (SDL2 or a recording device is missing).": "Não foi possível abrir nenhum microfone (falta o SDL2 ou um dispositivo de gravação).",
   "Not in any level": "Em nenhum nível",

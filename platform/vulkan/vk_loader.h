@@ -77,5 +77,11 @@ bool LoadInstance(VkInstance instance, std::string* error);
 // The device's entry points (vkGetDeviceProcAddr: no loader trampoline per call).
 bool LoadDevice(VkDevice device, std::string* error);
 void UnloadLoader();
+// Android: a custom driver package (android/vulkan_driver.h) is in use instead of the system's driver.
+bool CustomDriverActive();
+// The game's Vulkan start finished (its first frames shown, or a normal exit before them): a custom driver is trusted.
+void NoteStartFinished();
+// The game's Vulkan start failed with this reason: a custom driver goes back to the system's (the next start).
+void NoteStartFailed(const std::string& why);
 
 }  // namespace cane::vk

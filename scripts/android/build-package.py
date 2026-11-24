@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the SafeHouse Android app: native libraries (launcher, extractor, Sly 2, Sly 3) and a debug-signed APK.
+"""Build the SafeHouse Android app: native libraries (launcher, extractor, Sly 1, Sly 2, Sly 3) and a debug-signed APK.
 
 Steps: the locked NDK dependencies (bootstrap-dependencies.py, skipped when complete), the native CMake build
 (cmake/android.cmake), staging of the JNI libraries and notices under build/android-package/<abi>/, and Gradle's
@@ -84,7 +84,7 @@ def main():
     native = ROOT / 'build' / ('android-' + ('arm64' if args.abi == 'arm64-v8a' else 'x86_64'))
     run(['cmake', '-S', ROOT, '-B', native, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
          '-DCMAKE_TOOLCHAIN_FILE=' + str(ndk / 'build/cmake/android.toolchain.cmake'), '-DANDROID_ABI=' + args.abi,
-         '-DANDROID_PLATFORM=android-26', '-DANDROID_STL=c++_shared', '-DCANE_ANDROID_DEPENDENCY_ROOT=' + str(install),
+         '-DANDROID_PLATFORM=android-21', '-DANDROID_STL=c++_shared', '-DCANE_ANDROID_DEPENDENCY_ROOT=' + str(install),
          '-DSAFEHOUSE_VERSION=' + version, '-DSAFEHOUSE_BUILD_DATE=' + os.environ.get('SAFEHOUSE_BUILD_DATE', ''),
          '-DCANE_GIT_HASH=' + os.environ.get('CANE_GIT_HASH', '')])
     run(['cmake', '--build', native, '--parallel', args.parallel])
@@ -99,6 +99,12 @@ def main():
     # (Sly 3: in the same app unless the native build was configured with -DCANE_BUILD_SLY3=OFF)
     if (native / 'lib/libSly3-Release.so').is_file() or 'CANE_BUILD_SLY3:BOOL=ON' in (native / 'CMakeCache.txt').read_text():
         libraries.append(native / 'lib/libSly3-Release.so')
+    # (Sly 1, from the Sly1/ submodule: likewise, -DCANE_BUILD_SLY1=OFF leaves it out)
+    if (native / 'lib/libSly1-Release.so').is_file() or 'CANE_BUILD_SLY1:BOOL=ON' in (native / 'CMakeCache.txt').read_text():
+        libraries.append(native / 'lib/libSly1-Release.so')
+    # (custom Vulkan drivers, arm64: libadrenotools' hooks, loaded from the native library folder; cmake/android.cmake)
+    if args.abi == 'arm64-v8a':
+        libraries += [native / 'lib' / name for name in ('libhook_impl.so', 'libmain_hook.so')]
     libraries += [install / 'lib' / name for name in ('libSDL2.so', 'libavcodec.so', 'libavformat.so', 'libavutil.so', 'libswscale.so')]
     libraries.append(ndk / 'toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib' / triple / 'libc++_shared.so')
     libraries.append(openxr_loader(deps, args.abi))
@@ -149,8 +155,8 @@ def main():
     dist.mkdir(parents=True, exist_ok=True)
     out = dist / ('SafeHouse-Android-' + args.abi + ('' if release else '-debug') + '.apk')
     shutil.copy2(apk, out)
-    # The package's check: every staged native library (Sly 2 and Sly 3 among them) is in the APK, and both game
-    # activities are in its code (GameActivity, FlatGameActivity for Sly 3).
+    # The package's check: every staged native library (Sly 1, 2 and 3 among them) is in the APK, and both game
+    # activities are in its code (GameActivity, FlatGameActivity for Sly 1 and Sly 3).
     with zipfile.ZipFile(out) as package:
         names = set(package.namelist())
         missing = ['lib/' + args.abi + '/' + library.name for library in libraries

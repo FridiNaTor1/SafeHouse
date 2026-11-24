@@ -125,6 +125,13 @@ int Binding(const ROW& r, bool controller)
 // (the camera keys: the right stick; the tank's left / right track: the left / right stick)
 Button FixedButton(const ROW& r) { return r.index < PCA_Max + 4 || r.index == PCA_Max + 5 ? Button::RS : Button::LS; }
 
+// (an advanced action that also takes the right stick: the hack ship's guns, input::stickBindable)
+bool FStickRow(const ROW& r)
+{
+    return FAdvanced() && r.kind == RK_Binding && r.index >= 0 && size_t(r.index) < cane::sly2input::kActionCount &&
+           cane::sly2input::stickBindable(cane::sly2input::Action(r.index));
+}
+
 void Save()
 {
     if (FAdvanced()) sly2actions::Save(cane::userDirectory());
@@ -379,7 +386,7 @@ void UpdateRemapPage()
             s_remap.fWaitRelease = true;
             return;
         }
-        const int binding = s_remap.fCaptureController ? (g_gl.window ? sly2actions::CaptureController(g_gl.window) : -1) : key;
+        const int binding = s_remap.fCaptureController ? (g_gl.window ? sly2actions::CaptureController(g_gl.window, FStickRow(r)) : -1) : key;
         if (binding >= 0 && std::getenv("SLY2N_REMAPLOG"))
             std::printf("remap: row %d %s <- %d\n", s_remap.irowCapture, s_remap.fCaptureController ? "pad" : "key", binding);
         if (binding >= 0)

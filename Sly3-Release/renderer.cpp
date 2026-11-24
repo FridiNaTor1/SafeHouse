@@ -24,6 +24,7 @@
 #if CANE_VULKAN
 #include "vulkan/gl_vulkan.h"
 #include "vulkan/vk_loader.h"
+#include "vulkan/custom_driver_watch.h"
 #endif
 
 RENDERER g_rendererWanted = RENDERER::Auto;
@@ -49,9 +50,14 @@ std::filesystem::path MarkerPath() { return cane::userDirectory() / "vulkan-star
 void ClearMarker()
 {
     if (s_fMarker) cane::renderer::clearMarker(MarkerPath());
+    cane::vk::NoteStartFinished();   // (a custom Android driver started: kept, vk_loader.h)
     s_fMarker = false;
 }
-void RememberFailure(const std::string& why) { s_fMarker = cane::renderer::writeMarker(MarkerPath(), SLY2_PORT_VERSION, why); }
+void RememberFailure(const std::string& why)
+{
+    s_fMarker = cane::renderer::writeMarker(MarkerPath(), SLY2_PORT_VERSION, why);
+    cane::vk::NoteStartFailed(why);   // (a custom Android driver that failed: the system's driver next time, vk_loader.h)
+}
 
 // (CaneVk::Options::onFatal: Vulkan stopped with an error it cannot recover from; the process ends after this)
 void OnVulkanFatal(const char* why)
@@ -59,8 +65,10 @@ void OnVulkanFatal(const char* why)
     // (VR after the start: not remembered. A GPU hang or a lost device while the headset's system captures, records or
     // shows its overlays (2026-11-11: the Quest's video recording) is not Vulkan failing to start: the next start
     // keeps Vulkan)
-    if (!(s_fStarted && vr::FActive())) RememberFailure(std::string("Vulkan error: ") + why);
-    else std::printf("Vulkan: %s (VR, after the start: not remembered)\n", why);
+    // (2026-11-24: nor one long after the start (a device lost after minutes of play on a phone): only a start that
+    // fails, or Vulkan failing within its first kPresentsRestart frames, sends the next Auto starts to OpenGL)
+    if (!s_fStarted || (s_cPresents < kPresentsRestart && !vr::FActive())) RememberFailure(std::string("Vulkan error: ") + why);
+    else std::printf("Vulkan: %s (after the start: not remembered)\n", why);
 #if !defined(_WIN32) && !defined(__ANDROID__)
     if (s_cPresents < kPresentsRestart && !s_relaunchArgs.empty())
     {
@@ -89,6 +97,7 @@ GLFWglproc ProcAddress(const char* name) { return reinterpret_cast<GLFWglproc>(C
 void SwapInterval(int interval) { CaneVk::SetSwapInterval(interval); }
 void SwapBuffers(GLFWwindow*)
 {
+    cane::vk::WatchCustomDriverPicture(glfwGetTime());   // (a custom driver that shows nothing: custom_driver_watch.h)
     CaneVk::Present();
     if (s_cPresents < kPresentsRestart) ++s_cPresents;
     // (VR: the frames reached the headset: started, at once; a start the player leaves within seconds (the headset's
@@ -151,12 +160,15 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
 #else
     constexpr bool fBuilt = false;
 #endif
-    cane::renderer::Marker marker;
 #if CANE_VULKAN
-    if (r == RENDERER::Auto) marker = cane::renderer::readMarker(MarkerPath());
+    // (the start marker's rules and counts, platform/renderer_choice.h decideAt)
+    const cane::renderer::Decision decision =
+        cane::renderer::decideAt(cane::renderer::Choice(int(r)), fBuilt, MarkerPath(), SLY2_PORT_VERSION);
+#else
+    const cane::renderer::Decision decision =
+        cane::renderer::decide(cane::renderer::Choice(int(r)), fBuilt, cane::renderer::Marker(), SLY2_PORT_VERSION);
 #endif
-    const cane::renderer::Decision decision = cane::renderer::decide(
-        cane::renderer::Choice(int(r)), fBuilt, marker, SLY2_PORT_VERSION);
+    if (decision.tryVulkan && !decision.why.empty()) std::printf("Renderer: %s\n", decision.why.c_str());
     if (decision.tryVulkan && vr::FRequested())
     {
         std::printf("Renderer: VR runs on OpenGL\n");   // (Sly 3 has no VR yet)

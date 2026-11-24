@@ -4,6 +4,9 @@
 // build compiled out). Only with the launcher's Settings > Advanced > Debug mode on (pcinput.h fDebugKeys): with it
 // off nothing here reads or swallows any input and the game runs exactly as without this file.
 //
+// The keys, menu closed (platform/debug_freeze.h): F1 the free camera, Shift+F1 the freeze camera (Off / Fixed /
+// Follow), F8 freeze time, Shift+F8 faster, Ctrl+F8 slower; a short note shows what changed.
+//
 // F10, or R1 + Select on a pad, opens it: the game freezes (no world update at all) and a translucent panel lists
 // Warps / Character / Noclip / Teleport / Jobs / Player / Speed / Display / Reset World / Save. D-pad or stick (or the
 // arrow keys / W S / mouse wheel) move, Cross (Enter / Space / left click) selects, Circle / Triangle / Start (Esc /
@@ -48,6 +51,14 @@ bool FDebugNoclipCamera();
 // the debug menu, as always). Returns false when it left the free camera.
 struct CAMERA;
 bool FUpdateDebugFreeCamPad(CAMERA& cam, int frame);
+
+// game.cpp, each drawn frame after the camera is chosen (the game's or the free camera's): the Free Camera page's
+// freeze camera (Shift+F1: Off / Fixed / Follow, platform/debug_freeze.h) puts its view in. The first frame after it
+// is chosen keeps the view drawn then (and turns the free camera off: the player gets the controls back); cutscenes,
+// conversations, scripted cameras and the binocucom show the game's own camera meanwhile; a new world turns it off.
+void ApplyDebugFreezeCam(CAMERA& cam);
+// F8's Freeze Time is on (the world's clock factor 4 at 0, its input taken; the picture keeps drawing).
+bool FDebugTimeFrozen();
 
 // game.cpp: the F1 free camera's flag (the menu's Display page toggles it too) and F7's infinite health.
 extern bool g_fDebugFreeCam;

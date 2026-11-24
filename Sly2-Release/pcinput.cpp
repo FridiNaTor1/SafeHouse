@@ -606,7 +606,8 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
             const int b = sly2actions::profile.gamepad[i];
             pad[i] = *pfPad && ((b >= 0 && b <= GLFW_GAMEPAD_BUTTON_LAST && gp.buttons[b] == GLFW_PRESS) ||
                 (b == st::kGamepadLeftTrigger && gp.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.5f) ||
-                (b == st::kGamepadRightTrigger && gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.5f));
+                (b == st::kGamepadRightTrigger && gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.5f) ||
+                (b == st::kGamepadRightStick && (xr != 0.0f || yr != 0.0f)));   // (the right stick out of its dead zone)
         }
         sly2actions::Sample(keys, pad, !fMenu && !FDebugMenuOpen(), fGadgetMenuBindings);
     }

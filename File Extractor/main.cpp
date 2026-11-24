@@ -1563,10 +1563,29 @@ static int Extract(int argc, char** argv)
             if(++i==args.size())throw std::runtime_error("Missing path for --languages-dir");
             g_languagesDir=cane::path(args[i]);
         }
+        else if(option=="--rebuild-level") {
+            // (modders, MODDING.md "Sly 1 / Levels": a decompressed retail-format level -> PCBRX v17 beside it, as
+            // <name>_Rebuilt.brx; the region: ntsc (default), pal, japanese or korean, optionally a PAL identity map)
+            if(++i==args.size())throw std::runtime_error("Missing path for --rebuild-level");
+            const fs::path level=cane::path(args[i]);
+            BrxSourceRegion region=BrxSourceRegion::Auto;fs::path identities;
+            if(i+1<args.size() && !args[i+1].starts_with("--")) {
+                const std::string r=args[++i];
+                if(r=="ntsc")region=BrxSourceRegion::NtscU;else if(r=="pal")region=BrxSourceRegion::Pal;
+                else if(r=="japanese")region=BrxSourceRegion::Japanese;else if(r=="korean")region=BrxSourceRegion::Korean;
+                else throw std::runtime_error("The region must be ntsc, pal, japanese or korean");
+                if(i+1<args.size() && !args[i+1].starts_with("--"))identities=cane::path(args[++i]);
+            }
+            const fs::path out=level.parent_path()/(cane::utf8(level.stem())+"_Rebuilt.brx");
+            pcbrx::WriteAll(out,pcbrx::RebuildV17(level,region,identities));
+            std::cout<<"Rebuilt file: "<<cane::utf8(out)<<'\n';
+            return 0;
+        }
         else if(option=="--iso" || option=="--output") {
             if(++i==args.size())throw std::runtime_error("Missing path for "+option);
             if(option=="--iso")isoPath=cane::path(args[i]);else requestedOutput=cane::path(args[i]);
-        } else if(option=="--help") {std::cout<<"cane-extractor --iso PATH (.iso or .chd) --output DIRECTORY [--game sly1|sly2|sly3] [--validate-only] [--identify] [--non-interactive] [--progress=jsonl] [--languages-dir DIR]\n";return 0;}
+        } else if(option=="--help") {std::cout<<"cane-extractor --iso PATH (.iso or .chd) --output DIRECTORY [--game sly1|sly2|sly3] [--validate-only] [--identify] [--non-interactive] [--progress=jsonl] [--languages-dir DIR]\n"
+                                                      "cane-extractor --rebuild-level LEVEL.brx [ntsc|pal|japanese|korean [IDENTITY-MAP]]\n";return 0;}
         else if(isoPath.empty() && !option.starts_with("--"))isoPath=cane::path(option);
         else throw std::runtime_error("Unknown argument: "+option);
     }
@@ -1656,7 +1675,7 @@ static int Extract(int argc, char** argv)
     }
     const fs::path outputDirectory=transaction?transaction->directory():GetExecutableDirectory();
     if(region!=pcbrx::Region::NtscU) {
-        // Europe / Japan / Korea: upstream's localized pipeline (Sly1PalExtractor + per-level PUNI packing).
+        // Europe / Japan / Korea: upstream's localized pipeline (PalExtractor + per-level PUNI packing).
         auto progress=[](const std::string& stage,size_t done,size_t total,const std::string& item){Progress(stage,done,total,item);std::cout<<stage<<' '<<done<<'/'<<total<<' '<<item<<'\n';};
         pcbrx::ExtractLocalized(isoPath,outputDirectory,region,progress);
         pcbrx::TryRemove(outputDirectory/".pal-level-identities.txt");
@@ -1790,7 +1809,7 @@ static int Extract(int argc, char** argv)
 
         const std::vector<uint8_t> decompressed = Decompress(compressed);
 
-        // PCBRX v17 from Sly1BrxRebuilder, packed as a one-language v19 (upstream's NTSC path).
+        // PCBRX v17 from BrxRebuilder, packed as a one-language v19 (upstream's NTSC path).
         pcbrx::RebuildLevel(decompressed, outputPath);
 
         std::cout

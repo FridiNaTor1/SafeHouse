@@ -745,8 +745,7 @@ int RunGame(const GAMEOPTS& goIn)
 #endif
     }
     g_clock.tick = TickNow();
-    bool& fFreeCam = g_fDebugFreeCam;   // (F1; also the debug menu's Display page)
-    bool fF1Last = false;
+    bool& fFreeCam = g_fDebugFreeCam;   // (F1, debugmenu.cpp; also the debug menu's Free Camera page)
     double msUpdate = 0, msRender = 0, msSwap = 0, msScene = 0;
     int cframeTimed = 0;
     auto now = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
@@ -1185,6 +1184,16 @@ int RunGame(const GAMEOPTS& goIn)
                 int oid = 0, n = 0, f = -1;
                 if (std::sscanf(q, "%d=%d@%d", &oid, &n, &f) != 3 || f != frame) continue;
                 if (FRequestTaskStateOid(oid, n)) { std::printf("taskreq frame %d task %d = %d\n", frame, oid, n); }
+            }
+        // debug (tests): SLY2N_TASKEVENT="n@F;...": the task event n broadcast at frame F with the current player as its
+        // object (e.g. 16 = 0x10, the player down, as a lost fight's end sends it)
+        if (static const char* s_szEv = std::getenv("SLY2N_TASKEVENT"); s_szEv)
+            for (const char* q = s_szEv; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)
+            {
+                int n = 0, f = -1;
+                if (std::sscanf(q, "%i@%d", &n, &f) != 2 || f != frame) continue;
+                std::printf("taskevent frame %d event 0x%X\n", frame, n);
+                BroadcastTaskEvent(psw.get(), n, PloPoCurrent(psw.get()));
             }
         // debug: SLY2N_TRACKALL=oid:N: every in-world instance of that oid (clones / proxies too) every N frames
         if (static const char* s_szAll = std::getenv("SLY2N_TRACKALL"); s_szAll && std::strchr(s_szAll, ':') &&
@@ -1886,9 +1895,6 @@ int RunGame(const GAMEOPTS& goIn)
             stall::Phase("input");
             UpdateDisplayMonitors(g_gl.window);   // (a monitor plugged in or unplugged: display.h)
             GLFWwindow* w = g_gl.window;
-            const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1);   // (debug keys only)
-            if (fF1 && !fF1Last) fFreeCam = !fFreeCam;
-            fF1Last = fF1;
             // (Escape no longer closes the window: it is the pause / back key, pcinput.h; the pause menu has Exit to
             // Desktop)
             if (fFreeCam)
@@ -2059,6 +2065,7 @@ int RunGame(const GAMEOPTS& goIn)
                 ApplyCmFog(g_cm, &opts);
             }
             else cam.fMat = false;
+            ApplyDebugFreezeCam(cam);   // (debugmenu.h: the Free Camera page's freeze camera, Shift+F1)
             if (!go.cameraRam.empty())
             {
                 static RENDEROPTS s_optsRam;
@@ -2083,8 +2090,9 @@ int RunGame(const GAMEOPTS& goIn)
                         if (apalo[k] == PloPoCurrent(psw.get()) && !scene.aglobset[k].amatGlob.empty()) return glm::vec3(scene.aglobset[k].amatGlob[0][3]);
                     return glm::vec3(0.0f);
                 }() : glm::vec3(0.0f);
-                std::printf("campr %d step %d u %.3f cam %.2f %.2f %.2f sly %.2f %.2f %.2f\n", cframeTimed, frame, accum.fActive ? accum.U() : 1.0f, cam.pos.x, cam.pos.y, cam.pos.z,
-                            posSly.x, posSly.y, posSly.z);
+                const glm::vec3 dirCam = cam.Dir();
+                std::printf("campr %d step %d u %.3f cam %.2f %.2f %.2f sly %.2f %.2f %.2f dir %.4f %.4f %.4f\n", cframeTimed, frame, accum.fActive ? accum.U() : 1.0f, cam.pos.x,
+                            cam.pos.y, cam.pos.z, posSly.x, posSly.y, posSly.z, dirCam.x, dirCam.y, dirCam.z);
             }
             // orig: 0x1A7518/0x1477B0: query before the overlay's state1 capture/transition.
             // (SLY2N_FPSLOG: the GPU's time per frame, a timer query read back a few frames later)

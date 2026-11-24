@@ -519,8 +519,8 @@ struct LauncherBackend {
         if (!installable(game))
             throw std::runtime_error(trf("%s cannot be installed yet", cane::game(game).title));
 #if defined(CANE_MOBILE)
-        // (the phone / tablet apps carry Sly 2 only: Sly 1's level tools and Sly 3's are not in the app, so its
-        // extraction could only fail)
+        // (the phone / tablet apps install only the games whose program is in the app; Sly 1's level tools run in
+        // cane-extractor's own process there, cmake/sly1_pcbrx.cmake)
         if (!runtimeAvailable(game))
             throw std::runtime_error(trf("%s cannot be installed yet", cane::game(game).title));
 #endif
@@ -750,9 +750,11 @@ struct LauncherBackend {
     // said as such (ProcessFailure::crashed: the launcher offers the log folder with the report), never as an unrelated
     // last line (a crash used to read as the warning printed before it).
     void explainedProcess(const std::vector<std::string>& arguments, const std::atomic<bool>& cancel, const LogFunction& log) {
-        std::string last, lastError;
+        std::string last, lastError, exitReason;
         CrashWatch crash;
         const int code = runProcess(arguments, tools, cancel, [&](const std::string& line) {
+            // (Android: why a game ended without its exit code, process.h; said instead of an unrelated last line)
+            if (line.rfind("exit reason: ", 0) == 0) exitReason = line.substr(13);
             if (crash.feed(line) && !line.empty() && line.front() != '{') {
                 last = line;
                 std::string lower = line;
@@ -766,7 +768,7 @@ struct LauncherBackend {
         const std::string program = utf8(path(arguments[0]).filename());
         if (!cancel)
             if (auto failure = crash.failure(program, code)) throw *failure;
-        const std::string& reason = lastError.empty() ? last : lastError;
+        const std::string& reason = !exitReason.empty() ? exitReason : lastError.empty() ? last : lastError;
         if (cancel || reason.empty())
             throw ProcessFailure(arguments[0] + " failed (" + describeExitCode(code) + "). Details are in the launcher output.", false);
         throw ProcessFailure(reason + " (" + program + ", " + describeExitCode(code) + ")", false);
@@ -799,6 +801,7 @@ struct LauncherBackend {
     // .zip of that, streamed) into <user dir>/PS3 HD/Textures.pak (or, to edit them, PS3 HD/Textures, the PNG files:
     // --ps3-hd-png), named after the installed textures they replace. The game loads it under the player's own Mods
     // (--texture-pack) while it is turned on (launcher.json "ps3_hd").
+    // (Sly 1: the fork's ps3hd.cpp / texmod.cpp, Sly1/Sly1-Release)
     static bool ps3HdGame(GameId game) { return game == GameId::Sly1 || game == GameId::Sly2; }
     fs::path ps3HdDir(GameId game) const { return userDir(game) / "PS3 HD"; }
     struct Ps3HdPack {
@@ -1199,10 +1202,13 @@ struct LauncherBackend {
     void buildSource(const fs::path& checkout, const std::atomic<bool>& cancel,
                      const LogFunction& log) {
         auto source = fs::absolute(checkout);
-        if (!fs::is_regular_file(source / "CMakeLists.txt") ||
-            !fs::is_directory(source / "Sly1-Release"))
+        if (!fs::is_regular_file(source / "CMakeLists.txt") || !fs::is_regular_file(source / "cmake" / "sly1.cmake"))
             throw std::runtime_error(
                 "Select a SafeHouse checkout containing the portable CMake build");
+        // (Sly 1 is the Sly1 submodule: a checkout cloned without --recursive has an empty folder there)
+        if (!fs::is_regular_file(source / "Sly1" / "Sly1-Release" / "Sly1-Release.vcxproj"))
+            throw std::runtime_error(
+                "The checkout has no Sly 1 sources: run \"git submodule update --init\" in it (or clone with --recursive)");
         fs::create_directories(runtimeStorage(locations));
         FileLock buildLock(runtimeStorage(locations) / "source-build.lock");
         auto build = runtimeStorage(locations) / "source-build";

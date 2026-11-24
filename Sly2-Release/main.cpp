@@ -7,6 +7,9 @@
 #include "renderer.h"
 #include "editor.h"
 #include "renderer_choice_test.h"
+#if defined(__ANDROID__)
+#include "android/android_app.h"
+#endif
 #include "audio.h"
 #include "../platform/audio_devices.h"
 #include "rumble.h"
@@ -37,6 +40,7 @@
 #include "animtest.h"
 #include "../platform/platform.h"
 #include "../platform/safe_paths.h"
+#include "../platform/sly2_settings.h"
 
 #include <exception>
 #include <chrono>
@@ -400,9 +404,11 @@ int main(int argc, char** argv)
     std::vector<std::string> rest, physArgs;
     RENDERER rendererArg = RENDERER::Auto;
     bool fRendererArg = false;
-    // (vr.h) SLY2N_VR=1 as --vr; Android: a headset's runtime is tried always (none: the game as on a phone)
+    // (vr.h) SLY2N_VR=1 as --vr; Android: a headset's runtime is tried always (none: the game as on a phone). Only
+    // where an OpenXR runtime is installed (2026-11-24): on a phone the loader's probe printed five errors into the
+    // log, which the launcher then showed as the reason of an unrelated failure.
 #if defined(__ANDROID__)
-    vr::Request(true);
+    vr::Request(cane::android::openXrRuntimeInstalled());
 #endif
     // (SLY2N_VR=0: no VR, also on Android: the flat game on a headset, device tests)
     if (const char* sz = std::getenv("SLY2N_VR"); sz) vr::Request(std::atoi(sz) != 0);
@@ -909,6 +915,9 @@ int main(int argc, char** argv)
         if (dispo.window >= 0 && dispo.window <= 2) g_display.window = DISPWINDOW(dispo.window);
         if (fRendererArg) g_rendererWanted = rendererArg;
         if (dispo.msaa >= 0) g_display.msaaSamples = dispo.msaa > 1 ? dispo.msaa : 0;
+        // (tests: SLY2N_OUTLINE=N, Outline Thickness N % in a headless run, which reads no Settings.ini)
+        if (const char* psz = std::getenv("SLY2N_OUTLINE"))
+            g_display.outlineThickness = std::clamp(std::atoi(psz), cane::settings::kOutlineThicknessMin, cane::settings::kOutlineThicknessMax);
     };
     applyDisplayOverrides();
     if (command && !std::strcmp(command, "view-world")) return ViewWorld(vo);
@@ -1031,6 +1040,9 @@ int main(int argc, char** argv)
             void ApplyPcDebugMode();   // pcinput.h
             ApplyPcDebugMode();
         }
+        // (tests: SLY2N_ACTIONPROFILE=1: a headless run reads <user-dir>/Saves/advanced_controls.json too, e.g. the Remap
+        // page's shots with the advanced bindings)
+        else if (std::getenv("SLY2N_ACTIONPROFILE")) sly2actions::Load(cane::userDirectory());
         StartTextureMods();   // (texmod.h: the replacement textures' folders listed beside the start)
         applyDisplayOverrides();
         {

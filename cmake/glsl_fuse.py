@@ -16,7 +16,7 @@ import re
 import struct
 
 TOKEN = re.compile(r'\s+|(?P<tok>[A-Za-z_]\w*|0[xX][0-9a-fA-F]+[uU]?|\d+(?:\.\d*)?[eE][-+]?\d+[fF]?|\d+\.\d*(?:[eE][-+]?\d+)?[fF]?|\d*\.\d+(?:[eE][-+]?\d+)?[fF]?|\d+[uU]?'
-                   r'|\+\+|--|&&|\|\||<<|>>|[-+*/%<>=!]=|[-+*/%<>=!&|^?:~(),.\[\]{};])')
+                   r'|\+\+|--|&&|\|\||<<=|>>=|<<|>>|[-+*/%<>=!|&^]=|[-+*/%<>=!&|^?:~(),.\[\]{};])')
 ASSIGN = {'=', '+=', '-=', '*=', '/='}
 
 
@@ -93,11 +93,22 @@ class Parser:
                 self.take('[')
                 self.take(']')
                 node = ('id', node[1] + '[]')
+            elif p == '[' and self.peek(2) == ']' and self.peek(3) == '(' and node[0] == 'id':   # (uint[3](...))
+                self.take('[')
+                size = self.take()
+                self.take(']')
+                node = ('id', node[1] + '[' + size + ']')
             elif p == '[':
                 self.take('[')
                 e = self.expr()
                 self.take(']')
                 node = ('idx', node, e)
+            elif p == '.' and self.peek(2) == '(':   # (a method: array.length())
+                self.take('.')
+                name = self.take()
+                self.take('(')
+                self.take(')')
+                node = ('meth', node, name)
             elif p == '.':
                 self.take('.')
                 node = ('fld', node, self.take())
@@ -136,6 +147,25 @@ def neg(n):
 
 INT_FIELDS = set()    # struct members with an integer type
 INTS = set()          # names with an integer type (fuse_source fills it from the program's declarations)
+MATS = set()          # names with a matrix type (a matrix sum or a matrix times a scalar is not fused)
+MAT_FIELDS = set()    # struct / block members with a matrix type
+MAT_ARRAYS = set()    # names and members declared as arrays of matrices
+
+
+def is_mat(n):
+    n = strip(n)
+    if n[0] == 'id':
+        return n[1] in MATS
+    if n[0] == 'idx':   # (an element of a matrix array; a matrix's column is a vector)
+        a = strip(n[1])
+        return (a[0] == 'id' and a[1] in MAT_ARRAYS) or (a[0] == 'fld' and a[2] in MAT_ARRAYS)
+    if n[0] == 'fld':
+        return n[2] in MAT_FIELDS
+    if n[0] == 'call':
+        return n[1] in ('mat2', 'mat3', 'mat4', 'transpose', 'inverse', 'caneInverse')
+    if n[0] == 'bin':
+        return is_mat(n[2]) or is_mat(n[3])
+    return False
 INT_CALLS = {'int', 'uint', 'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4', 'floatBitsToUint', 'floatBitsToInt',
              'bitCount', 'findLSB', 'findMSB'}
 
@@ -152,6 +182,8 @@ def is_int(n):
         return is_int(n[1]) or n[2] in INT_FIELDS
     if k == 'idx':
         return is_int(n[1])
+    if k == 'meth':
+        return True   # (length(): int)
     if k == 'call':
         if n[1] in INT_CALLS:
             return True
@@ -172,7 +204,7 @@ def fuse(n):
     k = n[0]
     if k == 'bin':
         op, l, r = n[1], fuse(n[2]), fuse(n[3])
-        if op in ('+', '-') and not is_int(l) and not is_int(r):
+        if op in ('+', '-') and not is_int(l) and not is_int(r) and not is_mat(l) and not is_mat(r):
             pl, pr = as_product(l), as_product(r)
             rr = r if op == '+' else neg(r)
             if pl:
@@ -215,6 +247,8 @@ def emit(n):
         return emit(n[1]) + '[' + emit(n[2]) + ']'
     if k == 'fld':
         return emit(n[1]) + '.' + n[2]
+    if k == 'meth':
+        return emit(n[1]) + '.' + n[2] + '()'
     raise ValueError(k)
 
 
@@ -247,6 +281,11 @@ def statement(toks):
     if not toks:
         return ''
     head = toks[0]
+    if head in ('case', 'default'):   # (a switch's labels before the statement)
+        j = toks.index(':') + 1
+        return ' '.join(toks[:j]) + ' ' + statement(toks[j:])
+    if head == 'switch':
+        return ' '.join(toks)
     if head == 'else':
         return 'else ' + statement(toks[1:])
     if head in ('if', 'while'):
@@ -324,6 +363,14 @@ def fuse_source(src):
         INTS.clear()
         INTS.update(globals_)
         INTS.update(re.findall(int_decl, m.group(0) + body))
+        MATS.clear()
+        MATS.update(re.findall(r'\bmat[234]\s+(\w+)', src))
+        MAT_FIELDS.clear()
+        for blk in re.findall(r'\{([^{}]*)\}', src):
+            MAT_FIELDS.update(re.findall(r'\bmat[234]\s+(\w+)\s*;', blk))
+        MAT_ARRAYS.clear()
+        MAT_ARRAYS.update(re.findall(r'\bmat[234]\s+(\w+)\s*\[', src))
+        MATS.difference_update(MAT_ARRAYS)
         toks = [x.group('tok') for x in TOKEN.finditer(body) if x.group('tok')]
         lines, cur = [], []
         for t in toks:

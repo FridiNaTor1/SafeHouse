@@ -221,6 +221,8 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
 
     // This is what SDL runs in. It invokes SDL_main(), eventually
     protected static Thread mSDLThread;
+    // (SafeHouse) main has run and returned in this activity; reset in initialize()
+    protected static volatile boolean mSDLMainFinished;
 
     protected static SDLGenericMotionListener_API12 getMotionListener() {
         if (mMotionListener == null) {
@@ -306,6 +308,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         mCursors = new Hashtable<Integer, PointerIcon>();
         mLastCursorID = 0;
         mSDLThread = null;
+        mSDLMainFinished = false;
         mIsResumedCalled = false;
         mHasFocus = true;
         mNextNativeState = NativeState.INIT;
@@ -704,7 +707,12 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         // Try a transition to resumed state
         if (mNextNativeState == NativeState.RESUMED) {
             if (mSurface.mIsSurfaceReady && mHasFocus && mIsResumedCalled) {
-                if (mSDLThread == null) {
+                if (mSDLThread == null && mSDLMainFinished) {
+                    // (SafeHouse, 2026-11-24) main already ran and this activity is finishing: never run it twice.
+                    // SDLMain clears mSDLThread before its finish() takes effect, and a resume or focus change in
+                    // between (the game's process ending brings the launcher back) started main again: a second
+                    // `--play` game nobody supervised, from a launcher that had just ended.
+                } else if (mSDLThread == null) {
                     // This is the entry point to the C app.
                     // Start up the C app thread and enable sensor input for the first time
                     // FIXME: Why aren't we enabling sensor input at start?
@@ -1885,6 +1893,7 @@ class SDLMain implements Runnable {
 
         Log.v("SDL", "Finished main function");
 
+        SDLActivity.mSDLMainFinished = true;   // (SafeHouse: handleNativeState starts no second main)
         if (SDLActivity.mSingleton != null && !SDLActivity.mSingleton.isFinishing()) {
             // Let's finish the Activity
             SDLActivity.mSDLThread = null;

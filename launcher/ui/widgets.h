@@ -559,6 +559,9 @@ struct Row {
     ImGuiID id = 0;
     bool visible = false, hovered = false, held = false, focused = false, activated = false, clicked = false;
     bool disabled = false;
+    // A finger (touch screen): the row acts when the finger lifts where it pressed, not on the press, so a drag that
+    // scrolls the page (touch_scroll.h) never changes a setting.
+    bool touch = false;
     int step = 0;
 };
 // The first enabled row drawn since the caller last cleared it, so a pane
@@ -586,8 +589,19 @@ inline Row rowBehavior(const char* strId, float height, bool horizontal, float c
     r.visible = true;
     r.disabled = (g.LastItemData.InFlags & ImGuiItemFlags_Disabled) != 0;
     if (!r.disabled && !firstRow().id) firstRow() = { r.id, window };
-    r.activated = ImGui::ButtonBehavior(r.bb, r.id, &r.hovered, &r.held, ImGuiButtonFlags_PressedOnClick);
-    r.clicked = r.activated && r.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    r.touch = g.IO.MouseSource == ImGuiMouseSource_TouchScreen;
+    if (r.touch) {
+        // (released anywhere, then checked against the row here: a pad-style focus change while the finger is down
+        // turns ImGui's own hover test off)
+        const bool pressed = ImGui::ButtonBehavior(r.bb, r.id, &r.hovered, &r.held, ImGuiButtonFlags_PressedOnClickReleaseAnywhere);
+        const bool lifted = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+        const bool inside = r.bb.Contains(g.IO.MousePos) && window->ClipRect.Contains(g.IO.MousePos);
+        r.activated = pressed && (!lifted || inside);
+        r.clicked = pressed && lifted && inside;
+    } else {
+        r.activated = ImGui::ButtonBehavior(r.bb, r.id, &r.hovered, &r.held, ImGuiButtonFlags_PressedOnClick);
+        r.clicked = r.activated && r.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    }
     r.focused = g.NavId == r.id && g.NavWindow == window;
     if (horizontal && r.focused && !r.disabled) {
         for (ImGuiKey key : { ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight,
@@ -705,7 +719,18 @@ inline bool sliderRow(const char* label, float* value, float stepSize = 0.1f, co
     bool changed = false;
     float v = std::clamp(*value, 0.0f, 1.0f);
     if (!r.disabled) {
-        if (r.clicked && mouse.x >= track.Min.x - px(10) && mouse.x <= track.Max.x + px(10)) storage->SetBool(dragKey, true);
+        const auto onTrack = [&](float x) { return x >= track.Min.x - px(10) && x <= track.Max.x + px(10); };
+        if (r.touch) {
+            // (a finger: a sideways drag that began on the track moves the knob; a tap on the track sets it)
+            const ImVec2 from = ImGui::GetIO().MouseClickedPos[0];
+            const float dx = mouse.x - from.x, dy = mouse.y - from.y;
+            if (r.held && onTrack(from.x) && std::fabs(dx) > px(10) && std::fabs(dx) > std::fabs(dy)) storage->SetBool(dragKey, true);
+            if (r.clicked && onTrack(mouse.x)) {
+                float t = std::clamp((mouse.x - track.Min.x) / track.GetWidth(), 0.0f, 1.0f);
+                t = std::round(t / dragStep) * dragStep;
+                if (std::fabs(t - v) > 1e-4f) v = t, changed = true;
+            }
+        } else if (r.clicked && onTrack(mouse.x)) storage->SetBool(dragKey, true);
         if (!r.held) storage->SetBool(dragKey, false);
         if (storage->GetBool(dragKey)) {
             float t = std::clamp((mouse.x - track.Min.x) / track.GetWidth(), 0.0f, 1.0f);

@@ -558,7 +558,13 @@ void UpdateShip(LO* plo)
         // the guns: the right stick's heading, firing while it is deflected (QoL, hackmouse.h: with the keyboard /
         // mouse the cursor's heading, firing while left click is held; the stick (camera keys) still fires unclicked)
         float radAim = ppc->radJoy2;
-        bool fFire = sly2actions::Applies(ppc) ? sly2actions::Held(sly2actions::Action::HackFire) : 0.0f < ppc->uJoy2;
+        // (advanced controls: the action, by default the right stick as the original (issue #74: it was a button only),
+        // the stick binding also taking the keyboard's camera keys as the original's stick does)
+        bool fFire = sly2actions::Applies(ppc)
+                         ? sly2actions::Held(sly2actions::Action::HackFire) ||
+                               (sly2actions::profile.gamepad[size_t(sly2actions::Action::HackFire)] == cane::settings::kGamepadRightStick &&
+                                0.0f < ppc->uJoy2)
+                         : 0.0f < ppc->uJoy2;
         float radMouse = 0.0f;
         bool fMouse = false;
         if (FHackMouseAim(plo, &radMouse, &fMouse) && (fMouse || !fFire))

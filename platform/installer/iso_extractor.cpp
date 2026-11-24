@@ -1,7 +1,10 @@
+// The Switch's Sly 1 installer: the disc's files extracted on the console, the levels rebuilt by upstream
+// ProjectCane's level tools in this process (the Sly1/ submodule's NativeTools: sly1_pcbrx, cmake/sly1_pcbrx.cmake),
+// with the desktop extractor's shared steps (File Extractor/pcbrx.h). Every level stays in memory between the tools
+// (the SD card is slow), and the levels of a localized disc are prepared on the worker threads.
 #include "iso_extractor.h"
-#include "../../File Extractor GUI/NativeTools/BrxRebuilder/BrxWalker.h"
+#include "pcbrx.h"
 #include <future>
-#include "../../File Extractor GUI/NativeTools/PalExtractor/PalIsoExtractor.h"
 #include <atomic>
 #include <set>
 #include <mutex>
@@ -299,7 +302,7 @@ constexpr std::array<const char*, SOUND_BANK_COUNT> SOUND_BANK_NAMES =
 
 constexpr DIALOGAUDIOINFO DIALOG_AUDIO_TABLE[] =
 {
-#include "../../File Extractor GUI/Data/DialogAudioTable.inc"
+#include "../../File Extractor/DialogAudioTable.inc"
 };
 
 static bool ReadExactAt(std::ifstream& file, uint64_t offset, void* destination, std::size_t size)
@@ -968,26 +971,6 @@ void WriteManifest(const fs::path& directory, DiscRegion region, int version)
     if (!output) throw std::runtime_error("Cannot write the content manifest");
 }
 
-std::vector<uint8_t> JapaneseSourceTables(const fs::path& path)
-{
-    CBinaryInputStream input(path);
-    input.Skip(8);
-    const bool debug = input.U8Read() != 0;
-    input.Skip(2);
-    const auto names = input.U32Read();
-    if (debug)
-        for (uint32_t i = 1; i < names; ++i) input.Skip(input.U16Read());
-    const auto start = input.GetOffset();
-    for (unsigned table = 0; table < 2; ++table)
-    {
-        const auto count = input.U16Read();
-        for (unsigned i = 0; i < count; ++i) input.Skip(size_t(input.U16Read()) * 2);
-    }
-    std::vector<uint8_t> bytes(input.GetOffset() - start);
-    input.Seek(start); input.ReadBytes(bytes.data(), bytes.size());
-    return bytes;
-}
-
 void PackLocalizedLevel(const std::vector<fs::path>& paths, const fs::path& outputPath,
     bool japanese, const std::function<void()>& poll,
     const std::function<std::vector<uint8_t>(const fs::path&)>& read)
@@ -1118,7 +1101,9 @@ void ExtractLocalizedGame(const fs::path& isoPath, const fs::path& directory,
             report({update.stage, update.file.filename().string(), update.completed, update.total + LEVEL_COUNT});
         });
         const bool japanese = region == DiscRegion::Japanese, korean = region == DiscRegion::Korean;
-        if (korean) extractor.ExtractKorean(isoPath, staging);
+        // (Europe: every language slot from one read of the disc; Japan and Korea: upstream's detection path, as
+        // pcbrx::ExtractLocalized)
+        if (region == DiscRegion::Pal) extractor.ExtractAllLanguages(isoPath, staging);
         else extractor.ExtractDetectedRegion(isoPath, staging);
         const std::vector<std::string> languages = japanese ? std::vector<std::string>{"Japanese", "English"} :
             korean ? std::vector<std::string>{"Korean"} : std::vector<std::string>{"English", "French", "German", "Spanish", "Italian"};
@@ -1146,7 +1131,7 @@ void ExtractLocalizedGame(const fs::path& isoPath, const fs::path& directory,
                 const auto source = output.parent_path() / language / output.filename();
                 if (japanese)
                 {
-                    const auto tables = JapaneseSourceTables(source);
+                    const auto tables = pcbrx::ReadJapaneseSourceLocalizationTables(source);
                     if (sources.empty()) sourceTables = tables;
                     else if (tables != sourceTables)
                         throw std::runtime_error("Japanese voice variants contain different localization tables");
@@ -1155,9 +1140,10 @@ void ExtractLocalizedGame(const fs::path& isoPath, const fs::path& directory,
                 poll();
             }
             PackLocalizedLevel(sources, output, japanese, poll, [&](const fs::path& source) {
-                BrxWalker walker(StringEncoding::Auto, japanese ? BrxSourceRegion::Japanese :
+                BrxWalker walker(StringEncoding::Narrow, japanese ? BrxSourceRegion::Japanese :
                     korean ? BrxSourceRegion::Korean : BrxSourceRegion::Pal, false);
-                if (!japanese) walker.LoadLevelIdentityMap(staging / ".pal-level-identities.txt");
+                // (Korea: the rebuilder has the disc's level identities itself)
+                if (region == DiscRegion::Pal) walker.LoadLevelIdentityMap(staging / ".pal-level-identities.txt");
                 return walker.RebuildFile(source);
             });
             for (const auto& path : sources) fs::remove(path);
@@ -1166,7 +1152,7 @@ void ExtractLocalizedGame(const fs::path& isoPath, const fs::path& directory,
                     extracted + LEVEL_COUNT});
         });
         const size_t completed = extracted + groupList.size();
-        if (!japanese) fs::remove(staging / ".pal-level-identities.txt");
+        fs::remove(staging / ".pal-level-identities.txt");
         WriteManifest(staging, region, 19);
         report({"Finishing installation", "", completed, completed});
     });
@@ -1217,14 +1203,14 @@ void ReplaceWithRebuilt(const fs::path& path)
 // A retail level rebuilt into the PC's format, on this thread (a worker's).
 void RebuildLevelHere(const fs::path& path)
 {
-    BrxWalker(StringEncoding::Auto, BrxSourceRegion::NtscU, false).WalkFile(path);
+    BrxWalker(StringEncoding::Narrow, BrxSourceRegion::NtscU, false).WalkFile(path);
     ReplaceWithRebuilt(path);
 }
 // The same while the screen's progress goes on (an update's rebuild, from the installer's thread).
 void RebuildLevel(const fs::path& path)
 {
     auto rebuild = std::async(std::launch::async, [path] {
-        BrxWalker(StringEncoding::Auto, BrxSourceRegion::NtscU, false).WalkFile(path);
+        BrxWalker(StringEncoding::Narrow, BrxSourceRegion::NtscU, false).WalkFile(path);
     });
     while (rebuild.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) Pulse();
     rebuild.get();

@@ -303,6 +303,7 @@ CRef RefFromOptval(const OPTVAL& v)
     case 0x16: ref.SetF32(v.ag[0]); return ref;
     case 0x17: ref.SetBool(v.n); return ref;
     case 0x1A: case 0x1C: ref.SetVector(glm::vec3(v.ag[0], v.ag[1], v.ag[2])); return ref;
+    case 0x1D: ref.SetLm({v.ag[0], v.ag[1]}); return ref;   // (an LM a script set: its two floats)
     case 0x21: ref.SetBasic(v.pbasic); return ref;
     default: break;
     }
@@ -312,6 +313,7 @@ CRef RefFromOptval(const OPTVAL& v)
     case 0: ref.SetBool(v.n); break;
     case 1: ref.SetF32(v.ag[0]); break;
     case 2: case 9: case 11: case 4: ref.SetVector(glm::vec3(v.ag[0], v.ag[1], v.ag[2])); break;
+    case 10: ref.SetLm({v.ag[0], v.ag[1]}); break;   // (an LM field: two floats, e.g. a noise template's height range 1092)
     default: ref.SetS32(v.n); break;
     }
     return ref;
@@ -330,6 +332,15 @@ OPTVAL OptvalFromRef(const CRef& ref)
         v.tagk = 0x1A;
         const glm::vec3 vec = ref.GetVector();
         v.ag = {vec.x, vec.y, vec.z, 0.0f};
+        break;
+    }
+    case TAGK_Lm:
+    {
+        // an LM (e.g. the water bug's noise template height range 1092, (<lm> -100 100)): its two floats, as the field's
+        // (kind 10) two words
+        v.tagk = 0x1D;
+        const LM lm = ref.GetLm();
+        v.ag = {lm.gMin, lm.gMax, 0.0f, 0.0f};
         break;
     }
     case TAGK_Basic:

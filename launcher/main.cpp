@@ -33,6 +33,7 @@
 #include "ui/osk.h"
 #include "ui/settings_page.h"
 #include "ui/shell.h"
+#include "ui/touch_scroll.h"
 #include "ui/update_dialog.h"
 #ifdef CANE_LAUNCHER_EDITOR
 #include "editor/editor_page.h"
@@ -269,6 +270,7 @@ void rememberMonitor(cane::LauncherBackend& backend, GLFWwindow* window) {
 // `safehouse --collection` without the imported menu (there is no Collection style then): the SafeHouse launcher opens
 // instead, on the rows that import it.
 bool collectionMissing = false;
+void replayPointer(const ui::fixtures::Options& options, int frame);
 int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture, const cane::fs::path& screenshotPath) {
     glfwSetErrorCallback([](int code, const char* message) { std::cerr << "GLFW " << code << ": " << message << '\n'; });
     if (!cane::initGlfw()) throw std::runtime_error("Cannot initialize desktop display");
@@ -514,6 +516,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     ui::requestFocus();
 
     int frames = 0, languageGeneration = cane::l10n::generation();
+    ui::TouchScroll touchScroll;  // (a finger drags the page it is on)
     bool blockedLastFrame = false, wasBusy = false, windowHidden = false, wasFocused = false;
     std::string lastLabel;
     while (!glfwWindowShouldClose(window)) {
@@ -578,6 +581,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             io.DisplaySize = {static_cast<float>(fixture->width), static_cast<float>(fixture->height)};
             io.DisplayFramebufferScale = {1, 1};
             replayNav(*fixture, frames, pad);
+            replayPointer(*fixture, frames);
         }
         faceSwap.end();
         ImGui::NewFrame();
@@ -792,6 +796,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         blockedLastFrame = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::IsAnyItemActive() ||
                            cane::launcher::onScreenKeyboardOpen() || settings.capturing();
 
+        touchScroll.update();
         ImGui::Render();
         if (offscreen) glBindFramebuffer(GL_FRAMEBUFFER, offscreen->fbo);
         int fw = width, fh = height;
@@ -800,7 +805,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         glClearColor(ui::vec(ui::color::bg).x, ui::vec(ui::color::bg).y, ui::vec(ui::color::bg).z, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        if (fixture && ++frames >= 10 + 4 * static_cast<int>(fixture->nav.size()) && glfwGetTime() >= fixture->delay) {
+        if (fixture && ++frames >= 10 + 4 * static_cast<int>(fixture->nav.size()) + 2 * static_cast<int>(fixture->pointer.size()) && glfwGetTime() >= fixture->delay) {
             screenshot(fw, fh, screenshotPath);
             if (!fixture->layoutPath.empty()) dumpLayout(cane::path(fixture->layoutPath), focus, shell);
             glfwSetWindowShouldClose(window, true);

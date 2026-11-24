@@ -350,6 +350,12 @@ void PrintJtLists(SW* psw)
                         p.z, d.height, d.prio, d.id, d.kind, d.mask);
             for (const auto& [key, u] : plo->afield)
                 std::printf(" (%X,%X)=%X", static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key), u);
+            std::printf(" parent %d options", plo->paloParent ? plo->paloParent->oid : -1);
+            for (const OPT& o : plo->aopt)
+            {
+                std::printf(" %d=", o.eopid);
+                for (const OPTVAL& v : o.aval) std::printf("%d/%g,", v.n, v.ag[0]);
+            }
             std::printf("\n");
             if (const CRV* pcrv = FIsLoDerivedFrom(plo, 0x0A) ? PcrvFromLo(plo) : nullptr)
             {

@@ -5511,28 +5511,6 @@ void KillSoundSystem()
 	// ShutdownSound/StartupSound remains the explicit lifetime boundary.
 }
 
-static std::unique_ptr<EFFECTBANK> LoadEffectBankFile(int ibnk, const std::filesystem::path& path)
-{
-	std::ifstream input(ModPath(path), std::ios::binary);
-	if (!input.is_open())
-		return nullptr;
-	std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
-	if (bytes.empty())
-	{
-		std::printf("[SOUND BANK] Extracted bank is empty: %s\n", path.string().c_str());
-		return nullptr;
-	}
-	auto bank = std::make_unique<EFFECTBANK>();
-	bank->ibnk = ibnk;
-	bank->bytes = std::move(bytes);
-	if (!Parse989SfxBank(*bank))
-	{
-		std::printf("[SOUND BANK] Invalid or unsupported 989SND SBlk: %s\n", path.string().c_str());
-		return nullptr;
-	}
-	return bank;
-}
-
 SoundBankPtr SbpEnsureBank(int ibnk, const char* fileName)
 {
 	const auto bankLoadBegin = std::chrono::steady_clock::now();
@@ -5556,32 +5534,23 @@ SoundBankPtr SbpEnsureBank(int ibnk, const char* fileName)
 		std::printf("[SOUND BANK] Could not find extracted IBNK %d.\n", ibnk);
 		return nullptr;
 	}
-	std::unique_ptr<EFFECTBANK> replacement = LoadEffectBankFile(ibnk, path);
-	if (!replacement)
+	std::ifstream input(ModPath(path), std::ios::binary);
+	if (!input.is_open())
 		return nullptr;
-	// Installs from a USA disc made before the extractor's fix named four episode banks in the wrong order
-	// (Underwater.bnk held Muggshot's sounds, and so on), so every episode played another episode's effects.
-	// Each bank's sound count is distinct, so a bank whose count is not this index's is looked for among
-	// the other banks beside it.
-	const std::size_t expectedSounds = kEffectBankStarts[ibnk + 1] - kEffectBankStarts[ibnk];
-	if (replacement->sounds.size() != expectedSounds)
+	std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+	if (bytes.empty())
 	{
-		for (const wchar_t* candidateName : kEffectBankNames)
-		{
-			const std::filesystem::path candidate = path.parent_path() / candidateName;
-			std::error_code error;
-			if (candidate.filename() == path.filename() || !std::filesystem::is_regular_file(candidate, error))
-				continue;
-			std::unique_ptr<EFFECTBANK> match = LoadEffectBankFile(ibnk, candidate);
-			if (match && match->sounds.size() == expectedSounds)
-			{
-				std::printf("[SOUND BANK] %s has %zu sounds, IBNK %d needs %zu: using %s (mislabelled install)\n",
-					path.filename().string().c_str(), replacement->sounds.size(), ibnk, expectedSounds,
-					candidate.filename().string().c_str());
-				replacement = std::move(match);
-				break;
-			}
-		}
+		std::printf("[SOUND BANK] Extracted bank is empty: %s\n", path.string().c_str());
+		return nullptr;
+	}
+
+	auto replacement = std::make_unique<EFFECTBANK>();
+	replacement->ibnk = ibnk;
+	replacement->bytes = std::move(bytes);
+	if (!Parse989SfxBank(*replacement))
+	{
+		std::printf("[SOUND BANK] Invalid or unsupported 989SND SBlk: %s\n", path.string().c_str());
+		return nullptr;
 	}
 	s_effectBanks[ibnk] = std::move(replacement);
 	// Bank zero is the permanent common bank and must not replace the tracked
