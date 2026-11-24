@@ -14,7 +14,10 @@
 // for action, system_settings.h kSly1DefaultKeyboardBindings) moves a binding still on revision 1's default to the new
 // one (L1 1 -> right mouse, R3 right mouse -> middle mouse), never a binding the player changed, nor onto a key another
 // binding uses; and the removed Dialogue Skip option (L1 / R1 skipped binocucom lines; now every conversation takes
-// the cutscenes' hold-to-skip) turns Instant Skip Cutscenes on when it was on; the old Windows-only [Audio] Output
+// the cutscenes' hold-to-skip) turns Instant Skip Cutscenes on when it was on; layout revision 3 gives the skip its own
+// binding ([Controller] / [Keyboard] Skip Cutscene, R1 and Enter by default; it was the Circle binding before): a file
+// from before keeps the skip where it was when Circle was moved off its default, else the skip takes the new defaults;
+// the old Windows-only [Audio] Output
 // Device ID (an endpoint's id) is kept for the game (s.sly1.audioDeviceId), which turns it into Output Device (Sly 2's
 // key: the device's name, any desktop) on Windows and drops it.
 //
@@ -49,7 +52,8 @@ inline bool sly1HasKey(std::string_view section, std::string_view key) {
 // Sly 1's internal resolutions: the shared list and the PS2's own 448 lines.
 inline constexpr int kSly1Ps2Height = 448;
 // The default keyboard layout's revision (system_settings.h kSly1DefaultKeyboardBindings); 1: kSly2DefaultKeyboardBindings.
-inline constexpr int kSly1KeyboardRevision = 2;
+// 3: the skip's own binding (Skip Cutscene; before, the Circle binding).
+inline constexpr int kSly1KeyboardRevision = 3;
 
 namespace detail {
 inline Sly2Key sly1BoolKey(const char* section, const char* key, const char* comment, int Sly1Options::*field) {
@@ -99,12 +103,24 @@ inline const std::vector<Sly2Key>& sly1Schema() {
                 continue;
             }
             if (section == "Controls" && name == "Instant Skip Cutscenes") {
-                k.push_back(boolKey("Controls", "Instant Skip Cutscenes", "On: one press of Circle skips a cutscene. Off: hold it 2 seconds",
+                k.push_back(boolKey("Controls", "Instant Skip Cutscenes", "On: one press of Skip Cutscene skips a cutscene. Off: hold it 2 seconds",
                                     &SS::instantSkipCutscenes));
                 continue;
             }
             if (!sly1HasKey(section, name)) continue;
             k.push_back(key);
+            // (the cutscene / conversation skip's own button after the controller's bindings)
+            if (section == "Controller" && name == kSly2BindingKeys.back())
+                k.push_back({ "Controller", "Skip Cutscene", "Hold it to skip a cutscene or a binocucom conversation (or None); while one\n"
+                                                             "can be skipped it does nothing else",
+                              [](const Sly2Settings& s) { return names::nameOf(names::padButtons(), s.sly1.skipPad); },
+                              [](Sly2Settings& s, const std::string& v) {
+                                  if (ini::keyForm(v) == "none") return s.sly1.skipPad = kKeyUnknown, true;
+                                  int n = 0;
+                                  if (!names::valueOf(names::padButtons(), v, n) || !validGamepadBinding(n)) return false;
+                                  s.sly1.skipPad = n;
+                                  return true;
+                              } });
             // (None is a value: a binding left empty)
             if (section == "Keyboard" && std::find(kSly2BindingKeys.begin(), kSly2BindingKeys.end(), name) != kSly2BindingKeys.end()) {
                 const auto slot = static_cast<size_t>(std::find(kSly2BindingKeys.begin(), kSly2BindingKeys.end(), name) - kSly2BindingKeys.begin());
@@ -191,6 +207,16 @@ inline const std::vector<Sly2Key>& sly1Schema() {
                                       s.sly1.rhythmKeys[size_t(i)] = n;
                                       return true;
                                   } });
+                k.push_back({ "Keyboard", "Skip Cutscene", "Hold it to skip a cutscene or a binocucom conversation (a key, a mouse button\n"
+                                                           "or None); while one can be skipped it does nothing else",
+                              [](const Sly2Settings& s) { return names::nameOf(names::keys(), s.sly1.skipKey); },
+                              [](Sly2Settings& s, const std::string& v) {
+                                  if (ini::keyForm(v) == "none") return s.sly1.skipKey = kKeyUnknown, true;
+                                  int n = 0;
+                                  if (!names::valueOf(names::keys(), v, n) || !validKeyboardBinding(n)) return false;
+                                  s.sly1.skipKey = n;
+                                  return true;
+                              } });
             }
         }
         // [Controller] the sticks' dead zone (after the bindings)
@@ -247,9 +273,20 @@ inline void sly1UpgradeKeyboard(int (&keys)[kBindingCount], int revision) {
         if (keys[slot] == kSly2DefaultKeyboardBindings[slot] && !used(kSly1DefaultKeyboardBindings[slot], slot))
             keys[slot] = kSly1DefaultKeyboardBindings[slot];
 }
+// A file from before the skip's own binding (revision 3): the skip was the Circle binding. Circle moved off its default
+// (the player's choice) keeps the skip there; an untouched Circle leaves the skip on the new defaults (R1, Enter).
+inline void sly1UpgradeSkip(Sly1Options& o, const SystemSettings& system, int revision) {
+    if (revision >= 3) return;
+    constexpr int circle = 5;
+    const int key = system.keyboardBindings[circle];
+    if (key != kSly1DefaultKeyboardBindings[circle] && key != kSly2DefaultKeyboardBindings[circle] && key != kDefaultKeyboardBindings[circle])
+        o.skipKey = key;
+    if (system.gamepadBindings[circle] != kDefaultGamepadBindings[circle]) o.skipPad = system.gamepadBindings[circle];
+}
 // Every load: the older layouts' keys and the removed options (see the top of this file).
 inline void sly1Upgrade(Sly2Settings& s) {
     sly1UpgradeKeyboard(s.system.keyboardBindings, s.sly1.keyboardRevision);
+    sly1UpgradeSkip(s.sly1, s.system, s.sly1.keyboardRevision);
     s.sly1.keyboardRevision = kSly1KeyboardRevision;
     // (the old Output Device ID stays in the file, among the unknown keys, until the game has turned it into a name)
     s.sly1.audioDeviceId.clear();

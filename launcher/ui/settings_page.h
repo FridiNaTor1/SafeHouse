@@ -97,6 +97,8 @@ class SettingsPage {
     static constexpr int kAdvancedCapture = 1000;
     // (Sly 1's rhythm minigame keys: Settings.ini [Keyboard] Rhythm Triangle / Square / Circle / Cross)
     static constexpr int kRhythmCapture = 900;
+    // (Sly 1's cutscene / conversation skip: Settings.ini [Keyboard] / [Controller] Skip Cutscene, sly1_settings.h)
+    static constexpr int kSkipCapture = 950;
 public:
     enum Category { Display, Graphics, Audio, Controls, Interface, Launcher, Games, Advanced, CategoryCount };
     static constexpr std::array<const char*, CategoryCount> names{ N_("Display"), N_("Graphics"), N_("Audio"), N_("Controls"),
@@ -527,6 +529,15 @@ private:
             commitActions();
             return;
         }
+        if (m_captureAction == kSkipCapture) {
+            if (key != GLFW_KEY_DELETE && !settings::validKeyboardBinding(key)) { m_captureNote = tr("That key cannot be bound."); return; }
+            // (its own binding: it may share a key with an action, e.g. Enter is also Start; while a scene can be skipped
+            //  the key only skips)
+            m_sly2.sly1.skipKey = key == GLFW_KEY_DELETE ? settings::kKeyUnknown : key;
+            m_captureAction = -1;
+            commit();
+            return;
+        }
         if (m_captureAction >= kRhythmCapture) {
             if (key == settings::kKeyUnknown || !settings::validCameraKey(key)) { m_captureNote = tr("That key cannot be bound."); return; }
             // (the minigame's keys may be the movement's: they only count there; among themselves the two swap)
@@ -551,6 +562,7 @@ private:
     }
     const char* captureName() const {
         if (m_captureAction >= kAdvancedCapture) return tr(actionLabel(size_t(m_captureAction - kAdvancedCapture)));
+        if (m_captureAction == kSkipCapture) return tr(skipLabel());
         if (m_captureAction >= kRhythmCapture) return tr(rhythmNames[static_cast<size_t>(m_captureAction - kRhythmCapture)]);
         return tr(m_captureAction >= settings::kBindingCount ? cameraNames[static_cast<size_t>(m_captureAction - settings::kBindingCount)]
                                                              : standardLabel(m_captureAction));
@@ -558,7 +570,8 @@ private:
     // Action capture accepts mouse buttons and the wheel after the click that
     // selected the row has been released. Camera bindings use keyboard keys.
     void pollMouseCapture() {
-        if (!capturing() || m_captureController || (m_captureAction >= settings::kBindingCount && m_captureAction < kAdvancedCapture)) return;
+        if (!capturing() || m_captureController ||
+            (m_captureAction >= settings::kBindingCount && m_captureAction < kAdvancedCapture && m_captureAction != kSkipCapture)) return;
         const auto& io = ImGui::GetIO();
         if (!m_captureArmed) {
             bool held = false;
@@ -579,7 +592,8 @@ private:
             commitActions();
             return;
         }
-        m_settings.keyboardBindings[m_captureAction] = binding;
+        if (m_captureAction == kSkipCapture) m_sly2.sly1.skipKey = binding;
+        else m_settings.keyboardBindings[m_captureAction] = binding;
         m_captureAction = -1;
         m_captureCooldown = ImGui::GetTime() + 0.3;
         commit();
@@ -624,6 +638,7 @@ private:
         if (pressed < 0) return;
         const bool advanced = m_captureAction >= kAdvancedCapture;
         if (advanced) actionBindings(true)[size_t(m_captureAction - kAdvancedCapture)] = pressed;
+        else if (m_captureAction == kSkipCapture) m_sly2.sly1.skipPad = pressed;
         else m_settings.gamepadBindings[m_captureAction] = pressed;
         m_captureAction = -1;
         m_captureCooldown = ImGui::GetTime() + 0.3;
@@ -818,6 +833,7 @@ private:
             m_sly2.game.invertTurret = settings::Sly2GameOptions{}.invertTurret;
             if (m_game == GameId::Sly1) m_sly2.sly1.deadZone = settings::Sly1Options{}.deadZone;
             if (m_game == GameId::Sly1) m_sly2.sly1.rhythmKeys = settings::Sly1Options{}.rhythmKeys;
+            if (m_game == GameId::Sly1) m_sly2.sly1.skipKey = settings::Sly1Options{}.skipKey, m_sly2.sly1.skipPad = settings::Sly1Options{}.skipPad;
             break;
         case Interface: s.guiStyle = d.guiStyle, s.guiScale = d.guiScale; break;
         case Launcher:
@@ -1367,6 +1383,55 @@ private:
         }
         ImGui::PopID();
     }
+    // Sly 1's cutscene / conversation skip: its own key or controller button (Settings.ini Skip Cutscene), beside the
+    // PS2 buttons' bindings and kept in both of the input mappings.
+    static const char* skipLabel() { return N_("Skip cutscene / conversation"); }
+    void skipRow(bool controller, input::Family family) {
+        ImGui::PushID(controller ? 401 : 400);
+        const char* label = tr(skipLabel());
+        const Row r = rowBehavior(label, px(52), false, 0.45f);
+        if (r.visible) {
+            const bool capturingThis = m_captureAction == kSkipCapture && m_captureController == controller;
+            if (r.activated && !r.disabled && !capturingThis && ImGui::GetTime() > m_captureCooldown) startCapture(kSkipCapture, controller);
+            auto* dl = ImGui::GetWindowDrawList();
+            const float cy = r.bb.GetCenter().y;
+            dl->AddText(fonts().body, fonts().body->FontSize, { r.bb.Min.x + px(56), std::round(cy - fonts().body->FontSize * 0.5f) },
+                        ink(color::text), label);
+            recordLayout(label, r.bb);
+            const float right = r.control.Max.x;
+            const int value = controller ? m_sly2.sly1.skipPad : m_sly2.sly1.skipKey;
+            if (capturingThis) {
+                const float pulse = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.0f);
+                const char* prompt = controller ? tr("Press a button…") : tr("Press a key or mouse button…");
+                const auto t = measure(fonts().tab, prompt);
+                dl->AddRect({ r.control.Min.x, r.bb.Min.y + px(8) }, { right, r.bb.Max.y - px(8) }, ink(color::cta, pulse), px(6), 0, px(2));
+                dl->AddText(fonts().tab, fonts().tab->FontSize, { std::round(r.control.GetCenter().x - t.x * 0.5f), std::round(cy - t.y * 0.5f) },
+                            ink(color::cta), prompt);
+                m_help = m_captureNote.empty() ? std::string(controller ? tr("Select, then press the controller button to use for this action.")
+                                                                        : tr("Select, then press the key to use for this action. Escape cancels."))
+                                               : m_captureNote;
+            } else if (value == settings::kKeyUnknown) {
+                const auto t = measure(fonts().body, tr("Unbound"));
+                dl->AddText(fonts().body, fonts().body->FontSize, { right - t.x, std::round(cy - t.y * 0.5f) }, ink(color::muted), tr("Unbound"));
+            } else if (controller) {
+                const auto button = input::fromGlfwBinding(value);
+                const char* name = input::buttonLabel(button, family);
+                const auto t = measure(fonts().body, name);
+                dl->AddText(fonts().body, fonts().body->FontSize, { right - t.x, std::round(cy - t.y * 0.5f) }, ink(color::text2), name);
+                const float glyph = px(30);
+                const float gw = padButtonWidth(glyph, family, button);
+                if (button != input::Button::Count) drawPadButton(dl, { right - t.x - px(12) - gw * 0.5f, cy }, glyph, family, button);
+            } else {
+                const std::string name = keyName(value);
+                const float h = px(30), w = keycapWidth(name.c_str(), h);
+                drawKeycap(dl, { right - w, std::round(cy - h * 0.5f) - px(1) }, h, name.c_str());
+            }
+            if (!capturingThis && (ImGui::IsItemFocused() || ImGui::IsItemHovered()))
+                m_help = tr("Hold it to skip a cutscene or a binocucom conversation (one press with Instant skip cutscenes). "
+                            "While a scene can be skipped it does nothing else.");
+        }
+        ImGui::PopID();
+    }
     static std::vector<std::string> promptStyleNames() {
         std::vector<std::string> names;
         for (int style = 0; style <= input::kPromptStyleLast; ++style) names.emplace_back(tr(input::promptStyleName(style)));
@@ -1500,7 +1565,8 @@ private:
         toggle(tr("Original PlayStation icons"), m_settings.alwaysOriginalPsPrompts,
                tr("Every device shows the game's original PlayStation 2 button icons. Off: PS4 / PS5 pads show their own icons, other devices theirs."));
         toggle(tr("Instant skip cutscenes"), m_settings.instantSkipCutscenes,
-               tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
+               m_game == GameId::Sly1 ? tr("One press of the skip button skips a cutscene or a conversation. Off: hold it for 2 seconds.")
+                                      : tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
         if (m_game == GameId::Sly1 || iniGame()) {
             const std::vector<std::string> cameraRotationLabels{ tr("Off"), tr("On") };
             int cameraRotation = m_settings.autoCameraRotation != 0 ? 1 : 0;
@@ -1538,8 +1604,10 @@ private:
             }
         }
         if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, true, family);
+        if (m_game == GameId::Sly1) skipRow(true, family);
         section(tr("Keyboard"));
         if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, false, family);
+        if (m_game == GameId::Sly1) skipRow(false, input::Family::Keyboard);
         for (int i = 0; i < settings::kCameraKeyCount; ++i) cameraKeyRow(i);
         // (Sly 1: the rhythm minigame's own keys; with Advanced Input Mapping on they are its action group's)
         if (m_game == GameId::Sly1 && !advanced) {

@@ -79,6 +79,12 @@ static_assert(kSly1DefaultKeyboardBindings[10] == kSly2DefaultKeyboardBindings[1
 inline constexpr int kSly1RhythmKeyCount = 4;
 inline constexpr int kSly1RhythmPads[kSly1RhythmKeyCount] = { 7 /*Triangle*/, 4 /*Square*/, 5 /*Circle*/, 6 /*Cross*/ };
 inline constexpr int kSly1DefaultRhythmKeys[kSly1RhythmKeyCount] = { 87 /*W*/, 65 /*A*/, 68 /*D*/, 32 /*Space*/ };
+// Sly 1's cutscene / conversation skip (user, 2026-11-24): a binding of its own, not one of the PS2 buttons: R1 on a
+// controller (in Sly 1 only a second binocucom button) and Enter on the keyboard, held 2 seconds (one press with Instant
+// Skip Cutscenes); while a scene can be skipped it only skips. Settings.ini [Controller] / [Keyboard] Skip Cutscene
+// (sly1_settings.h). Before layout revision 3 the skip was the Circle binding.
+inline constexpr int kSly1DefaultSkipKey = 257 /*Enter*/;
+inline constexpr int kSly1DefaultSkipPad = 5 /*RIGHT_BUMPER*/;
 // The rhythm key of a PS2 button (Pad order: 4 Square, 5 Circle, 6 Cross, 7 Triangle), -1 for the other buttons.
 inline constexpr int sly1RhythmSlot(int pad) {
     for (int i = 0; i < kSly1RhythmKeyCount; ++i)

@@ -21,7 +21,7 @@ set -u
 BIN=$(cd "$1" && pwd); OUT=$2; DATA=$3; FRAMES=${4:-4200}
 TOOL=${SLY1_WINE_TOOL:-}
 [ -n "$TOOL" ] || DATA=$(cd "$DATA" && pwd)
-KEYS=${5:-257@1200-1206,257@1500-1506,32@1800-1806,257@2100-2106,32@2400-2406,32@2700-2706,32@3000-3006,32@3300-3306,32@3600-3606}
+KEYS=${5:-256@1200-1206,257@1500-1506,32@1800-1806,257@2100-2106,32@2400-2406,32@2700-2706,32@3000-3006,32@3300-3306,32@3600-3606}
 PROTON=${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton 11.0/proton}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 fail() { echo "FAIL: $*"; exit 1; }

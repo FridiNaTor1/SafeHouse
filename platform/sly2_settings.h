@@ -135,6 +135,10 @@ struct Sly1Options {
     // kSly1RhythmPads' order; kKeyUnknown: none)
     std::array<int, kSly1RhythmKeyCount> rhythmKeys{ kSly1DefaultRhythmKeys[0], kSly1DefaultRhythmKeys[1],
                                                      kSly1DefaultRhythmKeys[2], kSly1DefaultRhythmKeys[3] };
+    // [Keyboard] / [Controller] Skip Cutscene: the cutscene / conversation skip's own key (or mouse button) and controller
+    // button (system_settings.h kSly1DefaultSkipKey / kSly1DefaultSkipPad; kKeyUnknown: none)
+    int skipKey = kSly1DefaultSkipKey;
+    int skipPad = kSly1DefaultSkipPad;
     std::string audioDeviceId;        // the old [Audio] Output Device ID (Windows: an endpoint's id) until the game turns
                                       // it into Output Device (game.outputDevice, by name; sly1_settings.h sly1Upgrade)
 };

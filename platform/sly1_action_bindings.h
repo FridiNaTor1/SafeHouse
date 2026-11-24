@@ -32,6 +32,8 @@ enum Pad : int { Up, Down, Left, Right, Square, Circle, Cross, Triangle, Start, 
 enum class Context : int { Any, Turret, Van, Tank, Puffer, Jetpack, Rhythm, Vault, Count };
 
 // name, stable id, label, group, PS2 button, context. The defaults are the standard bindings of that button.
+// (R1, "Talk to Bentley (second button)", keeps its old id skip_dialogue: the cutscene / conversation skip is no PS2
+// button but a binding of its own, Settings.ini Skip Cutscene, sly1_settings.h)
 #define CANE_SLY1_ACTIONS(X) \
  X(MoveUp, "move_up", "Move forward", "Movement", Up, Any) \
  X(MoveDown, "move_down", "Move backward", "Movement", Down, Any) \
@@ -44,7 +46,7 @@ enum class Context : int { Any, Turret, Van, Tank, Puffer, Jetpack, Rhythm, Vaul
  X(PowerUpPrevious, "power_up_previous", "Previous power-up", "Sly", L2, Any) \
  X(PowerUpNext, "power_up_next", "Next power-up", "Sly", R2, Any) \
  X(Bentley, "bentley", "Talk to Bentley (binocucom)", "Sly", L1, Any) \
- X(SkipDialogue, "skip_dialogue", "Skip dialogue", "Sly", R1, Any) \
+ X(Bentley2, "skip_dialogue", "Talk to Bentley (second button)", "Sly", R1, Any) \
  X(CameraCenter, "camera_center", "Centre the camera", "Camera", R3, Any) \
  X(L3Button, "l3", "L3", "Camera", L3, Any) \
  X(Pause, "pause", "Pause", "Menus", Start, Any) \

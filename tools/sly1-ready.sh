@@ -128,7 +128,7 @@ step_places() {
         d=$OUT/places/$id
         # the title (Enter twice) into a new game, the warp once Paris plays, then 3600 swaps in the place
         if SLY1_SMOKE_DEBUG=1 SAFEHOUSE_DEBUGMENU="warp=$id@2400,infinite@2500" SLY1_SMOKE_EVERY=300 \
-            smoke "$d" "$INST" 6600 "257@1200-1206,257@1500-1506"; then
+            smoke "$d" "$INST" 6600 "256@1200-1206,257@1500-1506"; then
             s=$(lastshot "$d")
             okctx=$(grep '^shot ' "$d/shots/log.txt" | awk -v c="ctx=$ctx" '$0 ~ c' | tail -1)
             if [ "$world" != - ] && ! echo "$s" | grep -qi "world=[^=]*$world"; then fail "places/$label" "not in $world: $s"
@@ -215,7 +215,7 @@ EOF
 # dm CASE FRAMES SCRIPT [KEYS]: a smoke run into a new game (Enter twice), Debug mode, the debug menu's test steps
 # (SAFEHOUSE_DEBUGMENU: warp=, chk=, watch=, ... safehouse/testaid.cpp); OUT/CASE/game.log holds the watch lines
 dm() {
-    c=$1; f=$2; script=$3; keys=${4:-"257@1200-1206,257@1500-1506"}; shift 3; [ $# -gt 0 ] && shift
+    c=$1; f=$2; script=$3; keys=${4:-"256@1200-1206,257@1500-1506"}; shift 3; [ $# -gt 0 ] && shift
     SLY1_SMOKE_DEBUG=1 SAFEHOUSE_DEBUGMENU="$script" SLY1_SMOKE_EVERY=${SLY1_SMOKE_EVERY:-300} smoke "$OUT/$c" "$INST" "$f" "$keys"
 }
 # the audio of a smoke run (SLY1_SMOKE_AUDIO: float stereo 48 kHz) analysed by a short Python snippet
@@ -324,7 +324,7 @@ print("%.3f %.3f" % (np.abs(x).max(), hf))' "$a")
     broken=$OUT/bugs/broken-install
     rm -rf "$broken"; mkdir -p "$broken" && cp -al "$INST" "$broken/sly1" &&
         find "$broken/sly1/Worlds" -name 'Into the Machine.brx' -exec rm {} +
-    SLY1_SMOKE_DEBUG=1 SAFEHOUSE_DEBUGMENU="warp=103@2400" smoke "$OUT/bugs/loadfail" "$broken/sly1" 3600 "257@1200-1206,257@1500-1506"
+    SLY1_SMOKE_DEBUG=1 SAFEHOUSE_DEBUGMENU="warp=103@2400" smoke "$OUT/bugs/loadfail" "$broken/sly1" 3600 "256@1200-1206,257@1500-1506"
     if grep -q 'World loading failed' "$OUT/bugs/loadfail/game.log" && grep -q 'exited with 1' "$OUT/bugs/loadfail/smoke.txt"; then
         pass bugs/loadfail "$(grep -o 'World loading failed: .*brx' "$OUT/bugs/loadfail/game.log" | head -1 | sed 's|.*/||')"
     else fail bugs/loadfail "$(tail -1 "$OUT/bugs/loadfail/smoke.txt")"; fi
@@ -350,7 +350,7 @@ step_windows() {
     done
     if SLY1_WINE_DISPLAY=$disp SLY1_SMOKE_DEBUG=1 SLY1_SMOKE_EVERY=300 \
        SAFEHOUSE_DEBUGMENU="warp=102@2400,infinite@2500,chk=2@3000,mixtrace=1@3300$tour,mixtrace=0@5300" \
-       "$HERE/sly1-wine-smoke.sh" "$wb" "$d/loud49" "$d/inst/sly1" 6600 "257@1200-1206,257@1500-1506" > "$d/loud49.txt" 2>&1 &&
+       "$HERE/sly1-wine-smoke.sh" "$wb" "$d/loud49" "$d/inst/sly1" 6600 "256@1200-1206,257@1500-1506" > "$d/loud49.txt" 2>&1 &&
        [ -f "$d/inst/sly1/CameraDiagnostics/eerie_audio_after_saturator.wav" ]; then
         r=$(pyaudio '
 import wave

@@ -5,7 +5,8 @@
 # (BINDIR/safehouse --install, --verify sly1, in a private HOME and XDG profile under OUTDIR/profile), then the game in
 # a hidden window with scripted keys and a screenshot every 150 frames (tools/sly1-smoke-hooks.cpp,
 # SAFEHOUSE_SLY1_SMOKE), muted (SDL dummy audio driver), its user folder OUTDIR/user. Needs a display (X11/Wayland),
-# never shows a window. The default keys press Enter (Start) and Space (Cross) now and then: past the logos and the title,
+# never shows a window. The default keys press Escape (Start: the original's skip of the opening scene;
+# Enter is the cutscene skip's key there), Enter (Start) and Space (Cross) now and then: past the logos and the title,
 # into a new game and its first level. Exit 0 = the game ran FRAMES frames; check OUTDIR/shots and OUTDIR/game.log.
 # SLY1_SMOKE_EXTRA: more of tools/sly1-smoke-hooks.cpp's items (mouse, move, cursor, wheel, pad, padbtn, padaxis, shots,
 # size), e.g. "pad=ps5;padbtn=0@1800-1806"; the game's own test switches (SLY1_PCOPT, SLY1_REMAPPAGE, ...) pass through.
@@ -18,7 +19,7 @@
 # format, see the game.log's audio line) instead of the dummy driver; still nothing reaches a speaker.
 set -u
 BIN=$(cd "$1" && pwd); OUT=$2; SRC=$3; FRAMES=${4:-4200}
-KEYS=${5:-257@1200-1206,257@1500-1506,32@1800-1806,257@2100-2106,32@2400-2406,32@2700-2706,32@3000-3006,32@3300-3306,32@3600-3606}
+KEYS=${5:-256@1200-1206,257@1500-1506,32@1800-1806,257@2100-2106,32@2400-2406,32@2700-2706,32@3000-3006,32@3300-3306,32@3600-3606}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 fail() { echo "FAIL: $*"; exit 1; }
 P=$OUT/profile

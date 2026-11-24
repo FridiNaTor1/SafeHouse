@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
     check(d.system.keyboardBindings[4] == st::kSly2DefaultKeyboardBindings[4], "Sly 2's keyboard layout by default");
     check(d.system.keyboardBindings[10] == st::kMouseBindingBase + 1 && d.system.keyboardBindings[15] == st::kMouseBindingBase + 2,
           "the binocucom (L1) on the right mouse button as Sly 2's, the camera centre (R3) on the middle one");
-    check(has(td, "L1 = Mouse Right") && has(td, "Layout Revision = 2"), "the new layout written with its revision");
+    check(has(td, "L1 = Mouse Right") && has(td, "Layout Revision = 3"), "the new layout written with its revision");
     for (const char* section : {"[Display]", "[Graphics]", "[Audio]", "[Controls]", "[Controller]", "[Mouse]", "[Keyboard]", "[Game]", "[SafeHouse]"})
         check(has(td, section), "a section", section);
     for (const char* absent : {"[VR]", "[Language]", "Invert Binocucom", "Invert Turret", "Tank Left Track", "Mouse Aim In Hacking",
@@ -143,29 +143,58 @@ int main(int argc, char** argv) {
         st::Sly1Settings o = st::sly1Defaults();
         std::copy(std::begin(st::kSly2DefaultKeyboardBindings), std::end(st::kSly2DefaultKeyboardBindings), o.system.keyboardBindings);
         std::string text = st::sly1ToIni(o);
-        const size_t rev = text.find("Layout Revision = 2\n");
+        const size_t rev = text.find("Layout Revision = 3\n");
         check(rev != std::string::npos, "the revision line");
-        text.erase(rev, std::strlen("Layout Revision = 2\n"));
+        text.erase(rev, std::strlen("Layout Revision = 3\n"));
         text += "[Controls]\nDialogue Skip = On\n";
         const st::Sly1Settings up = st::sly1FromIni(text);
         check(up.system.keyboardBindings[10] == st::kMouseBindingBase + 1 && up.system.keyboardBindings[15] == st::kMouseBindingBase + 2,
               "revision 1's untouched L1 / R3 moved to the new defaults");
         check(up.system.instantSkipCutscenes == 1, "Dialogue Skip On: Instant Skip Cutscenes on");
         const std::string upText = st::sly1ToIni(up);
-        check(!has(upText, "Dialogue Skip") && has(upText, "Layout Revision = 2"), "Dialogue Skip gone, the revision written");
+        check(!has(upText, "Dialogue Skip") && has(upText, "Layout Revision = 3"), "Dialogue Skip gone, the revision written");
         // changed by the player: L1 on F, R3 left on the right mouse button with L1 elsewhere moves; a key already used
         // by another binding is never taken
         o.system.keyboardBindings[10] = 'F';
         o.system.keyboardBindings[0] = st::kMouseBindingBase + 2;   // (Move Forward on the middle button)
         text = st::sly1ToIni(o);
-        text.erase(text.find("Layout Revision = 2\n"), std::strlen("Layout Revision = 2\n"));
+        text.erase(text.find("Layout Revision = 3\n"), std::strlen("Layout Revision = 3\n"));
         const st::Sly1Settings kept = st::sly1FromIni(text);
         check(kept.system.keyboardBindings[10] == 'F', "a changed L1 kept");
         check(kept.system.keyboardBindings[15] == st::kMouseBindingBase + 1, "R3 not moved onto a key another binding uses");
-        // revision 2: nothing moves (a player's own L1 = 1 after the update stays)
+        // the current revision: nothing moves (a player's own L1 = 1 after the update stays)
         o = st::sly1Defaults();
         o.system.keyboardBindings[10] = '1';
-        check(st::sly1FromIni(st::sly1ToIni(o)).system.keyboardBindings[10] == '1', "a revision 2 file is left alone");
+        check(st::sly1FromIni(st::sly1ToIni(o)).system.keyboardBindings[10] == '1', "a current file is left alone");
+        // the skip's own binding (revision 3): R1 / Enter by default, written and read back
+        const st::Sly1Settings d = st::sly1Defaults();
+        check(d.sly1.skipPad == st::kSly1DefaultSkipPad && d.sly1.skipKey == st::kSly1DefaultSkipKey, "the skip's defaults: R1, Enter");
+        const std::string dText = st::sly1ToIni(d);
+        check(has(dText, "[Controller]") && has(dText, "Skip Cutscene = Enter"), "the skip's keys written", dText);
+        st::Sly1Settings sk = d;
+        sk.sly1.skipPad = 0;                            // (A / Cross)
+        sk.sly1.skipKey = st::kMouseBindingBase + 3;    // (mouse 4)
+        const st::Sly1Settings skBack = st::sly1FromIni(st::sly1ToIni(sk));
+        check(skBack.sly1.skipPad == 0 && skBack.sly1.skipKey == st::kMouseBindingBase + 3, "a moved skip read back");
+        const st::Sly1Settings none = st::sly1FromIni("[Keyboard]\nLayout Revision = 3\nSkip Cutscene = None\n[Controller]\nSkip Cutscene = None\n");
+        check(none.sly1.skipKey == st::kKeyUnknown && none.sly1.skipPad == st::kKeyUnknown, "an unbound skip");
+        // a file from before (revision 2): the skip was the Circle binding. Untouched Circle: the new defaults; a moved
+        // Circle keeps the skip where it was (only an untouched default migrates)
+        st::Sly1Settings r2 = st::sly1Defaults();
+        std::string r2Text = st::sly1ToIni(r2);
+        r2Text.replace(r2Text.find("Layout Revision = 3"), std::strlen("Layout Revision = 3"), "Layout Revision = 2");
+        const st::Sly1Settings r2Up = st::sly1FromIni(r2Text);
+        check(r2Up.sly1.skipPad == st::kSly1DefaultSkipPad && r2Up.sly1.skipKey == st::kSly1DefaultSkipKey,
+              "an untouched Circle: the skip on R1 / Enter");
+        r2.system.gamepadBindings[5] = 3;    // (Circle on Y)
+        r2.system.keyboardBindings[5] = 'F';
+        r2Text = st::sly1ToIni(r2);
+        r2Text.replace(r2Text.find("Layout Revision = 3"), std::strlen("Layout Revision = 3"), "Layout Revision = 2");
+        const st::Sly1Settings r2Moved = st::sly1FromIni(r2Text);
+        check(r2Moved.sly1.skipPad == 3 && r2Moved.sly1.skipKey == 'F', "a moved Circle keeps the skip on it");
+        check(has(st::sly1ToIni(r2Moved), "Layout Revision = 3"), "the revision 3 written");
+        // revision 3: a moved Circle no longer takes the skip
+        check(st::sly1FromIni(st::sly1ToIni(r2)).sly1.skipPad == st::kSly1DefaultSkipPad, "a current file's skip is its own");
         st::Sly1Settings off = st::sly1FromIni("[Controls]\nDialogue Skip = Off\n");
         check(off.system.instantSkipCutscenes == 0, "Dialogue Skip Off: Instant Skip Cutscenes stays off");
     }

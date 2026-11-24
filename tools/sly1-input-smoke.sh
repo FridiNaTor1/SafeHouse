@@ -18,9 +18,10 @@ CASES=${4:-"keyboard mouse remap pad-xbox pad-ps3 pad-ps4 pad-ps5 pad-switch pad
 HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$OUT"
 fails=0
-# Into the first level: the title (Enter twice: the first press wakes the title menu), then the intro's binocucom
+# Into the first level: the opening scene ended by Escape (the fixed second Start: the original's Start skip; Enter is
+# the cutscene skip's key there and takes its 2 second hold), the title (Enter), then the intro's binocucom
 # talk skipped line by line (R1: Left Shift); Sly is playable from about swap 4500.
-INTO="257@1500-1504,257@1800-1804"
+INTO="256@1500-1504,257@1800-1804"
 PADINTO="7@1500-1504,7@1800-1804"
 f=2000
 while [ $f -lt 4440 ]; do INTO="$INTO,340@$f-$((f + 3))"; PADINTO="$PADINTO,5@$f-$((f + 3))"; f=$((f + 40)); done
