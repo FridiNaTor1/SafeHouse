@@ -216,6 +216,8 @@ if(CANE_IOS)
  target_link_libraries(Sly1-Release PRIVATE cane_platform cane_ui cane_sdl cane_gl_metal FAudio-static
   Threads::Threads "-framework Foundation" "-framework UIKit" "-framework Metal" "-framework QuartzCore")
  cane_sly1_metal_programs(Sly1-Release)
+ # (the renderer choice, platform/vulkan/vk_game.cpp, which gl.cpp opens its window through; no Vulkan on iOS: Metal)
+ cane_sly1_renderer(Sly1-Release)
  cane_ios_framework(Sly1-Release Sly1Release)
  return()
 endif()
