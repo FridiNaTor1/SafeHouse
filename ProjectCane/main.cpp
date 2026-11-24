@@ -1,7 +1,0 @@
-#include <iostream>
-
-// IF WE EVER GET AROUND TO DOING THE OTHER SLY'S I PLAN ON MAKING THIS A LAUNCHER
-int main()
-{
-
-}
