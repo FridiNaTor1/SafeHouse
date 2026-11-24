@@ -290,10 +290,10 @@ constexpr std::array<const char*, SOUND_BANK_COUNT> SOUND_BANK_NAMES =
 {
     "Common",
     "Intro",
-    "Snow",
     "Underwater",
     "Muggshot",
     "Voodoo",
+    "Snow",
     "Clockwerk",
 };
 
