@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip necesita una GPU Adreno 6xx o más reciente.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Aún no se sabe si Mesa Turnip funciona en esta GPU Adreno.",
   "Rhythm minigame": "Minijuego de ritmo",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Solo en el minijuego de ritmo (la pelea contra Mz. Ruby): esta tecla toca ese botón allí. En todo lo demás conserva su acción habitual."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Solo en el minijuego de ritmo (la pelea contra Mz. Ruby): esta tecla toca ese botón allí. En todo lo demás conserva su acción habitual.",
+  "Your saves are already in that folder.": "Tus partidas guardadas ya están en esa carpeta.",
+  "Choose a folder outside the current save folder.": "Elige una carpeta fuera de la carpeta de partidas guardadas actual.",
+  "Not enough free space there: your saves need %s.": "No hay suficiente espacio libre ahí: tus partidas guardadas necesitan %s.",
+  "Moving your saves": "Moviendo tus partidas guardadas",
+  "Saves moved": "Partidas guardadas movidas",
+  "Save location": "Ubicación de las partidas guardadas",
+  "Keep saves in": "Guardar partidas en",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Dónde guarda SafeHouse tus partidas guardadas, los ajustes de los juegos y los mods (Sly 1, 2 y 3). Una carpeta en el almacenamiento del teléfono te permite copiar partidas guardadas con un gestor de archivos o un ordenador.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Dónde guarda SafeHouse tus partidas guardadas, los ajustes de los juegos y los mods (Sly 1, 2 y 3). Otra carpeta, p. ej. en otra unidad, facilita copiarlas de un lado a otro.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Cualquier carpeta, con el selector de carpetas del sistema. Tus partidas guardadas van a una carpeta \"SafeHouse Saves\" dentro de ella.",
+  "Saves go to: %s": "Las partidas guardadas van a: %s",
+  "That folder already has saves.": "Esa carpeta ya tiene partidas guardadas.",
+  "Move my saves there": "Mover mis partidas guardadas allí",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Copia allí tus partidas guardadas, los ajustes de los juegos y los mods y comprueba cada archivo; solo entonces se eliminan las copias antiguas. Un archivo con el mismo nombre que ya esté allí se conserva en una carpeta \"Replaced\".",
+  "Use the saves there": "Usar las partidas guardadas de allí",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Cambia a las partidas guardadas de esa carpeta. Tus partidas guardadas actuales se quedan donde están.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "La carpeta de partidas guardadas %s no está disponible (¿una unidad que no está conectada?). Se usa la carpeta predeterminada hasta que vuelva.",
+  "Choose where SafeHouse keeps your saves": "Elige dónde guarda SafeHouse tus partidas guardadas"
  }
 }

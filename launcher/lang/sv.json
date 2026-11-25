@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip kräver en Adreno 6xx-GPU eller nyare.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Det är ännu inte känt om Mesa Turnip fungerar på den här Adreno-GPU:n.",
   "Rhythm minigame": "Rytmminispel",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Bara i rytmminispelet (striden mot Mz. Ruby): den här tangenten spelar den knappen där. Överallt annars behåller den sin vanliga åtgärd."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Bara i rytmminispelet (striden mot Mz. Ruby): den här tangenten spelar den knappen där. Överallt annars behåller den sin vanliga åtgärd.",
+  "Your saves are already in that folder.": "Dina sparfiler finns redan i den mappen.",
+  "Choose a folder outside the current save folder.": "Välj en mapp utanför den nuvarande mappen med sparfiler.",
+  "Not enough free space there: your saves need %s.": "Där finns inte tillräckligt med ledigt utrymme: dina sparfiler behöver %s.",
+  "Moving your saves": "Flyttar dina sparfiler",
+  "Saves moved": "Sparfilerna har flyttats",
+  "Save location": "Plats för sparfiler",
+  "Keep saves in": "Spara sparfiler i",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Var SafeHouse förvarar dina sparfiler, spelens inställningar och mods (Sly 1, 2 och 3). Med en mapp i telefonens lagring kan du kopiera sparfiler in och ut med en filhanterare eller en dator.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Var SafeHouse förvarar dina sparfiler, spelens inställningar och mods (Sly 1, 2 och 3). En annan mapp, t.ex. på en annan enhet, gör det enkelt att kopiera dem in och ut.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Valfri mapp, med systemets mappväljare. Dina sparfiler hamnar i en mapp \"SafeHouse Saves\" i den.",
+  "Saves go to: %s": "Sparfiler hamnar i: %s",
+  "That folder already has saves.": "Den mappen har redan sparfiler.",
+  "Move my saves there": "Flytta mina sparfiler dit",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Kopierar dina sparfiler, spelens inställningar och mods dit och kontrollerar varje fil; först därefter tas de gamla kopiorna bort. En fil med samma namn som redan finns där behålls i en mapp \"Replaced\".",
+  "Use the saves there": "Använd sparfilerna där",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Byter till sparfilerna i den mappen. Dina nuvarande sparfiler stannar där de är.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "Mappen med sparfiler %s är inte tillgänglig (en enhet som inte är ansluten?). Standardmappen används tills den är tillbaka.",
+  "Choose where SafeHouse keeps your saves": "Välj var SafeHouse förvarar dina sparfiler"
  }
 }

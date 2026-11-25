@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip には Adreno 6xx 以降の GPU が必要です。",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Mesa Turnip がこの Adreno GPU で動作するかはまだ分かっていません。",
   "Rhythm minigame": "リズムミニゲーム",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "リズムミニゲーム（Mz. Rubyとの戦い）でのみ、このキーでそのボタンを押します。それ以外では通常の操作のままです。"
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "リズムミニゲーム（Mz. Rubyとの戦い）でのみ、このキーでそのボタンを押します。それ以外では通常の操作のままです。",
+  "Your saves are already in that folder.": "セーブデータはすでにそのフォルダーにあります。",
+  "Choose a folder outside the current save folder.": "現在のセーブフォルダーの外にあるフォルダーを選んでください。",
+  "Not enough free space there: your saves need %s.": "そこには空き容量が足りません。セーブデータには %s 必要です。",
+  "Moving your saves": "セーブデータを移動中",
+  "Saves moved": "セーブデータを移動しました",
+  "Save location": "セーブデータの場所",
+  "Keep saves in": "セーブデータの保存先",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "SafeHouse がセーブデータ、ゲームの設定、MOD を置く場所です（Sly 1、2、3）。スマートフォンのストレージにあるフォルダーにすると、ファイルマネージャーやパソコンでセーブデータを出し入れできます。",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "SafeHouse がセーブデータ、ゲームの設定、MOD を置く場所です（Sly 1、2、3）。別のドライブなどのフォルダーにすると、ファイルを出し入れしやすくなります。",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "システムのフォルダー選択で任意のフォルダーを選べます。セーブデータはその中の「SafeHouse Saves」フォルダーに置かれます。",
+  "Saves go to: %s": "セーブデータの移動先: %s",
+  "That folder already has saves.": "そのフォルダーにはすでにセーブデータがあります。",
+  "Move my saves there": "セーブデータをそこへ移動",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "セーブデータ、ゲームの設定、MOD をそこへコピーし、すべてのファイルを確認します。古いコピーはその後で削除されます。そこにすでにある同じ名前のファイルは「Replaced」フォルダーに残されます。",
+  "Use the saves there": "そこにあるセーブデータを使う",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "そのフォルダーのセーブデータに切り替えます。現在のセーブデータはそのまま残ります。",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "セーブフォルダー %s が見つかりません（接続されていないドライブ？）。戻るまではデフォルトのフォルダーを使います。",
+  "Choose where SafeHouse keeps your saves": "SafeHouse がセーブデータを置く場所を選択"
  }
 }

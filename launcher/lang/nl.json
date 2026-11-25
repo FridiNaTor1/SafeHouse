@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip heeft een Adreno 6xx-GPU of nieuwer nodig.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Het is nog niet bekend of Mesa Turnip werkt op deze Adreno-GPU.",
   "Rhythm minigame": "Ritme-minigame",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Alleen in de ritme-minigame (het gevecht met Mz. Ruby): deze toets speelt daar die knop. Overal elders houdt hij zijn gewone actie."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Alleen in de ritme-minigame (het gevecht met Mz. Ruby): deze toets speelt daar die knop. Overal elders houdt hij zijn gewone actie.",
+  "Your saves are already in that folder.": "Je opslagbestanden staan al in die map.",
+  "Choose a folder outside the current save folder.": "Kies een map buiten de huidige map met opslagbestanden.",
+  "Not enough free space there: your saves need %s.": "Daar is niet genoeg vrije ruimte: je opslagbestanden hebben %s nodig.",
+  "Moving your saves": "Je opslagbestanden worden verplaatst",
+  "Saves moved": "Opslagbestanden verplaatst",
+  "Save location": "Locatie van opslagbestanden",
+  "Keep saves in": "Opslagbestanden bewaren in",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Waar SafeHouse je opslagbestanden, de instellingen van de games en mods bewaart (Sly 1, 2 en 3). Met een map in de telefoonopslag kun je opslagbestanden met een bestandsbeheerder of een computer erin en eruit kopiëren.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Waar SafeHouse je opslagbestanden, de instellingen van de games en mods bewaart (Sly 1, 2 en 3). Een andere map, bijv. op een andere schijf, maakt het makkelijk om ze erin en eruit te kopiëren.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Elke map, met de mapkiezer van het systeem. Je opslagbestanden komen in een map \"SafeHouse Saves\" daarin.",
+  "Saves go to: %s": "Opslagbestanden gaan naar: %s",
+  "That folder already has saves.": "Die map bevat al opslagbestanden.",
+  "Move my saves there": "Mijn opslagbestanden daarheen verplaatsen",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Kopieert je opslagbestanden, de instellingen van de games en mods daarheen en controleert elk bestand; pas daarna worden de oude kopieën verwijderd. Een bestand met dezelfde naam dat er al staat, wordt bewaard in een map \"Replaced\".",
+  "Use the saves there": "De opslagbestanden daar gebruiken",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Schakelt over naar de opslagbestanden in die map. Je huidige opslagbestanden blijven waar ze zijn.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "De map met opslagbestanden %s is niet beschikbaar (een schijf die niet is aangesloten?). Tot hij terug is, wordt de standaardmap gebruikt.",
+  "Choose where SafeHouse keeps your saves": "Kies waar SafeHouse je opslagbestanden bewaart"
  }
 }

@@ -1308,6 +1308,17 @@ int main(int argc, char** argv) {
                 std::cout << cane::utf8(backend.installRoot()) << (backend.customInstallRoot() ? "" : " (default)") << "\n";
                 return 0;
             }
+            // --save-dir [FOLDER | default] [--move]: where the saves are kept (Settings > Games "Keep saves in"); --move
+            // moves the current ones there first (checked file by file).
+            if (args[0] == "--save-dir" && (args.size() <= 2 || (args.size() == 3 && args[2] == "--move"))) {
+                if (args.size() >= 2) {
+                    backend.setSaveRoot(args[1] == "default" ? cane::fs::path{} : backend.saveRootFor(cane::path(args[1])), args.size() == 3, cancel, log);
+                    backend.applySaveRoot();
+                }
+                std::cout << cane::utf8(backend.saveRoot()) << (backend.customSaveRoot() ? "" : " (default)")
+                          << (backend.saveRootMissing() ? " (chosen folder missing)" : "") << "\n";
+                return 0;
+            }
             // --move-install GAME FOLDER [--region R]: moves an installed region (Settings > Games "Move…").
             if (args[0] == "--move-install" && (args.size() == 3 || args.size() == 5)) {
                 std::vector<std::string> gameArgs{args[0], args[1]};

@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip krever en Adreno 6xx-GPU eller nyere.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Det er ennå ikke kjent om Mesa Turnip fungerer på denne Adreno-GPU-en.",
   "Rhythm minigame": "Rytme-minispill",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Bare i rytme-minispillet (kampen mot Mz. Ruby): denne tasten spiller den knappen der. Alle andre steder beholder den sin vanlige handling."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Bare i rytme-minispillet (kampen mot Mz. Ruby): denne tasten spiller den knappen der. Alle andre steder beholder den sin vanlige handling.",
+  "Your saves are already in that folder.": "Lagringene dine er allerede i den mappen.",
+  "Choose a folder outside the current save folder.": "Velg en mappe utenfor den nåværende lagringsmappen.",
+  "Not enough free space there: your saves need %s.": "Det er ikke nok ledig plass der: lagringene dine trenger %s.",
+  "Moving your saves": "Flytter lagringene dine",
+  "Saves moved": "Lagringene er flyttet",
+  "Save location": "Plassering av lagringer",
+  "Keep saves in": "Behold lagringer i",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Hvor SafeHouse oppbevarer lagringene dine, spillenes innstillinger og mods (Sly 1, 2 og 3). Med en mappe på telefonens lagring kan du kopiere lagringer inn og ut med en filbehandler eller en datamaskin.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Hvor SafeHouse oppbevarer lagringene dine, spillenes innstillinger og mods (Sly 1, 2 og 3). En annen mappe, f.eks. på en annen disk, gjør det enkelt å kopiere dem inn og ut.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Hvilken som helst mappe, med systemets mappevelger. Lagringene dine havner i en mappe \"SafeHouse Saves\" i den.",
+  "Saves go to: %s": "Lagringer havner i: %s",
+  "That folder already has saves.": "Den mappen har allerede lagringer.",
+  "Move my saves there": "Flytt lagringene mine dit",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Kopierer lagringene dine, spillenes innstillinger og mods dit og kontrollerer hver fil; først da fjernes de gamle kopiene. En fil med samme navn som allerede er der, beholdes i en mappe \"Replaced\".",
+  "Use the saves there": "Bruk lagringene der",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Bytter til lagringene i den mappen. De nåværende lagringene dine blir der de er.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "Lagringsmappen %s er ikke tilgjengelig (en disk som ikke er tilkoblet?). Standardmappen brukes til den er tilbake.",
+  "Choose where SafeHouse keeps your saves": "Velg hvor SafeHouse oppbevarer lagringene dine"
  }
 }

@@ -242,7 +242,7 @@ inline std::string stageLabel(const std::string& stage) {
         {"ps3-prepare", N_("Reading your installed textures")}, {"ps3-read", N_("Reading The Sly Collection (PS3)")},
         {"ps3-textures", N_("Matching the PS3 HD textures")},  {"ps3-done", N_("PS3 HD textures installed")},
         {"languages", N_("Sharing the languages")},          {"ps3-languages", N_("Reading The Sly Collection's languages")},
-        {"verify", N_("Checking installed files")}, {"move", N_("Moving the installation")}, {"moved", N_("Installation moved")}, {"complete", N_("Ready to play")},
+        {"verify", N_("Checking installed files")}, {"move", N_("Moving the installation")}, {"moved", N_("Installation moved")}, {"saves", N_("Moving your saves")}, {"saves-moved", N_("Saves moved")}, {"complete", N_("Ready to play")},
         {"error", N_("Installation failed")}};
     auto found = labels.find(stage);
     return found == labels.end() ? stage : std::string(tr(found->second.c_str()));

@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "O Mesa Turnip precisa de uma GPU Adreno 6xx ou mais recente.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Ainda não se sabe se o Mesa Turnip funciona nesta GPU Adreno.",
   "Rhythm minigame": "Minijogo de ritmo",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Apenas no minijogo de ritmo (a luta contra Mz. Ruby): esta tecla toca esse botão ali. Em todo o resto mantém a sua ação habitual."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Apenas no minijogo de ritmo (a luta contra Mz. Ruby): esta tecla toca esse botão ali. Em todo o resto mantém a sua ação habitual.",
+  "Your saves are already in that folder.": "Os teus jogos guardados já estão nessa pasta.",
+  "Choose a folder outside the current save folder.": "Escolhe uma pasta fora da pasta de jogos guardados atual.",
+  "Not enough free space there: your saves need %s.": "Não há espaço livre suficiente aí: os teus jogos guardados precisam de %s.",
+  "Moving your saves": "A mover os teus jogos guardados",
+  "Saves moved": "Jogos guardados movidos",
+  "Save location": "Localização dos jogos guardados",
+  "Keep saves in": "Guardar jogos em",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Onde o SafeHouse guarda os teus jogos guardados, as definições dos jogos e os mods (Sly 1, 2 e 3). Uma pasta no armazenamento do telemóvel permite copiar jogos guardados com um gestor de ficheiros ou um computador.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Onde o SafeHouse guarda os teus jogos guardados, as definições dos jogos e os mods (Sly 1, 2 e 3). Outra pasta, por ex. noutra unidade, facilita copiá-los de um lado para o outro.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Qualquer pasta, com o seletor de pastas do sistema. Os teus jogos guardados vão para uma pasta \"SafeHouse Saves\" dentro dela.",
+  "Saves go to: %s": "Os jogos guardados vão para: %s",
+  "That folder already has saves.": "Essa pasta já tem jogos guardados.",
+  "Move my saves there": "Mover os meus jogos guardados para lá",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Copia para lá os teus jogos guardados, as definições dos jogos e os mods e verifica cada ficheiro; só então as cópias antigas são removidas. Um ficheiro com o mesmo nome que já lá esteja é mantido numa pasta \"Replaced\".",
+  "Use the saves there": "Usar os jogos guardados de lá",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Muda para os jogos guardados dessa pasta. Os teus jogos guardados atuais ficam onde estão.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "A pasta de jogos guardados %s não está disponível (uma unidade que não está ligada?). É usada a pasta predefinida até ela voltar.",
+  "Choose where SafeHouse keeps your saves": "Escolhe onde o SafeHouse guarda os teus jogos guardados"
  }
 }
