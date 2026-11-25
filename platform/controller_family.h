@@ -795,6 +795,7 @@ inline Button fromGlfwBinding(int binding) {
     case GLFW_GAMEPAD_BUTTON_DPAD_LEFT: return Button::DpadLeft;
     case settings::kGamepadLeftTrigger: return Button::LT;
     case settings::kGamepadRightTrigger: return Button::RT;
+    case settings::kGamepadRightStick: return Button::RS;   // (an advanced action on the right stick)
     default: return Button::Count;
     }
 }

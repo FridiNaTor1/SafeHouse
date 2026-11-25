@@ -1,4 +1,4 @@
-# The iOS / iPadOS app (SafeHouse.app: the launcher, Sly 2 and Sly 3 on Metal; Sly2-Release/notes/IOS_2026-11-11.md,
+# The iOS / iPadOS app (SafeHouse.app: the launcher, Sly 1, Sly 2 and Sly 3 on Metal; Sly2-Release/notes/IOS_2026-11-11.md,
 # docs/PACKAGING.md "Sly 3 on every platform"): an .ipa for iPhone and iPad (both games in it), and on request a
 # simulator build that starts on an iPhone and an iPad simulator (Sly 2's and Sly 3's self tests in the app, then the
 # launcher with a screenshot). FFmpeg comes from scripts/ios/ffmpeg.sh (cached), SDL2 and FAudio from their pinned
@@ -74,10 +74,11 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
 
       - name: Tools and SDKs
         run: |
-          brew install ninja
+          brew install ninja glslang spirv-cross   # (Sly 1's programs as MSL, cmake/metal_shaders.py)
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
           xcrun --sdk iphonesimulator --show-sdk-path
@@ -117,8 +118,8 @@ jobs:
       - name: Package (device, ad hoc signed .ipa)
         run: |
           python3 scripts/ios/package.py --build build/ios-device --sdk iphoneos --out dist/ios --ipa --ffmpeg "$RUNNER_TEMP/ffmpeg-iphoneos"
-          # (both games and their tools copies are in the app)
-          for f in Sly2Release Sly2Tools Sly3Release Sly3Tools; do test -f "dist/ios/SafeHouse.app/Frameworks/$f.framework/$f"; done
+          # (the games and their tools copies are in the app)
+          for f in Sly1Release Sly1Tools Sly2Release Sly2Tools Sly3Release Sly3Tools; do test -f "dist/ios/SafeHouse.app/Frameworks/$f.framework/$f"; done
           ls -l dist/ios/*.ipa
 
       - name: Signing certificate and profile (when the secrets are available)

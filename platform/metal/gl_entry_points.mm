@@ -439,6 +439,189 @@ GLenum APIENTRY mtl_glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 tim
 
 void APIENTRY mtl_glClipControl(GLenum origin, GLenum depth) { Ctx()->ClipControl(origin, depth); }
 
+// ---- Sly 1's renderer (tools/sly1-metal-gl-coverage.py: every GL function it uses is in kProcTable)
+
+GLboolean APIENTRY mtl_glIsEnabled(GLenum cap) { return Ctx()->IsEnabled(cap) ? GL_TRUE : GL_FALSE; }
+
+void APIENTRY mtl_glGetBooleanv(GLenum pname, GLboolean* data) {
+  int values[4] = {};
+  float floats[4] = {};
+  if (Ctx()->GetInteger(pname, values)) {
+    const int count = pname == GL_COLOR_WRITEMASK || pname == GL_VIEWPORT || pname == GL_SCISSOR_BOX ? 4 : 1;
+    for (int i = 0; i < count; ++i) data[i] = values[i] ? GL_TRUE : GL_FALSE;
+  } else if (Ctx()->GetFloat(pname, floats)) {
+    data[0] = floats[0] != 0.0f ? GL_TRUE : GL_FALSE;
+  } else {
+    Ctx()->SetError(GL_INVALID_ENUM, "GetBoolean", pname);
+  }
+}
+
+void APIENTRY mtl_glGetDoublev(GLenum pname, GLdouble* data) {
+  float values[4] = {};
+  if (!Ctx()->GetFloat(pname, values)) {
+    Ctx()->SetError(GL_INVALID_ENUM, "GetDouble", pname);
+    return;
+  }
+  const int count = pname == GL_DEPTH_RANGE ? 2 : 1;
+  for (int i = 0; i < count; ++i) data[i] = values[i];
+}
+
+// (the indexed state: one colour attachment and one viewport here, so index 0 is the state itself)
+void APIENTRY mtl_glEnablei(GLenum cap, GLuint index) {
+  if (index == 0) Ctx()->SetCapability(cap, true);
+}
+void APIENTRY mtl_glDisablei(GLenum cap, GLuint index) {
+  if (index == 0) Ctx()->SetCapability(cap, false);
+}
+void APIENTRY mtl_glColorMaski(GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+  if (index == 0) Ctx()->ColorMask(r, g, b, a);
+}
+void APIENTRY mtl_glBlendFunci(GLuint index, GLenum s, GLenum d) {
+  if (index == 0) Ctx()->BlendFuncSeparate(s, d, s, d);
+}
+void APIENTRY mtl_glBlendFuncSeparatei(GLuint index, GLenum srgb, GLenum drgb, GLenum sa, GLenum da) {
+  if (index == 0) Ctx()->BlendFuncSeparate(srgb, drgb, sa, da);
+}
+void APIENTRY mtl_glBlendEquationi(GLuint index, GLenum mode) {
+  if (index == 0) Ctx()->BlendEquationSeparate(mode, mode);
+}
+void APIENTRY mtl_glBlendEquationSeparatei(GLuint index, GLenum rgb, GLenum alpha) {
+  if (index == 0) Ctx()->BlendEquationSeparate(rgb, alpha);
+}
+void APIENTRY mtl_glDepthRange(GLdouble n, GLdouble f) {
+  Ctx()->DepthRange(static_cast<float>(n), static_cast<float>(f));
+}
+void APIENTRY mtl_glDepthRangef(GLfloat n, GLfloat f) { Ctx()->DepthRange(n, f); }
+void APIENTRY mtl_glDepthRangeIndexed(GLuint index, GLdouble n, GLdouble f) {
+  if (index == 0) Ctx()->DepthRange(static_cast<float>(n), static_cast<float>(f));
+}
+void APIENTRY mtl_glDepthRangeArrayv(GLuint first, GLsizei count, const GLdouble* v) {
+  if (first == 0 && count > 0) Ctx()->DepthRange(static_cast<float>(v[0]), static_cast<float>(v[1]));
+}
+void APIENTRY mtl_glViewportIndexedf(GLuint index, GLfloat x, GLfloat y, GLfloat w, GLfloat h) {
+  if (index == 0) {
+    Ctx()->Viewport(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h));
+  }
+}
+void APIENTRY mtl_glViewportIndexedfv(GLuint index, const GLfloat* v) {
+  mtl_glViewportIndexedf(index, v[0], v[1], v[2], v[3]);
+}
+void APIENTRY mtl_glViewportArrayv(GLuint first, GLsizei count, const GLfloat* v) {
+  if (first == 0 && count > 0) mtl_glViewportIndexedf(0, v[0], v[1], v[2], v[3]);
+}
+void APIENTRY mtl_glScissorIndexed(GLuint index, GLint x, GLint y, GLsizei w, GLsizei h) {
+  if (index == 0) Ctx()->Scissor(x, y, w, h);
+}
+void APIENTRY mtl_glScissorIndexedv(GLuint index, const GLint* v) {
+  if (index == 0) Ctx()->Scissor(v[0], v[1], v[2], v[3]);
+}
+void APIENTRY mtl_glScissorArrayv(GLuint first, GLsizei count, const GLint* v) {
+  if (first == 0 && count > 0) Ctx()->Scissor(v[0], v[1], v[2], v[3]);
+}
+// (one reference and mask for both faces, as the layer's glStencilFunc / glStencilMask)
+void APIENTRY mtl_glStencilFuncSeparate(GLenum, GLenum func, GLint ref, GLuint mask) {
+  Ctx()->StencilFunc(func, ref, mask);
+}
+void APIENTRY mtl_glStencilMaskSeparate(GLenum, GLuint mask) { Ctx()->StencilMask(mask); }
+void APIENTRY mtl_glPointSize(GLfloat size) { Ctx()->PointSize(size); }
+void APIENTRY mtl_glDrawBuffer(GLenum) {}
+
+void APIENTRY mtl_glClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+  Ctx()->ClearBuffer(buffer, drawbuffer, value);
+}
+
+void APIENTRY mtl_glBufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags) {
+  Ctx()->BufferStorage(target, static_cast<size_t>(size), data, flags);
+}
+
+void APIENTRY mtl_glCompressedTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width,
+                                            GLsizei height, GLenum format, GLsizei size, const void* data) {
+  Ctx()->CompressedTexSubImage2D(target, level, x, y, width, height, format, static_cast<size_t>(size), data);
+}
+
+void APIENTRY mtl_glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void* pixels) {
+  Ctx()->GetTexImage(target, level, format, type, pixels);
+}
+
+void APIENTRY mtl_glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params) {
+  Ctx()->GetTexLevelParameter(target, level, pname, params);
+}
+
+void APIENTRY mtl_glTexParameterf(GLenum target, GLenum pname, GLfloat param) {
+  // (GL_TEXTURE_MAX_ANISOTROPY and the other float parameters: as whole numbers, which they are in the games)
+  Ctx()->TexParameteri(target, pname, static_cast<GLint>(param));
+}
+
+void APIENTRY mtl_glGetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment, GLenum pname,
+                                                        GLint* params) {
+  Ctx()->GetFramebufferAttachmentParameter(target, attachment, pname, params);
+}
+
+void APIENTRY mtl_glFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level,
+                                            GLint layer) {
+  Ctx()->FramebufferTextureLayer(target, attachment, texture, level, layer);
+}
+
+GLuint APIENTRY mtl_glGetUniformBlockIndex(GLuint program, const GLchar* name) {
+  return Ctx()->GetUniformBlockIndex(program, name);
+}
+
+void APIENTRY mtl_glUniformBlockBinding(GLuint, GLuint index, GLuint binding) {
+  // (prebuilt programs keep their declared bindings, which glGetUniformBlockIndex reports as the index)
+  if (index != binding) Ctx()->SetError(GL_INVALID_OPERATION, "UniformBlockBinding", binding);
+}
+
+GLboolean APIENTRY mtl_glIsProgram(GLuint program) { return Ctx()->IsProgram(program) ? GL_TRUE : GL_FALSE; }
+
+void APIENTRY mtl_glGetUniformfv(GLuint program, GLint location, GLfloat* params) {
+  Ctx()->GetUniform(program, location, params);
+}
+void APIENTRY mtl_glGetUniformiv(GLuint program, GLint location, GLint* params) {
+  Ctx()->GetUniform(program, location, params);
+}
+void APIENTRY mtl_glGetUniformuiv(GLuint program, GLint location, GLuint* params) {
+  Ctx()->GetUniform(program, location, params);
+}
+
+void APIENTRY mtl_glUniform1fv(GLint location, GLsizei count, const GLfloat* value) {
+  Ctx()->UniformFloats(location, count, value);
+}
+
+void APIENTRY mtl_glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+  Ctx()->UniformMatrix3(location, count, transpose == GL_TRUE, value);
+}
+
+void APIENTRY mtl_glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y) {
+  const float v[2] = {x, y};
+  Ctx()->VertexAttrib(index, v, 2);
+}
+void APIENTRY mtl_glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) {
+  const float v[3] = {x, y, z};
+  Ctx()->VertexAttrib(index, v, 3);
+}
+void APIENTRY mtl_glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
+  const float v[4] = {x, y, z, w};
+  Ctx()->VertexAttrib(index, v, 4);
+}
+
+void APIENTRY mtl_glDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count,
+                                                    GLsizei instancecount, GLuint baseinstance) {
+  Ctx()->DrawArraysInstancedBaseInstance(mode, first, count, instancecount, baseinstance);
+}
+
+void APIENTRY mtl_glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                           GLint basevertex) {
+  Ctx()->DrawElementsInstancedBaseVertexBaseInstance(mode, count, type, reinterpret_cast<size_t>(indices), 1,
+                                                     basevertex, 0);
+}
+
+void APIENTRY mtl_glDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type,
+                                                      const void* indices, GLsizei instancecount,
+                                                      GLuint baseinstance) {
+  Ctx()->DrawElementsInstancedBaseVertexBaseInstance(mode, count, type, reinterpret_cast<size_t>(indices),
+                                                     instancecount, 0, baseinstance);
+}
+
 #define CANE_CHECK(name, typedef_name) \
   static_assert(std::is_same_v<decltype(&mtl_##name), typedef_name>, #name " signature")
 
@@ -557,6 +740,51 @@ CANE_CHECK(glDeleteQueries, PFNGLDELETEQUERIESPROC);
 CANE_CHECK(glBeginQuery, PFNGLBEGINQUERYPROC);
 CANE_CHECK(glEndQuery, PFNGLENDQUERYPROC);
 CANE_CHECK(glGetQueryObjectui64v, PFNGLGETQUERYOBJECTUI64VPROC);
+CANE_CHECK(glIsEnabled, PFNGLISENABLEDPROC);
+CANE_CHECK(glGetBooleanv, PFNGLGETBOOLEANVPROC);
+CANE_CHECK(glGetDoublev, PFNGLGETDOUBLEVPROC);
+CANE_CHECK(glEnablei, PFNGLENABLEIPROC);
+CANE_CHECK(glDisablei, PFNGLDISABLEIPROC);
+CANE_CHECK(glColorMaski, PFNGLCOLORMASKIPROC);
+CANE_CHECK(glBlendFunci, PFNGLBLENDFUNCIPROC);
+CANE_CHECK(glBlendFuncSeparatei, PFNGLBLENDFUNCSEPARATEIPROC);
+CANE_CHECK(glBlendEquationi, PFNGLBLENDEQUATIONIPROC);
+CANE_CHECK(glBlendEquationSeparatei, PFNGLBLENDEQUATIONSEPARATEIPROC);
+CANE_CHECK(glDepthRange, PFNGLDEPTHRANGEPROC);
+CANE_CHECK(glDepthRangef, PFNGLDEPTHRANGEFPROC);
+CANE_CHECK(glDepthRangeIndexed, PFNGLDEPTHRANGEINDEXEDPROC);
+CANE_CHECK(glDepthRangeArrayv, PFNGLDEPTHRANGEARRAYVPROC);
+CANE_CHECK(glViewportIndexedf, PFNGLVIEWPORTINDEXEDFPROC);
+CANE_CHECK(glViewportIndexedfv, PFNGLVIEWPORTINDEXEDFVPROC);
+CANE_CHECK(glViewportArrayv, PFNGLVIEWPORTARRAYVPROC);
+CANE_CHECK(glScissorIndexed, PFNGLSCISSORINDEXEDPROC);
+CANE_CHECK(glScissorIndexedv, PFNGLSCISSORINDEXEDVPROC);
+CANE_CHECK(glScissorArrayv, PFNGLSCISSORARRAYVPROC);
+CANE_CHECK(glStencilFuncSeparate, PFNGLSTENCILFUNCSEPARATEPROC);
+CANE_CHECK(glStencilMaskSeparate, PFNGLSTENCILMASKSEPARATEPROC);
+CANE_CHECK(glPointSize, PFNGLPOINTSIZEPROC);
+CANE_CHECK(glDrawBuffer, PFNGLDRAWBUFFERPROC);
+CANE_CHECK(glClearBufferfv, PFNGLCLEARBUFFERFVPROC);
+CANE_CHECK(glCompressedTexSubImage2D, PFNGLCOMPRESSEDTEXSUBIMAGE2DPROC);
+CANE_CHECK(glGetTexImage, PFNGLGETTEXIMAGEPROC);
+CANE_CHECK(glGetTexLevelParameteriv, PFNGLGETTEXLEVELPARAMETERIVPROC);
+CANE_CHECK(glTexParameterf, PFNGLTEXPARAMETERFPROC);
+CANE_CHECK(glGetFramebufferAttachmentParameteriv, PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC);
+CANE_CHECK(glFramebufferTextureLayer, PFNGLFRAMEBUFFERTEXTURELAYERPROC);
+CANE_CHECK(glGetUniformBlockIndex, PFNGLGETUNIFORMBLOCKINDEXPROC);
+CANE_CHECK(glUniformBlockBinding, PFNGLUNIFORMBLOCKBINDINGPROC);
+CANE_CHECK(glIsProgram, PFNGLISPROGRAMPROC);
+CANE_CHECK(glGetUniformfv, PFNGLGETUNIFORMFVPROC);
+CANE_CHECK(glGetUniformiv, PFNGLGETUNIFORMIVPROC);
+CANE_CHECK(glGetUniformuiv, PFNGLGETUNIFORMUIVPROC);
+CANE_CHECK(glUniform1fv, PFNGLUNIFORM1FVPROC);
+CANE_CHECK(glUniformMatrix3fv, PFNGLUNIFORMMATRIX3FVPROC);
+CANE_CHECK(glVertexAttrib2f, PFNGLVERTEXATTRIB2FPROC);
+CANE_CHECK(glVertexAttrib3f, PFNGLVERTEXATTRIB3FPROC);
+CANE_CHECK(glVertexAttrib4f, PFNGLVERTEXATTRIB4FPROC);
+CANE_CHECK(glDrawArraysInstancedBaseInstance, PFNGLDRAWARRAYSINSTANCEDBASEINSTANCEPROC);
+CANE_CHECK(glDrawElementsBaseVertex, PFNGLDRAWELEMENTSBASEVERTEXPROC);
+CANE_CHECK(glDrawElementsInstancedBaseInstance, PFNGLDRAWELEMENTSINSTANCEDBASEINSTANCEPROC);
 CANE_CHECK(glFenceSync, PFNGLFENCESYNCPROC);
 CANE_CHECK(glDeleteSync, PFNGLDELETESYNCPROC);
 CANE_CHECK(glClientWaitSync, PFNGLCLIENTWAITSYNCPROC);
@@ -689,6 +917,52 @@ const ProcEntry kProcTable[] = {
     CANE_PROC(glDeleteSync),
     CANE_PROC(glClientWaitSync),
     CANE_PROC(glClipControl),
+    CANE_PROC(glIsEnabled),
+    CANE_PROC(glGetBooleanv),
+    CANE_PROC(glGetDoublev),
+    CANE_PROC(glEnablei),
+    CANE_PROC(glDisablei),
+    CANE_PROC(glColorMaski),
+    CANE_PROC(glBlendFunci),
+    CANE_PROC(glBlendFuncSeparatei),
+    CANE_PROC(glBlendEquationi),
+    CANE_PROC(glBlendEquationSeparatei),
+    CANE_PROC(glDepthRange),
+    CANE_PROC(glDepthRangef),
+    CANE_PROC(glDepthRangeIndexed),
+    CANE_PROC(glDepthRangeArrayv),
+    CANE_PROC(glViewportIndexedf),
+    CANE_PROC(glViewportIndexedfv),
+    CANE_PROC(glViewportArrayv),
+    CANE_PROC(glScissorIndexed),
+    CANE_PROC(glScissorIndexedv),
+    CANE_PROC(glScissorArrayv),
+    CANE_PROC(glStencilFuncSeparate),
+    CANE_PROC(glStencilMaskSeparate),
+    CANE_PROC(glPointSize),
+    CANE_PROC(glDrawBuffer),
+    CANE_PROC(glClearBufferfv),
+    CANE_PROC(glCompressedTexSubImage2D),
+    CANE_PROC(glGetTexImage),
+    CANE_PROC(glGetTexLevelParameteriv),
+    CANE_PROC(glTexParameterf),
+    CANE_PROC(glGetFramebufferAttachmentParameteriv),
+    CANE_PROC(glFramebufferTextureLayer),
+    CANE_PROC(glGetUniformBlockIndex),
+    CANE_PROC(glUniformBlockBinding),
+    CANE_PROC(glIsProgram),
+    CANE_PROC(glGetUniformfv),
+    CANE_PROC(glGetUniformiv),
+    CANE_PROC(glGetUniformuiv),
+    CANE_PROC(glUniform1fv),
+    CANE_PROC(glUniformMatrix3fv),
+    CANE_PROC(glVertexAttrib2f),
+    CANE_PROC(glVertexAttrib3f),
+    CANE_PROC(glVertexAttrib4f),
+    CANE_PROC(glDrawArraysInstancedBaseInstance),
+    CANE_PROC(glDrawElementsBaseVertex),
+    CANE_PROC(glDrawElementsInstancedBaseInstance),
+    CANE_PROC(glBufferStorage),  // (GL 4.4: not in GLAD's 4.3 table; Sly 1 asks ProcAddress for it)
 };
 
 #undef CANE_PROC
@@ -721,5 +995,7 @@ void SetSwapInterval(int interval) {
 void SwapBuffers() {
   if (g_context) g_context->SwapBuffers();
 }
+
+Context* CurrentContext() { return g_context.get(); }
 
 }  // namespace cane::gl_metal

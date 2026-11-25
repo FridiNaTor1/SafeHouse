@@ -3,7 +3,7 @@
 
 The app: the SafeHouse executable, the frameworks (SafeHouseCore, SafeHouseLauncher, CaneExtractor, Sly2Release and
 its copy Sly2Tools, which runs Sly 2's install tools so the game's own image starts clean; Sly3Release and its copy
-Sly3Tools the same way, when the build has Sly 3), Info.plist, the icon
+Sly3Tools the same way, when the build has Sly 3; Sly1Release / Sly1Tools likewise for Sly 1), Info.plist, the icon
 (packaging/ios/AppIcon-1024.png through actool) and the licences. No game data: the player installs from their own
 disc image inside the app.
 
@@ -25,8 +25,8 @@ import tempfile
 PRODUCT = "SafeHouse"
 FRAMEWORKS = ("SafeHouseCore", "SafeHouseLauncher", "CaneExtractor", "Sly2Release")
 # (the games' frameworks that get a tools copy: <game>Release -> <game>Tools; Sly 3's only when it was built)
-GAME_TOOLS = (("Sly2Release", "Sly2Tools"), ("Sly3Release", "Sly3Tools"))
-OPTIONAL_FRAMEWORKS = ("Sly3Release",)
+GAME_TOOLS = (("Sly1Release", "Sly1Tools"), ("Sly2Release", "Sly2Tools"), ("Sly3Release", "Sly3Tools"))
+OPTIONAL_FRAMEWORKS = ("Sly1Release", "Sly3Release")
 MINIMUM_OS = "15.0"
 
 
@@ -200,7 +200,7 @@ def main():
         built = build / "frameworks" / f"{name}.framework"
         if not built.is_dir():
             if name in OPTIONAL_FRAMEWORKS:
-                print(f"note: no {built} (a build without Sly 3)", flush=True)
+                print(f"note: no {built} (a build without that game)", flush=True)
                 continue
             sys.exit(f"missing {built}")
         shutil.copytree(built, app / "Frameworks" / f"{name}.framework", symlinks=True)

@@ -261,6 +261,22 @@ bool FTaskPrereqs(TASK* p)
     return true;
 }
 
+// (PC fix, not the original) a job the story is past: its last task done, its ending over (no closing sequence) and no
+// QoL replay playing it. The original lets such a job become the current one again: a task of it still available after
+// the job (Ep7's t7_laser_burn_pa 3093, Laser Redirection's optional "PA" task, whose trigger in the Sawmill Burn Room
+// stays in the world) activated in free roam begins its job (0x163D18 -> 0x162D50), which then stays current through
+// every world change; the player down then restarts it at its checkpoint (the job's script: 0x162E38 -> 0x165538), and
+// starting any other job restarts it too (0x1651D8 -> 0x165538 -> 0x162EA0): its first task goes back to 1 and every later
+// task of the episode to 0 (ChangeTaskState's successors), the progress back to Laser Redirection and the jobs after it
+// gone from the replays (user report 2026-11-24; a known bug of the original, used to replay jobs). Such a job is not
+// made current, not restored as the current one at a world's start, and never restarted. (debug: SLY2N_STALEJOBS=1 the
+// original's behaviour)
+bool FJobStale(JOB* p)
+{
+    if (!p || !p->ptaskLast || p->nSeq != 0 || FReplayActive() || SLY2N_ENV("SLY2N_STALEJOBS")) return false;
+    return FTaskDone(p->ptaskLast);
+}
+
 void ActivateTask(TASK* p);
 void DeactivateTaskCur(TASK* p);
 void ActivateJob(JOB* p);
@@ -471,7 +487,11 @@ void ActivateTaskNow(TASK* p)
                                                     p->ploC4 ? p->ploC4->oid : -1, p->ploC4 ? p->ploC4->nState : -9);
     SetTaskCur(p);
     if (p->idChk != -1) SetTaskChk(p);
-    if (p->pjob && !FJobCur(p->pjob)) JobBegin(p->pjob);  // orig 0x162D50
+    if (p->pjob && !FJobCur(p->pjob))
+    {
+        if (!FJobStale(p->pjob)) JobBegin(p->pjob);  // orig 0x162D50
+        else if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("task %d: its job %d is done: not begun again\n", p->oid, p->pjob->oid);
+    }
     if (FTaskLive(p))
     {
         ++p->cPlayed;
@@ -693,6 +713,14 @@ void ResetJob(JOB* p)
 // orig 0x00162EA0 (method 1250's job reset, the restart): the job over again
 void RestartJob(JOB* p)
 {
+    if (FJobStale(p))
+    {
+        // (PC fix: FJobStale) a done job current again is ended, its tasks and the episode's later ones left as they are
+        std::printf("job %d: done, not restarted (only ended)\n", p->oid);
+        if (s_psw->tasks.ptaskCur && s_psw->tasks.ptaskCur->pjob == p) DeactivateTaskCur(s_psw->tasks.ptaskCur);
+        JobEndIfCur(p);
+        return;
+    }
     ResetJob(p);
     if (p->ptaskFirst) ChangeTaskState(p->ptaskFirst, 1);
     if (s_psw->tasks.ptaskCur && s_psw->tasks.ptaskCur->pjob == p) DeactivateTaskCur(s_psw->tasks.ptaskCur);
@@ -706,6 +734,17 @@ void RestartTask(TASK* p);
 void JobEvent1D(JOB* p) { BroadcastTaskEvent(s_psw, 0x1D, p); }
 void JobRestartAtChk(JOB* p)
 {
+    if (FJobStale(p))
+    {
+        // (PC fix: FJobStale) a done job current again: ended, and the player down goes back to the world's checkpoint as
+        // with no job (TaskMgrOnEvent 16)
+        std::printf("job %d: done, not restarted at its checkpoint (only ended)\n", p->oid);
+        if (s_psw->tasks.ptaskCur && s_psw->tasks.ptaskCur->pjob == p) DeactivateTaskCur(s_psw->tasks.ptaskCur);
+        if (s_psw->tasks.ptaskChk && s_psw->tasks.ptaskChk->pjob == p) SetTaskChk(nullptr);
+        JobEndIfCur(p);
+        if (!FTransitionBusy()) RequestTransition(s_psw, nullptr, g_transition.oidPointCur, g_transition.oidKeyCur, 0, 0x30A);
+        return;
+    }
     if (s_psw->tasks.ptaskChk) RestartTask(s_psw->tasks.ptaskChk);
     else if (p->ptaskFirst) RestartTask(p->ptaskFirst);
 }
@@ -902,6 +941,14 @@ void TaskMgrOnEvent(int n)
         SetJobCur(PjobFromLo(PloFind(g_taskmgr.oidJob)));
         SetTaskCur(PtaskFind(g_taskmgr.oidTask));
         SetTaskChk(PtaskFind(g_taskmgr.oidQueued));
+        // (PC fix: FJobStale) a done job left current (a session of a build without the fix) is not current again
+        if (JOB* pj = s_psw->tasks.pjobCur; pj && FJobStale(pj))
+        {
+            std::printf("tasks: job %d is done: not current again\n", pj->oid);
+            SetJobCur(nullptr);
+            if (s_psw->tasks.ptaskCur && s_psw->tasks.ptaskCur->pjob == pj) SetTaskCur(nullptr);
+            if (s_psw->tasks.ptaskChk && s_psw->tasks.ptaskChk->pjob == pj) SetTaskChk(nullptr);
+        }
         if (s_psw->tasks.pjobCur) ActivateJob(s_psw->tasks.pjobCur);
         if (s_psw->tasks.ptaskCur) ActivateTaskNow(s_psw->tasks.ptaskCur);
         if (s_psw->tasks.grfReq & 4)

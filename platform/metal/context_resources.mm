@@ -840,6 +840,9 @@ bool Context::ResolveTarget(uint32_t framebuffer, RenderTarget* out) {
   FramebufferRecord* record = framebuffers_.Find(framebuffer);
   if (!record) return false;
   int samples = 1;
+  out->color_slice = record->color.layer;
+  out->color_level = record->color.level;
+  out->depth_slice = record->depth.layer;
   out->color = AttachmentTexture(record->color, &samples);
   out->depth = AttachmentTexture(record->depth, &samples);
   out->stencil = AttachmentTexture(record->stencil, &samples);
@@ -847,8 +850,9 @@ bool Context::ResolveTarget(uint32_t framebuffer, RenderTarget* out) {
   if (out->stencil && out->stencil.pixelFormat == MTLPixelFormatStencil8) out->depth = nil;
   id<MTLTexture> any = out->color ? out->color : (out->depth ? out->depth : out->stencil);
   if (!any) return false;
-  out->width = static_cast<int>(any.width);
-  out->height = static_cast<int>(any.height);
+  const int level = out->color ? out->color_level : 0;
+  out->width = std::max(1, static_cast<int>(any.width) >> level);
+  out->height = std::max(1, static_cast<int>(any.height) >> level);
   out->samples = samples;
   return true;
 }

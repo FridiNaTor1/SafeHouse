@@ -25,6 +25,7 @@ enum class GlslType {
   kMat4,
   kSampler2D,
   kSampler2DArray,
+  kMat3,  // (prebuilt programs only: std140, three vec4 columns)
 };
 
 GlslType ParseGlslType(std::string_view token);

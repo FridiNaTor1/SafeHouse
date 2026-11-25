@@ -9,6 +9,8 @@
 #include "promptglyph.h"
 #include "step.h"
 #include <cfloat>
+#include <fstream>
+#include "../platform/controller_family.h"
 #include <cstdio>
 #include <chrono>
 
@@ -36,6 +38,28 @@ int sly2actions::SelfTest() {
     check(p.keyboard[size_t(Action::ZoomIn)] == wheelUp && p.keyboard[size_t(Action::ZoomOut)] == wheelDown &&
           p.gamepad[size_t(Action::ZoomIn)] == cane::settings::kGamepadRightTrigger,
           "the advanced preset includes wheel and trigger zoom bindings");
+    // (issue #74) the hack ship's guns: the right stick by default, as the PS2; a profile of before (revision 1, its
+    // hack_fire on Square, the old default) moves to the stick; the stick binds to that action only
+    check(p.gamepad[size_t(Action::HackFire)] == cane::settings::kGamepadRightStick &&
+          cane::input::fromGlfwBinding(cane::settings::kGamepadRightStick) == cane::input::Button::RS,
+          "the hack ship fires with the right stick by default");
+    check(input::validPadBinding(Action::HackFire, cane::settings::kGamepadRightStick) &&
+          !input::validPadBinding(Action::Jump, cane::settings::kGamepadRightStick) &&
+          !cane::settings::validGamepadBinding(cane::settings::kGamepadRightStick),
+          "only the hack ship's guns take the right stick");
+    {
+        std::filesystem::create_directories(input::profilePath(dir).parent_path());
+        std::ofstream(input::profilePath(dir)) << R"({"version": 1, "enabled": true, "actions": {"hack_fire": {"keyboard": 2000, "controller": 2}, "jump": {"keyboard": 32, "controller": 1002}}})";
+        const auto old = input::load(dir);
+        check(old.enabled && old.gamepad[size_t(Action::HackFire)] == cane::settings::kGamepadRightStick &&
+              old.gamepad[size_t(Action::Jump)] == input::kActions[size_t(Action::Jump)].defaultPad,
+              "a revision 1 profile's hack_fire on Square moves to the right stick; no other action takes it");
+        auto cur = old;
+        cur.gamepad[size_t(Action::HackFire)] = 2;
+        check(input::save(dir, cur) && input::load(dir).gamepad[size_t(Action::HackFire)] == 2,
+              "a revision 2 profile keeps the hack ship on a button when the player chose one");
+        std::filesystem::remove(input::profilePath(dir));
+    }
     p.enabled = true;
     p.keyboard[size_t(Action::BentleyDart)] = 71;
     p.keyboard[size_t(Action::Sprint)] = 340;

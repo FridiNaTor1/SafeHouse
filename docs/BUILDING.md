@@ -10,6 +10,33 @@ Windows). GLFW 3.4, FAudio 25.02 and the SDL 2.30.11 fallback are downloaded at 
 the first configure needs internet access. Dear ImGui, GLAD, GLM, stb, nlohmann/json, miniz, the Windows FFmpeg build
 and the launcher's typeface are in the repository.
 
+## Getting the sources
+
+Sly 1 is a git submodule (`Sly1/`: [FridiNaTor1/Sly1-safehouse](https://github.com/FridiNaTor1/Sly1-safehouse), a fork
+of [theclub654/ProjectCane](https://github.com/theclub654/ProjectCane) whose `safehouse` branch is upstream plus
+SafeHouse's patches). Clone with `--recursive`:
+
+```sh
+git clone --recursive https://github.com/FridiNaTor1/SafeHouse.git
+# an existing clone, or after a pull that moved the submodule:
+git submodule update --init
+```
+
+Without it `Sly1/` is empty and configuring stops with a message (or configure with `-DCANE_BUILD_GAME=OFF` to build
+without Sly 1). `cmake/sly1.cmake` builds the game from `Sly1/Sly1-Release` under SafeHouse's own CMake (the fork's
+top-level CMake is not used) with `CANE_SAFEHOUSE` defined: the fork's `platform/platform.h` then forwards to SafeHouse's
+`platform/platform.h`. Updating the fork from upstream: `tools/sly1-update.sh` (fetch, fast-forward `master`, tag
+`safehouse-YYYY-MM-DD`, rebase `safehouse`, optionally re-pin `Sly1/`; see the script's header).
+
+To build against a local clone of the fork (commits not pushed yet), point the submodule there in this checkout only:
+
+```sh
+git config submodule.Sly1.url /path/to/Sly1-safehouse-clone
+git -c protocol.file.allow=always submodule update --init Sly1
+```
+
+(`.gitmodules` keeps the GitHub URL; `git config --unset submodule.Sly1.url` and `git submodule sync` go back to it.)
+
 ## Linux
 
 Ubuntu 22.04 or newer (install `file` and `desktop-file-utils` as well to make AppImages):
@@ -43,8 +70,9 @@ The cross build downloads Microsoft's pinned XAudio2 redistributable. The Visual
 
 ## macOS
 
-`.github/workflows/macos.yml` is the reference: Homebrew's `ninja` and `nasm`, FFmpeg built by `scripts/macos/ffmpeg.sh`,
-then
+`.github/workflows/macos.yml` is the reference: Homebrew's `ninja`, `nasm`, `glslang` and `spirv-cross` (Sly 1's
+programs are translated to Metal Shading Language at build time: `cmake/metal_shaders.py`), FFmpeg built by
+`scripts/macos/ffmpeg.sh`, then
 
 ```sh
 scripts/macos/ffmpeg.sh "$PWD/build/ffmpeg"
@@ -52,7 +80,8 @@ cmake --preset macos-release -DCANE_FFMPEG_ROOT="$PWD/build/ffmpeg"
 cmake --build --preset macos-release --parallel 4
 ```
 
-On macOS the games' OpenGL runs on Metal (`platform/metal`). The macOS build has the launcher, Sly 2 and Sly 3 (early in development).
+On macOS the games' OpenGL runs on Metal (`platform/metal`). The macOS build has the launcher, Sly 1 (the `Sly1/`
+submodule), Sly 2 and Sly 3 (early in development).
 
 ## Options
 

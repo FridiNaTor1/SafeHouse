@@ -1013,8 +1013,7 @@ int RunGame(const GAMEOPTS& go)
 #endif
     }
     g_clock.tick = TickNow();
-    bool& fFreeCam = g_fDebugFreeCam;   // (F1; also the debug menu's Display page)
-    bool fF1Last = false;
+    bool& fFreeCam = g_fDebugFreeCam;   // (F1, debugmenu.cpp; also the debug menu's Free Camera page)
     double msUpdate = 0, msRender = 0, msSwap = 0, msScene = 0;
     int cframeTimed = 0;
     auto now = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
@@ -2220,9 +2219,6 @@ int RunGame(const GAMEOPTS& go)
             glfwPollEvents();
             UpdateDisplayMonitors(g_gl.window);   // (a monitor plugged in or unplugged: display.h)
             GLFWwindow* w = g_gl.window;
-            const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1);   // (debug keys only)
-            if (fF1 && !fF1Last) fFreeCam = !fFreeCam;
-            fF1Last = fF1;
             // (Escape no longer closes the window: it is the pause / back key, pcinput.h; the pause menu has Exit to
             // Desktop)
             if (fFreeCam)
@@ -2474,6 +2470,7 @@ int RunGame(const GAMEOPTS& go)
                 }
             }
             else cam.fMat = false;
+            ApplyDebugFreezeCam(cam);   // (debugmenu.h: the Free Camera page's freeze camera, Shift+F1)
             if (!go.cameraRam.empty())
             {
                 static RENDEROPTS s_optsRam;
@@ -2529,7 +2526,7 @@ int RunGame(const GAMEOPTS& go)
                     return glm::vec3(0.0f);
                 }() : glm::vec3(0.0f);
                 std::printf("campr %d step %d u %.3f cam %.2f %.2f %.2f sly %.2f %.2f %.2f dir %.5f %.5f %.5f fov %.4f t %.4f faded %d mrd %d\n", cframeTimed, frame, accum.fActive ? accum.U() : 1.0f, cam.pos.x, cam.pos.y, cam.pos.z,
-                            posSly.x, posSly.y, posSly.z, cam.mat[0].x, cam.mat[0].y, cam.mat[0].z, cam.fovY, g_clock.t, g_cFadedRecs3.exchange(0), g_renderstats.cmrd);
+                            posSly.x, posSly.y, posSly.z, cam.Dir().x, cam.Dir().y, cam.Dir().z, cam.fovY, g_clock.t, g_cFadedRecs3.exchange(0), g_renderstats.cmrd);
             }
             // orig: 0x1A7518/0x1477B0: query before the overlay's state1 capture/transition.
             // (SLY2N_FPSLOG: the GPU's time per frame, a timer query read back a few frames later)

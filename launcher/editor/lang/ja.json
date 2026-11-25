@@ -217,7 +217,6 @@
   "Insert:": "挿入:",
   "Its reference still sounds band-limited (an announcement or talk heard through the binocucom): switch the effect on if the dub should too.": "参照は帯域が狭く聞こえます(アナウンスや双眼通信機越しの会話)。吹き替えも同じにするなら効果をオンにしてください。",
   "Levels not known yet": "レベルはまだ不明",
-  "Menus": "メニュー",
   "No groups": "グループなし",
   "No microphone could be opened (SDL2 or a recording device is missing).": "マイクを開けませんでした(SDL2 または録音デバイスがありません)。",
   "Not in any level": "どのレベルにもない",

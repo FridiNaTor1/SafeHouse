@@ -24,6 +24,11 @@ void SwapBuffers();
 // with the app in the background): the caller paces with its timer.
 bool WaitForDisplayFrame(int fps);
 
+// (a game with programs translated at build time, cmake/metal_shaders.py: Sly 1) the GL program name of the program
+// made of these GLSL files, from the game's generated table (prebuilt_programs.mm, linked only into such a game); 0
+// when the table has no such program or its Metal compile failed (logged).
+unsigned Program(const char* vertex_file, const char* geometry_file, const char* fragment_file);
+
 }  // namespace cane::gl_metal
 
 #endif  // CANE_PLATFORM_METAL_GL_METAL_H_

@@ -217,7 +217,6 @@
   "Insert:": "Lisää:",
   "Its reference still sounds band-limited (an announcement or talk heard through the binocucom): switch the effect on if the dub should too.": "Sen referenssi kuulostaa silti kaistarajoitetulta (kuulutus tai puhe binokukomin kautta): kytke tehoste päälle, jos jälkiäänityksenkin pitää.",
   "Levels not known yet": "Kentät eivät ole vielä tiedossa",
-  "Menus": "Valikot",
   "No groups": "Ei ryhmiä",
   "No microphone could be opened (SDL2 or a recording device is missing).": "Mikrofonia ei voitu avata (SDL2 tai äänityslaite puuttuu).",
   "Not in any level": "Ei missään kentässä",

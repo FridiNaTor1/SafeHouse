@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the FFmpeg libraries the games link (libavcodec, libavutil, libswscale) from the
+# Builds the FFmpeg libraries the games link (libavcodec, libavutil, libswscale; libavformat for Sly 1's .m2v movies,
+# its raw MPEG video demuxer and file protocol only) from the
 # pinned release: the MPEG-2 video and FLAC codecs only, shared, LGPL, no external libraries.
 #
 #   scripts/macos/ffmpeg.sh <prefix>        build into <prefix> (cached when <prefix>/RECIPE matches)
@@ -14,8 +15,9 @@ CONFIGURE_ARGS=(
   --disable-everything --disable-programs --disable-doc --disable-network --disable-autodetect
   --enable-shared --disable-static --enable-pic
   --disable-gpl --disable-nonfree --disable-version3 --disable-debug
-  --disable-avdevice --disable-avformat --disable-avfilter --disable-postproc --disable-swresample
+  --disable-avdevice --disable-avfilter --disable-postproc --disable-swresample
   --enable-avcodec --enable-avutil --enable-swscale
+  --enable-avformat --enable-protocol=file --enable-demuxer=mpegvideo
   --enable-decoder=mpeg2video --enable-decoder=mpeg1video --enable-parser=mpegvideo
   --enable-decoder=flac --enable-encoder=flac --enable-parser=flac
 )

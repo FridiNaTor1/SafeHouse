@@ -186,6 +186,56 @@ int processExitCode(std::int64_t handle) {
         e.method("childExitCode", "(J)I"), static_cast<jlong>(handle));
     e.check(); return result;
 }
+std::string processExitReason(std::int64_t handle) {
+    try {
+        Environment e;
+        auto value = static_cast<jstring>(e.env->CallStaticObjectMethod(bridge,
+            e.method("childExitReason", "(J)Ljava/lang/String;"), static_cast<jlong>(handle)));
+        e.check();
+        std::string text = string(e.env, value);
+        if (value) e.env->DeleteLocalRef(value);
+        return text;
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+ExitRecord processExitRecord(long pid) {
+    ExitRecord record;
+    try {
+        Environment e;
+        auto values = static_cast<jobjectArray>(e.env->CallStaticObjectMethod(bridge,
+            e.method("processExitRecord", "(I)[Ljava/lang/String;"), static_cast<jint>(pid)));
+        e.check();
+        if (values && e.env->GetArrayLength(values) == 4) {
+            std::array<std::string, 4> fields;
+            for (int i = 0; i < 4; ++i) {
+                auto field = static_cast<jstring>(e.env->GetObjectArrayElement(values, i));
+                fields[i] = string(e.env, field);
+                e.env->DeleteLocalRef(field);
+            }
+            record.found = true;
+            record.crash = fields[0] == "1";
+            record.reason = std::atoi(fields[1].c_str());
+            record.status = std::atoi(fields[2].c_str());
+            record.description = fields[3];
+        }
+        if (values) e.env->DeleteLocalRef(values);
+    } catch (const std::exception&) {
+    }
+    return record;
+}
+bool openXrRuntimeInstalled() {
+    static int s_installed = -1;
+    if (s_installed >= 0) return s_installed != 0;
+    try {
+        Environment e;
+        s_installed = e.env->CallStaticBooleanMethod(bridge, e.method("openXrRuntimeInstalled", "()Z")) ? 1 : 0;
+        e.check();
+    } catch (const std::exception&) {
+        s_installed = 1;   // (unknown: the loader's own probe decides, as before)
+    }
+    return s_installed != 0;
+}
 void cancelProcess(std::int64_t handle) {
     Environment e;
     e.env->CallStaticVoidMethod(bridge, e.method("cancelChild", "(J)V"), static_cast<jlong>(handle));
@@ -216,6 +266,8 @@ void reportExit(int code) {
 void requestIsoSelection() { call("selectIso"); }
 void requestModImport() { call("importMod"); }
 ImportStatus isoSelection() { return importStatus("isoStatus"); }
+void requestDriverImport() { call("importDriver"); }
+ImportStatus driverImport() { return importStatus("driverStatus"); }
 ImportStatus modImport() { return importStatus("modStatus"); }
 void openFolder(const std::string& path) {
     Environment e; auto value = javaString(e.env, path);
@@ -250,6 +302,73 @@ std::string httpGet(const std::string& url, bool api, const std::string& userAge
         e.env->DeleteLocalRef(body);
     }
     return out;
+}
+std::vector<std::pair<std::string, std::string>> externalFolders() {
+    std::vector<std::pair<std::string, std::string>> out;
+    try {
+        Environment e;
+        auto values = static_cast<jobjectArray>(e.env->CallStaticObjectMethod(bridge, e.method("externalFolders", "()[Ljava/lang/String;")));
+        e.check();
+        const jsize n = values ? e.env->GetArrayLength(values) : 0;
+        for (jsize i = 0; i + 1 < n; i += 2) {
+            auto a = static_cast<jstring>(e.env->GetObjectArrayElement(values, i));
+            auto b = static_cast<jstring>(e.env->GetObjectArrayElement(values, i + 1));
+            out.emplace_back(string(e.env, a), string(e.env, b));
+            e.env->DeleteLocalRef(a); e.env->DeleteLocalRef(b);
+        }
+        if (values) e.env->DeleteLocalRef(values);
+    } catch (const std::exception&) {
+    }
+    return out;
+}
+bool allFilesAccess() {
+    try {
+        Environment e;
+        const bool granted = e.env->CallStaticBooleanMethod(bridge, e.method("allFilesAccess", "()Z"));
+        e.check();
+        return granted;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+void requestAllFilesAccess() { call("requestAllFilesAccess"); }
+int httpDownload(const std::string& url, const std::string& path, const std::string& userAgent, std::uint64_t* total) {
+    Environment e;
+    auto address = javaString(e.env, url), file = javaString(e.env, path), ua = javaString(e.env, userAgent);
+    auto length = e.env->NewLongArray(1);
+    const jint status = e.env->CallStaticIntMethod(bridge,
+        e.method("httpDownload", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[J)I"), address, file, ua, length);
+    e.env->DeleteLocalRef(address); e.env->DeleteLocalRef(file); e.env->DeleteLocalRef(ua);
+    if (e.env->ExceptionCheck()) { e.env->DeleteLocalRef(length); e.check(); }
+    jlong value = -1;
+    e.env->GetLongArrayRegion(length, 0, 1, &value);
+    e.env->DeleteLocalRef(length);
+    if (total) *total = value > 0 ? static_cast<std::uint64_t>(value) : 0;
+    return status;
+}
+std::uint64_t downloadLength() {
+    try {
+        Environment e;
+        const jlong value = e.env->CallStaticLongMethod(bridge, e.method("downloadLength", "()J"));
+        e.check();
+        return value > 0 ? static_cast<std::uint64_t>(value) : 0;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+void cancelDownload() {
+    try { call("cancelDownload"); } catch (const std::exception&) {}
+}
+std::string installPackage(const std::string& apkPath) {
+    Environment e;
+    auto file = javaString(e.env, apkPath);
+    auto result = static_cast<jstring>(e.env->CallStaticObjectMethod(bridge,
+        e.method("installPackage", "(Ljava/lang/String;)Ljava/lang/String;"), file));
+    e.env->DeleteLocalRef(file);
+    e.check();
+    std::string text = string(e.env, result);
+    if (result) e.env->DeleteLocalRef(result);
+    return text;
 }
 namespace {
 jobjectArray javaStrings(JNIEnv* env, const std::vector<std::string>& values) {

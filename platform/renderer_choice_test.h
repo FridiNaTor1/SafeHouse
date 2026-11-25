@@ -56,6 +56,21 @@ inline int selfTest(int (*parse)(const char*)) {
     check(!decide(Choice::Auto, true, other, v).tryVulkan, "another copy's failure: Auto is OpenGL");
 #endif
 
+    // the retries (2026-11-24): 3, 6, 12 Auto starts on OpenGL after 1, 2, 3 failures, then only an update / Vulkan chosen
+    check(retryAfterStarts(1) == 3 && retryAfterStarts(2) == 6 && retryAfterStarts(3) == 12 && retryAfterStarts(4) < 0,
+          "retry after 3 / 6 / 12 starts, never after 4 failures");
+    {
+        Marker m = failedStart;
+        m.skips = 2;
+        const Decision d = decide(Choice::Auto, true, m, v);
+        check(!d.tryVulkan && d.skipped && d.why.find("1 more start") != std::string::npos, "two starts on OpenGL: one more to go");
+        m.skips = 3;
+        const Decision r = decide(Choice::Auto, true, m, v);
+        check(r.tryVulkan && r.retry && !r.skipped, "three starts on OpenGL: Vulkan again");
+        m.failures = 4, m.skips = 100;
+        check(!decide(Choice::Auto, true, m, v).tryVulkan, "four failures: no retry");
+    }
+
     // the marker file
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -71,9 +86,21 @@ inline int selfTest(int (*parse)(const char*)) {
     check(m.present && m.reason == "Vulkan error: the GPU device was lost", "marker read back (reason)");
     check(!decide(Choice::Auto, true, m, v).tryVulkan, "marker file: Auto is OpenGL");
     check(!fs::exists(fs::path(path).concat(".tmp")), "no temporary file left");
+    // decideAt: counts the Auto starts it sends to OpenGL, and the next marker's failures
+    for (int i = 0; i < 3; ++i) check(!decideAt(Choice::Auto, true, path, v).tryVulkan, "decideAt: OpenGL while the marker counts");
+    m = readMarker(path);
+    check(m.skips == 3 && m.failures == 1, "decideAt: three starts counted");
+    check(decideAt(Choice::Auto, true, path, v).retry && pendingFailures() == 2, "decideAt: the fourth start retries, as failure 2");
+    check(writeMarker(path, v, "Vulkan error: again") && readMarker(path).failures == 2 && readMarker(path).skips == 0,
+          "a second failure: counted, skips from 0");
+    check(decideAt(Choice::Auto, true, path, "9.9.9, other").tryVulkan && pendingFailures() == 1, "decideAt: an update tries Vulkan");
     clearMarker(path);
     check(!readMarker(path).present, "marker cleared");
     clearMarker(path);   // (twice: no error)
+    // a version ending in spaces (Sly 1's "sly1  "): its own marker still counts
+    check(writeMarker(path, "sly1  ", "") && !decideAt(Choice::Auto, true, path, "sly1  ").tryVulkan,
+          "a version with trailing spaces matches its marker");
+    clearMarker(path);
     fs::remove_all(dir, ec);
 
     // the settings' spellings (Settings.ini, --renderer, SLY2N_RENDERER)

@@ -115,6 +115,14 @@ struct GlState {
   int pack_alignment = 4;
   int unpack_alignment = 4;
   bool clip_zero_to_one = false;
+  // (glVertexAttrib*: the value a disabled array reads; kind 0 float, 1 int, 2 uint as the bits)
+  std::array<std::array<float, 4>, kVertexAttributeCount> current_attributes = [] {
+    std::array<std::array<float, 4>, kVertexAttributeCount> values{};
+    for (auto& v : values) v = {0.0f, 0.0f, 0.0f, 1.0f};
+    return values;
+  }();
+  float depth_range[2] = {0.0f, 1.0f};
+  float point_size = 1.0f;
 };
 
 }  // namespace cane::gl_metal

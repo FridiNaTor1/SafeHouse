@@ -1,13 +1,18 @@
 #pragma once
 // Upstream ProjectCane's level pipeline (File Extractor GUI/Services/*.cs, beta 0.5.0), ported to C++ for
-// cane-extractor. The retail levels are rebuilt into PCBRX by the native tools that sit beside cane-extractor:
-//   Sly1BrxRebuilder <level.brx> [ntsc|pal|japanese] [identity-map] -> <level>_Rebuilt.brx (PCBRX v17)
-//   Sly1PalExtractor extract <iso> <output> [pal|japanese]          -> Worlds/<...>/<Level>/<Language>/...
+// cane-extractor. The retail levels are rebuilt into PCBRX by upstream's native tools, linked into cane-extractor as
+// a library (cmake/sly1_pcbrx.cmake, from the Sly1/ submodule; Android, iOS and the Switch cannot start helper
+// programs):
+//   BrxRebuilder's BrxWalker: a level (ntsc / pal / japanese / korean, a PAL identity map) -> PCBRX v17
+//   PalExtractor's PalIsoExtractor: a European / Japanese / Korean disc -> Worlds/<...>/<Level>/<Language>/...
 // and each level's language payloads are packed into one PCBRX v19 "PUNI" container (PCBRX-v19.md).
-// The runtime reads extraction_manifest.json (Sly1-Release/content.cpp) to learn the region and languages.
+// The runtime reads extraction_manifest.json (Sly1/Sly1-Release/content.cpp) to learn the region and languages.
 
 #include "../platform/install.h"
 #include "../platform/process.h"
+
+#include "BrxRebuilder/BrxWalker.h"
+#include "PalExtractor/PalIsoExtractor.h"
 
 #include <algorithm>
 #include <atomic>
@@ -351,6 +356,18 @@ inline void ValidateReferencedAudio(const fs::path& payloadPath, const fs::path&
                                      "' references missing audio '" + name + "'.");
 }
 
+// BrxRebuilder (in this process): one retail level -> PCBRX v17, in memory.
+inline std::vector<uint8_t> RebuildV17(const fs::path& retailLevel, BrxSourceRegion region,
+                                       const fs::path& levelIdentityMap = {}) {
+    BrxWalker walker(StringEncoding::Narrow, region, false);
+    if (!levelIdentityMap.empty()) walker.LoadLevelIdentityMap(levelIdentityMap);
+    try {
+        return walker.RebuildFile(retailLevel);
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Cannot rebuild the level " + cane::utf8(retailLevel.filename()) + ": " + e.what());
+    }
+}
+
 // BrxRebuildService.RebuildAsync: one retail payload -> PCBRX v17 -> single-language v19.
 inline void RebuildLevel(const std::vector<uint8_t>& decompressed, const fs::path& outputPath) {
     const fs::path directory = outputPath.parent_path();
@@ -360,7 +377,7 @@ inline void RebuildLevel(const std::vector<uint8_t>& decompressed, const fs::pat
     const fs::path rebuilt = directory / (stem + "_Rebuilt.brx");
     try {
         WriteAll(temporary, decompressed);
-        RunTool({cane::utf8(Tool("Sly1BrxRebuilder")), cane::utf8(temporary)});
+        WriteAll(rebuilt, RebuildV17(temporary, BrxSourceRegion::Auto));
         ValidatePcBrx(rebuilt, false, 17);
         WriteUnifiedContainer({rebuilt}, outputPath, {0}, 0);
     } catch (...) {
@@ -375,12 +392,12 @@ inline void RebuildLevel(const std::vector<uint8_t>& decompressed, const fs::pat
 // BrxRebuildService.RebuildLocalizedCombinedAsync: the per-language retail levels of one level -> one v19.
 inline void RebuildLocalizedCombined(const std::vector<fs::path>& languagePaths, const fs::path& outputPath,
                                      Region region, const fs::path& levelIdentityMap) {
-    const char* regionArgument = region == Region::Japanese ? "japanese" : region == Region::Korean ? "korean" : "pal";
+    const BrxSourceRegion sourceRegion = region == Region::Japanese ? BrxSourceRegion::Japanese
+        : region == Region::Korean ? BrxSourceRegion::Korean : BrxSourceRegion::Pal;
     const fs::path directory = outputPath.parent_path();
     fs::create_directories(directory);
-    std::vector<fs::path> temporaries, rebuilt;
+    std::vector<fs::path> rebuilt;
     auto cleanup = [&] {
-        for (const auto& p : temporaries) TryRemove(p);
         for (const auto& p : rebuilt) TryRemove(p);
     };
     try {
@@ -391,17 +408,9 @@ inline void RebuildLocalizedCombined(const std::vector<fs::path>& languagePaths,
                                          "combine them as voice-only variants.");
         }
         for (const auto& source : languagePaths) {
-            const std::string stem = "." + cane::utf8(outputPath.stem()) + "." + UniqueStem();
-            temporaries.push_back(directory / (stem + ".brx"));
-            fs::copy_file(source, temporaries.back(), fs::copy_options::overwrite_existing);
-            rebuilt.push_back(directory / (stem + "_Rebuilt.brx"));
-        }
-        for (std::size_t i = 0; i < temporaries.size(); ++i) {
-            std::vector<std::string> arguments = {cane::utf8(Tool("Sly1BrxRebuilder")), cane::utf8(temporaries[i]),
-                                                  regionArgument};
-            if (!levelIdentityMap.empty()) arguments.push_back(cane::utf8(levelIdentityMap));
-            RunTool(arguments);
-            ValidatePcBrx(rebuilt[i], true, 17);
+            rebuilt.push_back(directory / ("." + cane::utf8(outputPath.stem()) + "." + UniqueStem() + "_Rebuilt.brx"));
+            WriteAll(rebuilt.back(), RebuildV17(source, sourceRegion, levelIdentityMap));
+            ValidatePcBrx(rebuilt.back(), true, 17);
         }
         for (std::size_t i = 0; i < rebuilt.size(); ++i) ValidateReferencedAudio(rebuilt[i], languagePaths[i]);
         if (region == Region::Japanese && ReadLocalizationPayload(rebuilt[0]) != ReadLocalizationPayload(rebuilt[1]))
@@ -440,28 +449,28 @@ inline void WriteExtractionManifest(const fs::path& outputDirectory, const cane:
     if (!out) throw std::runtime_error("Cannot write extraction_manifest.json");
 }
 
-// Sly1PalExtractionService.ExtractAsync: runs Sly1PalExtractor, then combines the per-language levels.
+// Sly1PalExtractionService.ExtractAsync: PalExtractor (in this process), then the per-language levels combined.
 using ProgressFunction = std::function<void(const std::string& stage, std::size_t done, std::size_t total, const std::string& item)>;
 inline void ExtractLocalized(const fs::path& iso, const fs::path& outputDirectory, Region region,
                              const ProgressFunction& progress) {
     const std::vector<std::string> languages = region == Region::Japanese ? std::vector<std::string>{"Japanese", "English"}
         : region == Region::Korean ? std::vector<std::string>{"Korean"}
         : std::vector<std::string>{"English", "French", "German", "Spanish", "Italian"};
-    const char* regionArgument = region == Region::Japanese ? "japanese" : region == Region::Korean ? "korean" : "pal";
     const std::size_t extracted = languages.size() * kLevelCount;
-    const std::size_t total = extracted + kLevelCount;
-    std::size_t done = 0;
-    const std::regex levelLine(R"(^\[(English|French|German|Spanish|Italian|Japanese|Korean)\s+(\d+)/46\])");
-    RunTool({cane::utf8(Tool("Sly1PalExtractor")), "extract", cane::utf8(iso), cane::utf8(outputDirectory),
-             regionArgument},
-            [&](const std::string& line) {
-                std::smatch match;
-                if (std::regex_search(line, match, levelLine))
-                    progress("levels", ++done, total, match[1].str() + " / level " + match[2].str() + " of 46");
-            });
+    // One bar: the disc's part (its sound banks, cutscenes and levels: the extractor's own count), then the levels'
+    // rebuild.
+    std::size_t discTotal = 0;
+    const cane::pal::PalIsoExtractor extractor([&](const cane::pal::ExtractionProgress& p) {
+        discTotal = p.total;
+        progress("levels", p.completed, p.total + kLevelCount, p.stage + ": " + cane::utf8(p.file));
+    });
+    // (Europe: every language slot from one read of the disc; Japan and Korea: upstream's detection path)
+    if (region == Region::Pal) extractor.ExtractAllLanguages(iso, outputDirectory);
+    else extractor.ExtractDetectedRegion(iso, outputDirectory);
     const fs::path worlds = outputDirectory / "Worlds";
     const fs::path identityMap = outputDirectory / ".pal-level-identities.txt";
-    const bool usesIdentityMap = region == Region::Pal || region == Region::Korean;
+    // (Korea: the rebuilder has the disc's level identities itself)
+    const bool usesIdentityMap = region == Region::Pal;
     if (usesIdentityMap && !fs::is_regular_file(identityMap))
         throw std::runtime_error("The PAL extractor did not produce its level identity map.");
     // Group <Level>/<Language>/<Level>.brx by <Level>/<Level>.brx.
@@ -486,11 +495,11 @@ inline void ExtractLocalized(const fs::path& iso, const fs::path& outputDirector
             if (it == files.end()) throw std::runtime_error("Level '" + cane::utf8(output) + "' is missing " + language + ".");
             paths.push_back(it->second);
         }
-        progress("levels", extracted + index, total, cane::utf8(fs::relative(output, worlds)));
+        progress("levels", discTotal + index, discTotal + kLevelCount, cane::utf8(fs::relative(output, worlds)));
         RebuildLocalizedCombined(paths, output, region, usesIdentityMap ? identityMap : fs::path());
         ++index;
     }
-    progress("levels", total, total, "");
+    progress("levels", discTotal + kLevelCount, discTotal + kLevelCount, "");
 }
 
 } // namespace pcbrx

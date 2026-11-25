@@ -63,8 +63,10 @@ std::string baseName(const std::string& path) {
     return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 // The games' images (a game session at most once per app start: runProgram) and their tool copies.
-bool gameImage(const std::string& image) { return image == "Sly2Release" || image == "Sly3Release"; }
-// The games' tool commands run in their second image (Sly2Tools / Sly3Tools.framework, the same code): the game's
+bool gameImage(const std::string& image) {
+    return image == "Sly1Release" || image == "Sly2Release" || image == "Sly3Release";
+}
+// The games' tool commands run in their second image (Sly1Tools / Sly2Tools / Sly3Tools.framework, the same code): the game's
 // image keeps clean globals for the game after an install.
 bool sly2Tool(const std::vector<std::string>& arguments) {
     static const char* const tools[] = {"--convert", "--convert-worlds", "--export-textures", "--ps3-hd-textures", "--import-languages",
@@ -392,7 +394,8 @@ std::string documentsDirectory() { return documentsPath; }
 std::string importsDirectory() { return documentsPath + "/imports"; }
 std::string programPath(const std::string& name) {
     std::string framework = name;
-    if (name == "Sly2-Release") framework = "Sly2Release";
+    if (name == "Sly1-Release") framework = "Sly1Release";
+    else if (name == "Sly2-Release") framework = "Sly2Release";
     else if (name == "Sly3-Release") framework = "Sly3Release";
     else if (name == "cane-extractor") framework = "CaneExtractor";
     else if (name == "safehouse" || name == "cane-launcher") framework = "SafeHouseLauncher";
@@ -410,7 +413,7 @@ ChildProcess startProcess(const std::vector<std::string>& arguments) {
     p->path = arguments[0];
     p->image = baseName(p->path);
     if (gameImage(p->image) && sly2Tool(arguments)) {
-        const std::string tools = p->image.substr(0, 4) + "Tools";   // (Sly2Release -> Sly2Tools, Sly3Release -> Sly3Tools)
+        const std::string tools = p->image.substr(0, 4) + "Tools";   // (Sly1Release -> Sly1Tools, Sly2Release -> Sly2Tools, ...)
         p->image = tools;
         p->path = bundlePath + "/Frameworks/" + tools + ".framework/" + tools;
     }

@@ -158,14 +158,21 @@ void ExpireNoises()
         if (pn->ptmpl && 0.0f <= pn->ptmpl->tLife && pn->t + pn->ptmpl->tLife < g_clock.t) RemoveNoise(pn);
 }
 
+// The template's fields are the object's own (+0x50..+0x64, EOPIDs 1090..1094): read again at each use, so a script's
+// change reaches the next noise, as the original's template object is the one the noise reads. (The water bug of Ep3's
+// Water Bug Run (booty 6435, its state machine's module: template 6711 from radius 0 / height 0..0, +300 / +-100 at each
+// event up to 3000) alerts the guards that way; read once, its first noise's 300 stayed for good: no guard heard it,
+// GitHub #82.)
 NOISETMPL* PtmplNoise(LO* plo)
 {
     if (!plo) return nullptr;
     auto& p = MpTmpl()[plo];
-    if (p) return p.get();
-    p = std::make_unique<NOISETMPL>();
-    p->plo = plo;
-    if (plo->oid >= 0x2C2 && plo->oid <= 0x2C8 && plo->aopt.empty()) FixedOf(p.get(), plo->oid);
+    if (!p)
+    {
+        p = std::make_unique<NOISETMPL>();
+        p->plo = plo;
+        if (plo->oid >= 0x2C2 && plo->oid <= 0x2C8 && plo->aopt.empty()) FixedOf(p.get(), plo->oid);
+    }
     p->nType = static_cast<int>(plo->U32Field(0, 0x50, static_cast<uint32_t>(p->nType)));
     p->sRadius = FieldF(plo, 0x54, p->sRadius);
     p->tLife = FieldF(plo, 0x60, p->tLife);

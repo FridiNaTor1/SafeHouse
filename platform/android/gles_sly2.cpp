@@ -8,6 +8,7 @@
 #include <EGL/egl.h>
 #include <SDL.h>
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -42,6 +43,16 @@ void* ProcAddress(const char* name) {
 }
 
 bool FillGlad(std::string& error) {
+    // (2026-11-24, Android 5+: older devices and the emulator's software renderer have OpenGL ES 3.0 / 3.1; the games'
+    // OpenGL path needs 3.2 (geometry stage, vertex-stage storage buffers). Said plainly instead of the first missing
+    // entry point; the launcher shows it. Vulkan 1.3, where the device has it, runs without this.)
+    int major = 0, minor = 0;
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (version && std::sscanf(version, "OpenGL ES %d.%d", &major, &minor) == 2 && (major < 3 || (major == 3 && minor < 2))) {
+        error = "This device cannot run the game: its graphics driver offers OpenGL ES " + std::to_string(major) + "." +
+                std::to_string(minor) + ", the game needs OpenGL ES 3.2 or Vulkan 1.3";
+        return false;
+    }
     std::string missing;
 #define CANE_FILL(fn, required)                                                          \
     if (!glad_##fn) glad_##fn = reinterpret_cast<decltype(glad_##fn)>(ProcAddress(#fn)); \
@@ -55,6 +66,10 @@ bool FillGlad(std::string& error) {
     CANE_FILL(glDrawElementsBaseVertex, true) CANE_FILL(glRenderbufferStorageMultisample, true) CANE_FILL(glBlitFramebuffer, true)
     CANE_FILL(glUniform1ui, true) CANE_FILL(glGenQueries, false) CANE_FILL(glBeginQuery, false) CANE_FILL(glEndQuery, false)
     CANE_FILL(glClearDepth, true) CANE_FILL(glGetQueryObjectui64v, false)
+    // (GL 4.1 / ES 2.0: the near-clip check (nearclipcheck.cpp) clears with it. Left null, the OpenGL ES start crashed
+    // there on its first call, before the check's result could be remembered: every OpenGL ES start of Sly 2 / Sly 3
+    // on Android died a second in (the S26 Ultra, 2026-11-24: SIGSEGV at pc 0 after "textures bound, as array layers").)
+    CANE_FILL(glClearDepthf, true)
     // (perf-5: the glob textures as array layers, render.cpp LayerRefOfTex; the frame end's invalidates, gl.cpp)
     CANE_FILL(glCopyImageSubData, false) CANE_FILL(glInvalidateFramebuffer, false)
 #undef CANE_FILL

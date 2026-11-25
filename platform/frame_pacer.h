@@ -126,6 +126,9 @@ public:
         }
     }
 
+    // After a long stall (a level load): the next frame is one interval from now, with no catch-up.
+    void Resync() { m_deadline = Clock::now(); }
+
 private:
     static constexpr Clock::duration kSpinMargin = std::chrono::microseconds(50);
     static constexpr Clock::duration kMaxWakeLateness = std::chrono::microseconds(1500);

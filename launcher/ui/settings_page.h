@@ -1,8 +1,9 @@
 #pragma once
-// The Settings page: a game's settings file plus the launcher's own preferences in launcher.json. Sly 1: its
-// Saves/system_settings.dat in the profile (platform/system_settings.h). Sly 2: <profile>/sly2/Settings.ini
-// (platform/sly2_settings.h), which holds every Sly 2 option, the original game's own Options page included (the
-// PS2 kept those in each save); the game's in-game Options read and write the same file. A row at the top picks the
+// The Settings page: a game's settings file plus the launcher's own preferences in launcher.json. Each game's
+// Settings.ini in its profile folder: Sly 1's (platform/sly1_settings.h; made once from the old
+// Saves/system_settings.dat), Sly 2's <profile>/sly2/Settings.ini (platform/sly2_settings.h), which holds every Sly 2
+// option, the original game's own Options page included (the PS2 kept those in each save), and Sly 3's
+// (platform/sly3_settings.h); the games' in-game Options read and write the same files. A row at the top picks the
 // game; Sly 2 (Sly2-Release) reads the display, graphics, audio and controls options, so only those categories are
 // shown for it. Only options the game itself has are shown. Each game has its own defaults (Sly 2: its keyboard /
 // mouse layout, settings::sly2Defaults()). Every change is validated with sanitizeStatic() and saved at once with an
@@ -28,17 +29,23 @@
 #include "brand.h"
 #include "controller_family.h"
 #include "sly2_action_bindings.h"
+#include "sly1_action_bindings.h"
 #include "job.h"
 #include "prompt_bar.h"
 #include "shell.h"
 #include "system_settings.h"
 #include "sly2_settings.h"
+#include "sly1_settings.h"
 #include "sly3_settings.h"
 #include "sly3_action_bindings.h"
 #include "audio_devices_sdl.h"
 #include "monitor_select_glfw.h"
 #include "../collection/ps3menu.h"
 #include "update_dialog.h"
+#if defined(__ANDROID__)
+#include <android/api-level.h>
+#include "../android_drivers.h"
+#endif
 #include "widgets.h"
 
 namespace cane::ui {
@@ -88,6 +95,10 @@ inline std::string keyName(int key) {
 
 class SettingsPage {
     static constexpr int kAdvancedCapture = 1000;
+    // (Sly 1's rhythm minigame keys: Settings.ini [Keyboard] Rhythm Triangle / Square / Circle / Cross)
+    static constexpr int kRhythmCapture = 900;
+    // (Sly 1's cutscene / conversation skip: Settings.ini [Keyboard] / [Controller] Skip Cutscene, sly1_settings.h)
+    static constexpr int kSkipCapture = 950;
 public:
     enum Category { Display, Graphics, Audio, Controls, Interface, Launcher, Games, Advanced, CategoryCount };
     static constexpr std::array<const char*, CategoryCount> names{ N_("Display"), N_("Graphics"), N_("Audio"), N_("Controls"),
@@ -164,12 +175,15 @@ public:
     GameId game() const { return m_game; }
     // The games whose settings this page edits.
     static bool hasSettings(GameId game) { return game == GameId::Sly1 || game == GameId::Sly2 || game == GameId::Sly3; }
-    // Sly 2 and Sly 3 keep their options in Settings.ini (platform/sly2_settings.h, sly3_settings.h: each its own schema)
+    // Every game keeps its options in Settings.ini (platform/sly1_settings.h, sly2_settings.h, sly3_settings.h: each its
+    // own schema). iniGame(): Sly 2 and Sly 3, which share most rows (Sly 1 has rows of its own).
     bool iniGame() const { return m_game == GameId::Sly2 || m_game == GameId::Sly3; }
     settings::Sly2Load loadIni(settings::Sly2Settings& s) const {
+        if (m_game == GameId::Sly1) return settings::loadSly1(m_backend.userDir(m_game), s);
         return m_game == GameId::Sly3 ? settings::loadSly3(m_backend.userDir(m_game), s) : settings::loadSly2(m_backend.userDir(m_game), s);
     }
     bool saveIni(const settings::Sly2Settings& s) const {
+        if (m_game == GameId::Sly1) return settings::saveSly1(m_backend.userDir(m_game), s);
         return m_game == GameId::Sly3 ? settings::saveSly3(m_backend.userDir(m_game), s) : settings::saveSly2(m_backend.userDir(m_game), s);
     }
     // Whether a category applies to the shown game.
@@ -306,13 +320,14 @@ private:
     }
     filedialog::Async m_sourceDialog;
     // ------------------------------------------------------------ storage
-    fs::path file() const {
-        return iniGame() ? settings::sly2SettingsPath(m_backend.userDir(m_game)) : settings::settingsPath(m_backend.userDir(m_game));
-    }
+    fs::path file() const { return settings::sly2SettingsPath(m_backend.userDir(m_game)); }
     // The shown game's defaults (Sly 2 has its own keyboard / mouse layout).
-    settings::SystemSettings gameDefaults() const { return iniGame() ? settings::sly2Defaults() : settings::defaults(); }
+    // (Sly 1: its own keyboard layout, Sly 2's action for action: sly1_settings.h sly1Defaults)
+    settings::SystemSettings gameDefaults() const {
+        return iniGame() ? settings::sly2Defaults() : m_game == GameId::Sly1 ? settings::sly1Defaults().system : settings::defaults();
+    }
     void load() {
-        if (iniGame()) {
+        {
             // (Settings.ini; made once from the old system_settings.dat, which the game would do at its next start too)
             const auto result = loadIni(m_sly2);
             m_settings = m_sly2.system;
@@ -323,16 +338,15 @@ private:
                                                                 : settings::LoadResult::Corrupt;
             if (result == settings::Sly2Load::Migrated && !m_fixture) saveIni(m_sly2);
             m_sly2Saved = m_sly2.game;
-        } else {
-            m_result = settings::load(file(), m_settings, &m_version);
-            if (!settings::loaded(m_result)) m_settings = gameDefaults();
         }
-        if (iniGame()) m_actions = sly2input::load(m_backend.userDir(m_game));   // (Sly 3: the same file in its folder, sly3_action_bindings.h)
+        // (Sly 3: the same file in its folder, sly3_action_bindings.h; Sly 1: its own actions, sly1_action_bindings.h)
+        if (iniGame()) m_actions = sly2input::load(m_backend.userDir(m_game));
+        if (m_game == GameId::Sly1) m_actions1 = sly1input::load(m_backend.userDir(m_game));
         std::error_code ec;
         m_mtime = fs::last_write_time(file(), ec);
         if (ec) m_mtime = {};
-        if (iniGame()) {
-            m_actionMtime = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
+        if (actionGame()) {
+            m_actionMtime = fs::last_write_time(actionPath(), ec);
             if (ec) m_actionMtime = {};
         }
         m_nextPoll = ImGui::GetCurrentContext() ? ImGui::GetTime() + 0.5 : 0.0;
@@ -344,25 +358,55 @@ private:
         std::error_code ec;
         const auto now = fs::last_write_time(file(), ec);
         if ((ec ? fs::file_time_type{} : now) != m_mtime) load();
-        if (iniGame()) {
-            const auto actionsNow = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
+        if (actionGame()) {
+            const auto actionsNow = fs::last_write_time(actionPath(), ec);
             if ((ec ? fs::file_time_type{} : actionsNow) != m_actionMtime) load();
         }
     }
     void commitActions() {
-        if (!writable() || m_actions.readOnly) return;
-        m_saveOk = sly2input::save(m_backend.userDir(m_game), m_actions);
+        if (!writable() || actionsReadOnly()) return;
+        m_saveOk = m_game == GameId::Sly1 ? sly1input::save(m_backend.userDir(m_game), m_actions1)
+                                          : sly2input::save(m_backend.userDir(m_game), m_actions);
         m_savedAt = ImGui::GetTime();
         std::error_code ec;
-        m_actionMtime = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
+        m_actionMtime = fs::last_write_time(actionPath(), ec);
         if (ec) m_actionMtime = {};
+    }
+    // ------------------------------------------------------------ Advanced Input Mapping
+    // Sly 2 / Sly 3 share sly2input's table (Sly 3 offers a subset); Sly 1 has its own (sly1input). The file format,
+    // <user-dir>/Saves/advanced_controls.json, is the same.
+    bool actionGame() const { return iniGame() || m_game == GameId::Sly1; }
+    fs::path actionPath() const { return sly2input::profilePath(m_backend.userDir(m_game)); }
+    bool actionsEnabled() const { return m_game == GameId::Sly1 ? m_actions1.enabled : iniGame() && m_actions.enabled; }
+    void setActionsEnabled(bool on) { (m_game == GameId::Sly1 ? m_actions1.enabled : m_actions.enabled) = on; }
+    bool actionsReadOnly() const { return m_game == GameId::Sly1 ? m_actions1.readOnly : m_actions.readOnly; }
+    size_t actionCount() const { return m_game == GameId::Sly1 ? sly1input::kActionCount : sly2input::kActionCount; }
+    const char* actionLabel(size_t i) const { return m_game == GameId::Sly1 ? sly1input::kActions[i].label : sly2input::kActions[i].label; }
+    const char* actionGroup(size_t i) const { return m_game == GameId::Sly1 ? sly1input::kActions[i].group : sly2input::kActions[i].group; }
+    bool actionOffered(size_t i) const {
+        if (m_game == GameId::Sly1) return true;
+        if (!m_debug && sly2input::isNoclipAction(sly2input::Action(i))) return false;
+        return m_game != GameId::Sly3 || sly3input::offered(sly2input::Action(i));   // (Sly 2's own minigames)
+    }
+    int* actionBindings(bool controller) {
+        if (m_game == GameId::Sly1) return controller ? m_actions1.gamepad.data() : m_actions1.keyboard.data();
+        return controller ? m_actions.gamepad.data() : m_actions.keyboard.data();
+    }
+    void resetActions() {
+        if (m_game == GameId::Sly1) m_actions1 = sly1input::defaults();
+        else m_actions = sly2input::defaults();
+        setActionsEnabled(true);
     }
     bool writable() const { return m_result != settings::LoadResult::Newer && !m_fixture; }
     void commit() {
         if (!writable()) return;
+        // (Sly 1's PS2 448-line internal resolution, which the shared list does not have, is kept)
+        const int height = m_settings.internalResolutionHeight;
         settings::sanitizeStatic(m_settings, monitorHeight(), m_maxSamples,
-                                 iniGame() ? settings::kSly2DefaultKeyboardBindings : settings::kDefaultKeyboardBindings);
-        if (iniGame()) {
+                                 iniGame() ? settings::kSly2DefaultKeyboardBindings
+                                 : m_game == GameId::Sly1 ? settings::kSly1DefaultKeyboardBindings : settings::kDefaultKeyboardBindings);
+        if (m_game == GameId::Sly1 && height == settings::kSly1Ps2Height) m_settings.internalResolutionHeight = height;
+        {
             // (a save-kept option changed here is the user's choice: no longer taken from the newest save)
             const auto& was = m_sly2.system;
             if (was.controllerVibration != m_settings.controllerVibration) settings::clearPending(m_sly2, settings::kSaveOptionVibration);
@@ -377,8 +421,7 @@ private:
             if (loadIni(onDisk) == settings::Sly2Load::Ok) m_sly2.unknown = onDisk.unknown;
             m_saveOk = saveIni(m_sly2);
             if (m_saveOk) m_sly2Saved = m_sly2.game;
-        } else
-            m_saveOk = settings::save(file(), m_settings);
+        }
         m_savedAt = ImGui::GetTime();
         if (m_saveOk) {
             m_result = settings::LoadResult::Ok;
@@ -430,7 +473,8 @@ private:
         std::vector<int> rates{ 30, 60, 90, 120, 240 };
         // Sly 2 runs 60 Hz steps drawn between them at any rate (Sly2-Release frameinterp.h): 144 and no limit too
         // (kUncappedFrameRate, an ordinary value of the shared field: Sly2-Release reads it as no limit)
-        if (iniGame()) rates.insert(rates.end(), { 144, kUncappedFrameRate });
+        // Sly 1 runs a variable time step: 144 and no limit there too
+        rates.insert(rates.end(), { 144, kUncappedFrameRate });
 #endif
         // (the game's monitor's highest refresh rate: settings v22's chosen one, else the primary one; m_monitors is read
         // with the Display / Graphics rows)
@@ -480,9 +524,30 @@ private:
         }
         if (m_captureAction >= kAdvancedCapture) {
             if (key != GLFW_KEY_DELETE && !settings::validKeyboardBinding(key)) { m_captureNote = tr("That key cannot be bound."); return; }
-            (m_captureController ? m_actions.gamepad : m_actions.keyboard)[size_t(m_captureAction - kAdvancedCapture)] = key == GLFW_KEY_DELETE ? -1 : key;
+            actionBindings(m_captureController)[size_t(m_captureAction - kAdvancedCapture)] = key == GLFW_KEY_DELETE ? -1 : key;
             m_captureAction = -1;
             commitActions();
+            return;
+        }
+        if (m_captureAction == kSkipCapture) {
+            if (key != GLFW_KEY_DELETE && !settings::validKeyboardBinding(key)) { m_captureNote = tr("That key cannot be bound."); return; }
+            // (its own binding: it may share a key with an action, e.g. Enter is also Start; while a scene can be skipped
+            //  the key only skips)
+            m_sly2.sly1.skipKey = key == GLFW_KEY_DELETE ? settings::kKeyUnknown : key;
+            m_captureAction = -1;
+            commit();
+            return;
+        }
+        if (m_captureAction >= kRhythmCapture) {
+            if (key == settings::kKeyUnknown || !settings::validCameraKey(key)) { m_captureNote = tr("That key cannot be bound."); return; }
+            // (the minigame's keys may be the movement's: they only count there; among themselves the two swap)
+            auto& keys = m_sly2.sly1.rhythmKeys;
+            const size_t slot = size_t(m_captureAction - kRhythmCapture);
+            for (int& k : keys)
+                if (k == key) k = keys[slot];
+            keys[slot] = key;
+            m_captureAction = -1;
+            commit();
             return;
         }
         const bool camera = m_captureAction >= settings::kBindingCount;
@@ -496,14 +561,17 @@ private:
         commit();
     }
     const char* captureName() const {
-        if (m_captureAction >= kAdvancedCapture) return tr(sly2input::kActions[size_t(m_captureAction - kAdvancedCapture)].label);
+        if (m_captureAction >= kAdvancedCapture) return tr(actionLabel(size_t(m_captureAction - kAdvancedCapture)));
+        if (m_captureAction == kSkipCapture) return tr(skipLabel());
+        if (m_captureAction >= kRhythmCapture) return tr(rhythmNames[static_cast<size_t>(m_captureAction - kRhythmCapture)]);
         return tr(m_captureAction >= settings::kBindingCount ? cameraNames[static_cast<size_t>(m_captureAction - settings::kBindingCount)]
-                                                             : actionNames[static_cast<size_t>(m_captureAction)]);
+                                                             : standardLabel(m_captureAction));
     }
     // Action capture accepts mouse buttons and the wheel after the click that
     // selected the row has been released. Camera bindings use keyboard keys.
     void pollMouseCapture() {
-        if (!capturing() || m_captureController || (m_captureAction >= settings::kBindingCount && m_captureAction < kAdvancedCapture)) return;
+        if (!capturing() || m_captureController ||
+            (m_captureAction >= settings::kBindingCount && m_captureAction < kAdvancedCapture && m_captureAction != kSkipCapture)) return;
         const auto& io = ImGui::GetIO();
         if (!m_captureArmed) {
             bool held = false;
@@ -518,13 +586,14 @@ private:
         if (binding < 0 && io.MouseWheel < 0) binding = settings::kMouseWheelDown;
         if (binding < 0) return;
         if (m_captureAction >= kAdvancedCapture) {
-            m_actions.keyboard[size_t(m_captureAction - kAdvancedCapture)] = binding;
+            actionBindings(false)[size_t(m_captureAction - kAdvancedCapture)] = binding;
             m_captureAction = -1;
             m_captureCooldown = ImGui::GetTime() + 0.3;
             commitActions();
             return;
         }
-        m_settings.keyboardBindings[m_captureAction] = binding;
+        if (m_captureAction == kSkipCapture) m_sly2.sly1.skipKey = binding;
+        else m_settings.keyboardBindings[m_captureAction] = binding;
         m_captureAction = -1;
         m_captureCooldown = ImGui::GetTime() + 0.3;
         commit();
@@ -555,6 +624,11 @@ private:
                 }
             if ((state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1) * 0.5f > 0.5f) any = true, pressed = pressed < 0 ? settings::kGamepadLeftTrigger : pressed;
             if ((state.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1) * 0.5f > 0.5f) any = true, pressed = pressed < 0 ? settings::kGamepadRightTrigger : pressed;
+            // (an advanced action that takes the right stick, sly2input::stickBindable: the hack ship's guns)
+            const float rx = state.axes[GLFW_GAMEPAD_AXIS_RIGHT_X], ry = state.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y];
+            if (m_captureAction >= kAdvancedCapture && sly2input::stickBindable(sly2input::Action(m_captureAction - kAdvancedCapture)) &&
+                rx * rx + ry * ry > 0.5f * 0.5f)
+                any = true, pressed = pressed < 0 ? settings::kGamepadRightStick : pressed;
         }
         // Wait for the button that started the capture to be released.
         if (!m_captureArmed) {
@@ -563,7 +637,8 @@ private:
         }
         if (pressed < 0) return;
         const bool advanced = m_captureAction >= kAdvancedCapture;
-        if (advanced) m_actions.gamepad[size_t(m_captureAction - kAdvancedCapture)] = pressed;
+        if (advanced) actionBindings(true)[size_t(m_captureAction - kAdvancedCapture)] = pressed;
+        else if (m_captureAction == kSkipCapture) m_sly2.sly1.skipPad = pressed;
         else m_settings.gamepadBindings[m_captureAction] = pressed;
         m_captureAction = -1;
         m_captureCooldown = ImGui::GetTime() + 0.3;
@@ -713,13 +788,19 @@ private:
             std::copy(std::begin(d.monitor), std::end(d.monitor), s.monitor);
             m_sly2.upscale = settings::Sly2UpscaleOptions{};
             if (m_game == GameId::Sly2) m_sly2.vr.worldScale = settings::Sly2VrOptions{}.worldScale;
-            if (iniGame()) m_sly2.hudPlacement = settings::Sly2Settings{}.hudPlacement;
+            if (iniGame() || m_game == GameId::Sly1) m_sly2.hudPlacement = settings::Sly2Settings{}.hudPlacement;
+            if (m_game == GameId::Sly1) m_sly2.sly1.autoIconify = settings::Sly1Options{}.autoIconify;
             break;
         case Graphics:
             s.internalResolutionHeight = d.internalResolutionHeight, s.msaaEnabled = d.msaaEnabled, s.msaaSamples = d.msaaSamples;
             s.drawDistance = d.drawDistance, s.fogType = d.fogType, s.longShadows = d.longShadows, s.fastShadows = d.fastShadows;
             s.renderer = d.renderer;
             if (iniGame()) m_sly2.outlineThickness = settings::Sly2Settings{}.outlineThickness;
+            if (m_game == GameId::Sly1) {
+                const settings::Sly1Options o;
+                s.anisotropy = d.anisotropy;
+                m_sly2.sly1.resolutionScale = o.resolutionScale, m_sly2.sly1.gamma = o.gamma, m_sly2.sly1.textureFiltering = o.textureFiltering;
+            }
             break;
         case Audio:
             settings::defaultAudio(s);
@@ -728,9 +809,8 @@ private:
             m_sly2.game.usbHeadset = 0;
             break;
         case Controls:
-            if (iniGame() && m_actions.enabled) {
-                m_actions = sly2input::defaults();
-                m_actions.enabled = true;
+            if (actionsEnabled()) {
+                resetActions();
                 commitActions();
                 return;
             }
@@ -751,6 +831,9 @@ private:
             std::copy(std::begin(d.tankKeyBindings), std::end(d.tankKeyBindings), s.tankKeyBindings);
             m_sly2.game.invertBinocucom = settings::Sly2GameOptions{}.invertBinocucom;
             m_sly2.game.invertTurret = settings::Sly2GameOptions{}.invertTurret;
+            if (m_game == GameId::Sly1) m_sly2.sly1.deadZone = settings::Sly1Options{}.deadZone;
+            if (m_game == GameId::Sly1) m_sly2.sly1.rhythmKeys = settings::Sly1Options{}.rhythmKeys;
+            if (m_game == GameId::Sly1) m_sly2.sly1.skipKey = settings::Sly1Options{}.skipKey, m_sly2.sly1.skipPad = settings::Sly1Options{}.skipPad;
             break;
         case Interface: s.guiStyle = d.guiStyle, s.guiScale = d.guiScale; break;
         case Launcher:
@@ -861,9 +944,9 @@ private:
         int aspect = m_settings.aspectMode;
         if (stepperRow(tr("Aspect ratio"), &aspect, aspects)) m_settings.aspectMode = aspect, commit();
         describe(tr("Fit to screen uses the whole window. The PS2 options match the original framing."));
-        // (Sly 2 / Sly 3, Settings.ini [Display] HUD Placement: Sly2-Release / Sly3-Release display.h hudPlacement; the
-        // games' Display options have the same row. Replaces the original's Center Screen.)
-        if (iniGame()) {
+        // (Settings.ini [Display] HUD Placement: Sly2-Release / Sly3-Release display.h hudPlacement, Sly 1's
+        // safehouse/hudbox.h; the games' Display options have the same row. Replaces the original's Center Screen.)
+        if (iniGame() || m_game == GameId::Sly1) {
             const std::vector<std::string> placements{ "4:3", "16:9", "16:10", tr("Match screen") };
             int placement = std::clamp(m_sly2.hudPlacement, 0, settings::kHudPlacementCount - 1);
             if (stepperRow(tr("HUD placement"), &placement, placements)) m_sly2.hudPlacement = placement, commit();
@@ -878,6 +961,12 @@ private:
         if (stepperRow(tr("Frame rate limit"), &index, labels, nullptr, index < 0 ? custom.c_str() : nullptr))
             m_settings.frameRate = rates[static_cast<size_t>(index)], commit();
         describe(tr("The highest frame rate the game runs at. Gameplay speed is the same at every setting."));
+#if !defined(CANE_ANDROID) && !defined(CANE_IOS)
+        // (Sly 1, Settings.ini [Display] Minimize When Unfocused: the game's own video option)
+        if (m_game == GameId::Sly1)
+            toggle(tr("Minimize when unfocused"), m_sly2.sly1.autoIconify,
+                   tr("A fullscreen game minimizes when another window takes the focus. Off: it stays on its screen."));
+#endif
         upscalingRows();
         vrRows();
     }
@@ -995,39 +1084,64 @@ private:
                    tr("The original's 3D mode for red/cyan glasses. On: the game asks whether to play in 3D, and the job "
                       "menu offers a start in 3D. Off: never asked, normal picture."));
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
-        // (settings v21 renderer: Sly2-Release / Sly3-Release renderer.h, platform/renderer_choice.h: Auto is Vulkan with
-        // OpenGL the fallback; Linux and Windows, where the games have the Vulkan renderer)
-        if (iniGame()) {
+        // (settings v21 renderer: Sly2-Release / Sly3-Release renderer.h, Sly 1's gl.cpp through platform/vulkan/vk_game.h,
+        // platform/renderer_choice.h: Auto is Vulkan with OpenGL the fallback; Linux and Windows, where the games have the
+        // Vulkan renderer)
+        if (iniGame() || m_game == GameId::Sly1) {
             const std::vector<std::string> renderers{ tr("Auto (Vulkan)"), "Vulkan", "OpenGL" };
             int renderer = std::clamp(m_settings.renderer, 0, 2);
             if (stepperRow(tr("Renderer"), &renderer, renderers)) m_settings.renderer = renderer, commit();
             describe(tr("Auto uses Vulkan and switches to OpenGL by itself when the graphics driver cannot run Vulkan. After a "
-                        "Vulkan start that failed, Auto stays on OpenGL until Vulkan is chosen here. Takes effect the next "
-                        "time the game starts."));
+                        "Vulkan start that failed, Auto uses OpenGL for the next few starts and then tries Vulkan again (also "
+                        "after an update); choosing Vulkan here tries it at once. Takes effect the next time the game starts."));
         }
 #elif defined(__ANDROID__)
         // (Sly2-Release renderer.cpp on Android: Auto is Vulkan, OpenGL ES when it cannot start, for VR, or after a
-        // start that stopped in its first frames)
-        if (iniGame()) {
+        // start that stopped in its first frames; Sly 1 the same through platform/vulkan/vk_game.h and
+        // platform/render/gles_sly1.h, without VR)
+        if (iniGame() || m_game == GameId::Sly1) {
             const std::vector<std::string> renderers{ tr("Automatic"), "Vulkan", "OpenGL ES" };
             int renderer = std::clamp(m_settings.renderer, 0, 2);
             if (stepperRow(tr("Renderer"), &renderer, renderers)) m_settings.renderer = renderer, commit();
-            describe(tr("Auto uses Vulkan, and OpenGL ES when this device cannot run it, in VR, or when the last start on "
-                        "Vulkan did not finish. Vulkan tries it again. Takes effect the next time the game starts."));
+            describe(tr("Auto uses Vulkan, and OpenGL ES when this device cannot run it, in VR, or for a few starts after a "
+                        "start on Vulkan crashed; then it tries Vulkan again. Vulkan tries it at once. Takes effect the next "
+                        "time the game starts."));
         }
 #endif
         if (m_game != GameId::Sly1) return;   // (Sly 2 has no fog option)
-        const std::vector<std::string> fogs{ tr("PS2 style"), tr("PS3 style") };
-        int fog = m_settings.fogType == settings::Fog_PS3 ? 1 : m_settings.fogType == settings::Fog_PS2 ? 0 : -1;
-        if (stepperRow(tr("Fog"), &fog, fogs, nullptr, fog < 0 ? tr("Off") : nullptr))
-            m_settings.fogType = fog == 1 ? settings::Fog_PS3 : settings::Fog_PS2, commit();
-        describe(tr("PS2 style is the original look. PS3 style follows the remaster."));
+        // (Sly 1's own Settings.ini keys, platform/sly1_settings.h: the game's PC video options)
+        const std::vector<std::string> fogs{ tr("PS2 style"), tr("PS3 style"), tr("Off") };
+        int fog = m_settings.fogType == settings::Fog_PS3 ? 1 : m_settings.fogType == settings::Fog_Off ? 2 : 0;
+        if (stepperRow(tr("Fog"), &fog, fogs))
+            m_settings.fogType = fog == 1 ? settings::Fog_PS3 : fog == 2 ? settings::Fog_Off : settings::Fog_PS2, commit();
+        describe(tr("PS2 style is the original look. PS3 style follows the remaster. Off draws no fog."));
+        if (m_settings.internalResolutionHeight == 0)
+            rangeRow(tr("Resolution scale"), m_sly2.sly1.resolutionScale, 50, 200, 25,
+                     tr("With Internal resolution Native: the 3D scene's size against the window. Lower is faster, higher is "
+                        "sharper."), percent);
+        {
+            int brightness = int(std::lround(m_sly2.sly1.gamma * 100.0f));
+            if (rangeRow(tr("Brightness"), brightness, 50, 150, 5, tr("The picture's gamma. The original's is 100%."), percent))
+                m_sly2.sly1.gamma = float(brightness) / 100.0f, commit();
+        }
+        const std::vector<std::string> filters{ tr("Trilinear"), tr("Bilinear") };
+        int filter = m_sly2.sly1.textureFiltering ? 0 : 1;
+        if (stepperRow(tr("Texture filtering"), &filter, filters)) m_sly2.sly1.textureFiltering = filter == 0, commit();
+        describe(tr("Trilinear blends between texture sizes for smoother distant surfaces. Bilinear is slightly sharper and "
+                    "shows the steps."));
+        static const std::vector<int> anisotropies{ 1, 2, 4, 8, 16 };
+        const std::vector<std::string> anisotropyLabels{ tr("Off"), "2x", "4x", "8x", "16x" };
+        int anisotropy = indexOf(anisotropies, m_settings.anisotropy);
+        if (stepperRow(tr("Anisotropic filtering"), &anisotropy, anisotropyLabels, nullptr, anisotropy < 0 ? tr("Custom") : nullptr))
+            m_settings.anisotropy = anisotropies[static_cast<size_t>(anisotropy)], commit();
+        describe(tr("Keeps textures sharp on surfaces seen at a steep angle, such as floors and roads."));
     }
     // ---- (audio, notes/AUDIO_2026-11-10.md) Sly 2's devices by name (platform/audio_devices.h; Settings.ini [Audio]) and
     // the original's USB Headset option; the list is SDL2's (loaded at run time), read when the page is shown
     cane::audio::DeviceList m_audioDevices;
     double m_audioListed = -1.0;
-    void audioDeviceRows() {
+    // (Sly 1: the output only; it has no USB headset)
+    void audioDeviceRows(bool outputOnly = false) {
 #if !defined(__ANDROID__) && !defined(__SWITCH__) && !defined(CANE_IOS)
         if (m_audioListed < 0 || ImGui::GetTime() - m_audioListed > 3.0) {
             m_audioDevices = cane::audio::listDevices();
@@ -1057,6 +1171,7 @@ private:
         };
         deviceRow(tr("Output device"), m_sly2.game.outputDevice, m_audioDevices.outputs, N_("System default"),
                   tr("Where the game's sound plays. A chosen device that is unplugged plays on the system default until it is back."));
+        if (outputOnly) return;
         toggle(tr("USB Headset"), m_sly2.game.usbHeadset,
                tr("The PS2's USB headset option. On: a loud shout into the microphone makes a noise nearby guards come to check, and "
                   "the dialogue plays on the headset output. The same as the in-game USB Headset option."));
@@ -1075,6 +1190,7 @@ private:
             if (stepperRow(tr("Speakers"), &speaker, speakers)) m_settings.stereoEnabled = speaker == 0, commit();
             describe(tr("Mono mixes both channels together, for a single speaker or one ear."));
             sly1LanguageRow();
+            audioDeviceRows(true);
         } else if (iniGame()) {
             // (the original's Speakers option, Settings.ini; values settings::Sly2Speakers)
             const std::vector<std::string> speakers{ tr("Surround"), tr("Stereo"), tr("Mono") };
@@ -1103,6 +1219,14 @@ private:
     static constexpr std::array<const char*, settings::kBindingCount> actionNames{
         N_("Move up"), N_("Move down"), N_("Move left"), N_("Move right"), N_("Square"), N_("Circle"), N_("Cross"), N_("Triangle"),
         N_("Start"), N_("Select"), "L1", "R1", "L2", "R2", "L3", "R3" };
+    // A standard binding's name: the PS2 button's (Sly 2 / Sly 3), or for Sly 1 its action on that button (the same
+    // names as its Advanced Input Mapping rows, sly1_action_bindings.h), e.g. L1 "Talk to Bentley (binocucom)".
+    const char* standardLabel(int button) const {
+        if (m_game == GameId::Sly1)
+            for (const auto& a : sly1input::kActions)
+                if (a.context == sly1input::Context::Any && a.pad == button) return a.label;
+        return actionNames[size_t(button)];
+    }
     static constexpr std::array<input::Button, settings::kBindingCount> actionButtons{
         input::Button::DpadUp, input::Button::DpadDown, input::Button::DpadLeft, input::Button::DpadRight,
         input::Button::West,   input::Button::East,     input::Button::South,    input::Button::North,
@@ -1119,7 +1243,7 @@ private:
         ImGui::PushID(action + (controller ? 100 : 0));
         const bool advanced = action >= kAdvancedCapture;
         const int index = advanced ? action - kAdvancedCapture : action;
-        const char* label = tr(advanced ? sly2input::kActions[size_t(index)].label : actionNames[size_t(index)]);
+        const char* label = tr(advanced ? actionLabel(size_t(index)) : standardLabel(index));
         const Row r = rowBehavior(label, px(52), false, 0.45f);
         if (r.visible) {
             const bool capturingThis = m_captureAction == action && m_captureController == controller;
@@ -1130,7 +1254,7 @@ private:
             dl->AddText(fonts().body, fonts().body->FontSize, { r.bb.Min.x + px(advanced ? 16 : 56), std::round(cy - fonts().body->FontSize * 0.5f) },
                         ink(color::text), label);
             recordLayout(label, r.bb);
-            const int* bindings = advanced ? (controller ? m_actions.gamepad.data() : m_actions.keyboard.data())
+            const int* bindings = advanced ? actionBindings(controller)
                                           : controller ? m_settings.gamepadBindings : m_settings.keyboardBindings;
             const int value = bindings[index];
             int duplicate = -1;
@@ -1171,7 +1295,7 @@ private:
             if (duplicate >= 0 && !capturingThis) {
                 drawIcon(dl, Icon::Warning, { r.control.Min.x + px(10), cy }, px(18), ink(color::warning));
                 if (ImGui::IsItemFocused() || ImGui::IsItemHovered())
-                    m_help = trf("Also used by %s. Both actions trigger together.", tr(actionNames[static_cast<size_t>(duplicate)]));
+                    m_help = trf("Also used by %s. Both actions trigger together.", tr(standardLabel(duplicate)));
             }
             if (!capturingThis && m_help.empty() && (ImGui::IsItemFocused() || ImGui::IsItemHovered()))
                 m_help = controller ? tr("Select, then press the controller button to use for this action.")
@@ -1215,6 +1339,96 @@ private:
             }
             if (!capturingThis && (ImGui::IsItemFocused() || ImGui::IsItemHovered()))
                 m_help = tr("Keyboard camera, like the right stick. In menus these keys also move the highlight.");
+        }
+        ImGui::PopID();
+    }
+    static constexpr std::array<const char*, settings::kSly1RhythmKeyCount> rhythmNames{
+        N_("Rhythm: Triangle"), N_("Rhythm: Square"), N_("Rhythm: Circle"), N_("Rhythm: Cross") };
+    // Sly 1's rhythm minigame: its own key for one of its buttons (system_settings.h kSly1RhythmPads' order).
+    void rhythmKeyRow(int slot) {
+        ImGui::PushID(300 + slot);
+        const char* label = tr(rhythmNames[static_cast<size_t>(slot)]);
+        const Row r = rowBehavior(label, px(52), false, 0.45f);
+        if (r.visible) {
+            const int action = kRhythmCapture + slot;
+            const bool capturingThis = m_captureAction == action && !m_captureController;
+            if (r.activated && !r.disabled && !capturingThis && ImGui::GetTime() > m_captureCooldown) startCapture(action, false);
+            auto* dl = ImGui::GetWindowDrawList();
+            const float cy = r.bb.GetCenter().y;
+            static constexpr input::Button buttons[settings::kSly1RhythmKeyCount] = { input::Button::North, input::Button::West,
+                                                                                      input::Button::East, input::Button::South };
+            drawPadButton(dl, { r.bb.Min.x + px(30), cy }, px(28), input::Family::PlayStation, buttons[slot]);
+            dl->AddText(fonts().body, fonts().body->FontSize, { r.bb.Min.x + px(56), std::round(cy - fonts().body->FontSize * 0.5f) },
+                        ink(color::text), label);
+            recordLayout(label, r.bb);
+            const float right = r.control.Max.x;
+            const int value = m_sly2.sly1.rhythmKeys[static_cast<size_t>(slot)];
+            if (capturingThis) {
+                const float pulse = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.0f);
+                const auto t = measure(fonts().tab, tr("Press a key…"));
+                dl->AddRect({ r.control.Min.x, r.bb.Min.y + px(8) }, { right, r.bb.Max.y - px(8) }, ink(color::cta, pulse), px(6), 0, px(2));
+                dl->AddText(fonts().tab, fonts().tab->FontSize, { std::round(r.control.GetCenter().x - t.x * 0.5f), std::round(cy - t.y * 0.5f) },
+                            ink(color::cta), tr("Press a key…"));
+                m_help = m_captureNote.empty() ? std::string(tr("Select, then press the key to use for this action. Escape cancels.")) : m_captureNote;
+            } else if (value == settings::kKeyUnknown) {
+                const auto t = measure(fonts().body, tr("Unbound"));
+                dl->AddText(fonts().body, fonts().body->FontSize, { right - t.x, std::round(cy - t.y * 0.5f) }, ink(color::muted), tr("Unbound"));
+            } else {
+                const std::string name = keyName(value);
+                const float h = px(30), w = keycapWidth(name.c_str(), h);
+                drawKeycap(dl, { right - w, std::round(cy - h * 0.5f) - px(1) }, h, name.c_str());
+            }
+            if (!capturingThis && (ImGui::IsItemFocused() || ImGui::IsItemHovered()))
+                m_help = tr("Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.");
+        }
+        ImGui::PopID();
+    }
+    // Sly 1's cutscene / conversation skip: its own key or controller button (Settings.ini Skip Cutscene), beside the
+    // PS2 buttons' bindings and kept in both of the input mappings.
+    static const char* skipLabel() { return N_("Skip cutscene / conversation"); }
+    void skipRow(bool controller, input::Family family) {
+        ImGui::PushID(controller ? 401 : 400);
+        const char* label = tr(skipLabel());
+        const Row r = rowBehavior(label, px(52), false, 0.45f);
+        if (r.visible) {
+            const bool capturingThis = m_captureAction == kSkipCapture && m_captureController == controller;
+            if (r.activated && !r.disabled && !capturingThis && ImGui::GetTime() > m_captureCooldown) startCapture(kSkipCapture, controller);
+            auto* dl = ImGui::GetWindowDrawList();
+            const float cy = r.bb.GetCenter().y;
+            dl->AddText(fonts().body, fonts().body->FontSize, { r.bb.Min.x + px(56), std::round(cy - fonts().body->FontSize * 0.5f) },
+                        ink(color::text), label);
+            recordLayout(label, r.bb);
+            const float right = r.control.Max.x;
+            const int value = controller ? m_sly2.sly1.skipPad : m_sly2.sly1.skipKey;
+            if (capturingThis) {
+                const float pulse = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.0f);
+                const char* prompt = controller ? tr("Press a button…") : tr("Press a key or mouse button…");
+                const auto t = measure(fonts().tab, prompt);
+                dl->AddRect({ r.control.Min.x, r.bb.Min.y + px(8) }, { right, r.bb.Max.y - px(8) }, ink(color::cta, pulse), px(6), 0, px(2));
+                dl->AddText(fonts().tab, fonts().tab->FontSize, { std::round(r.control.GetCenter().x - t.x * 0.5f), std::round(cy - t.y * 0.5f) },
+                            ink(color::cta), prompt);
+                m_help = m_captureNote.empty() ? std::string(controller ? tr("Select, then press the controller button to use for this action.")
+                                                                        : tr("Select, then press the key to use for this action. Escape cancels."))
+                                               : m_captureNote;
+            } else if (value == settings::kKeyUnknown) {
+                const auto t = measure(fonts().body, tr("Unbound"));
+                dl->AddText(fonts().body, fonts().body->FontSize, { right - t.x, std::round(cy - t.y * 0.5f) }, ink(color::muted), tr("Unbound"));
+            } else if (controller) {
+                const auto button = input::fromGlfwBinding(value);
+                const char* name = input::buttonLabel(button, family);
+                const auto t = measure(fonts().body, name);
+                dl->AddText(fonts().body, fonts().body->FontSize, { right - t.x, std::round(cy - t.y * 0.5f) }, ink(color::text2), name);
+                const float glyph = px(30);
+                const float gw = padButtonWidth(glyph, family, button);
+                if (button != input::Button::Count) drawPadButton(dl, { right - t.x - px(12) - gw * 0.5f, cy }, glyph, family, button);
+            } else {
+                const std::string name = keyName(value);
+                const float h = px(30), w = keycapWidth(name.c_str(), h);
+                drawKeycap(dl, { right - w, std::round(cy - h * 0.5f) - px(1) }, h, name.c_str());
+            }
+            if (!capturingThis && (ImGui::IsItemFocused() || ImGui::IsItemHovered()))
+                m_help = tr("Hold it to skip a cutscene or a binocucom conversation (one press with Instant skip cutscenes). "
+                            "While a scene can be skipped it does nothing else.");
         }
         ImGui::PopID();
     }
@@ -1290,41 +1504,39 @@ private:
                     nullptr, at.x + width - textX - px(16));
     }
     void controlsRows() {
-        const bool advanced = iniGame() && m_actions.enabled;
+        const bool advanced = actionsEnabled();
         const auto family = input::promptFamily(promptStyle(), 0);
         section(tr("Controller in use"));
         controllerCard();
-        if (iniGame()) {
-            ImGui::BeginDisabled(m_actions.readOnly);
-            bool enabled = m_actions.enabled;
+        if (actionGame()) {
+            ImGui::BeginDisabled(actionsReadOnly());
+            bool enabled = actionsEnabled();
             if (toggleRow(tr("Advanced Input Mapping"), &enabled)) {
-                m_actions.enabled = enabled;
+                setActionsEnabled(enabled);
                 cancelCapture();
                 commitActions();
             }
             describe(tr("Bind gameplay actions independently. Off restores your original button mapping without changing it."));
             ImGui::EndDisabled();
-            if (m_actions.readOnly) caption(tr("The advanced controls file cannot be edited by this version."));
+            if (actionsReadOnly()) caption(tr("The advanced controls file cannot be edited by this version."));
         }
         if (advanced) {
             section(tr("Action bindings"));
             const std::vector<std::string> devices{tr("Keyboard and mouse"), tr("Controller")};
             stepperRow(tr("Input device"), &m_actionDevice, devices);
             std::vector<std::string> groups;
-            for (size_t i = 0; i < sly2input::kActionCount; ++i) {
-                if (!m_debug && sly2input::isNoclipAction(sly2input::Action(i))) continue;
-                if (m_game == GameId::Sly3 && !sly3input::offered(sly2input::Action(i))) continue;   // (Sly 2's own minigames)
-                const auto& action = sly2input::kActions[i];
-                if (std::find(groups.begin(), groups.end(), action.group) == groups.end()) groups.emplace_back(action.group);
+            for (size_t i = 0; i < actionCount(); ++i) {
+                if (!actionOffered(i)) continue;
+                const char* group = actionGroup(i);
+                if (std::find(groups.begin(), groups.end(), group) == groups.end()) groups.emplace_back(group);
             }
             m_actionGroup = std::clamp(m_actionGroup, 0, int(groups.size()) - 1);
             std::vector<std::string> groupNames;
             for (const auto& g : groups) groupNames.push_back(tr(g));
             stepperRow(tr("Action group"), &m_actionGroup, groupNames);
-            ImGui::BeginDisabled(m_actions.readOnly);
-            for (size_t i = 0; i < sly2input::kActionCount; ++i)
-                if (groups[size_t(m_actionGroup)] == sly2input::kActions[i].group &&
-                    (m_game != GameId::Sly3 || sly3input::offered(sly2input::Action(i))))
+            ImGui::BeginDisabled(actionsReadOnly());
+            for (size_t i = 0; i < actionCount(); ++i)
+                if (actionOffered(i) && groups[size_t(m_actionGroup)] == actionGroup(i))
                     bindingRow(kAdvancedCapture + int(i), m_actionDevice == 1, family);
             ImGui::EndDisabled();
             caption(tr("Bindings may be shared. Actions apply only in their gameplay context. Escape cancels capture. Delete clears a binding."));
@@ -1335,6 +1547,13 @@ private:
         if (m_game == GameId::Sly1)
             toggle(tr("Controller vibration"), m_settings.controllerVibration,
                    tr("The game's rumble on hits, explosions and scripted moments. The in-game Vibration option must also be on."));
+        // (Sly 1, Settings.ini [Controller] Dead Zone: the sticks')
+        if (m_game == GameId::Sly1) {
+            int deadZone = int(std::lround(m_sly2.sly1.deadZone * 100.0f));
+            if (rangeRow(tr("Stick dead zone"), deadZone, 5, 50, 5,
+                         tr("How far a stick moves before it counts. Raise it if the character or camera drifts by itself."), percent))
+                m_sly2.sly1.deadZone = float(deadZone) / 100.0f, commit();
+        }
         else if (iniGame())
             toggle(tr("Controller vibration"), m_settings.controllerVibration,
                    tr("The game's rumble on hits, explosions and scripted moments. The same as the in-game Vibrations option."));
@@ -1346,7 +1565,8 @@ private:
         toggle(tr("Original PlayStation icons"), m_settings.alwaysOriginalPsPrompts,
                tr("Every device shows the game's original PlayStation 2 button icons. Off: PS4 / PS5 pads show their own icons, other devices theirs."));
         toggle(tr("Instant skip cutscenes"), m_settings.instantSkipCutscenes,
-               tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
+               m_game == GameId::Sly1 ? tr("One press of the skip button skips a cutscene or a conversation. Off: hold it for 2 seconds.")
+                                      : tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
         if (m_game == GameId::Sly1 || iniGame()) {
             const std::vector<std::string> cameraRotationLabels{ tr("Off"), tr("On") };
             int cameraRotation = m_settings.autoCameraRotation != 0 ? 1 : 0;
@@ -1384,9 +1604,16 @@ private:
             }
         }
         if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, true, family);
+        if (m_game == GameId::Sly1) skipRow(true, family);
         section(tr("Keyboard"));
         if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, false, family);
+        if (m_game == GameId::Sly1) skipRow(false, input::Family::Keyboard);
         for (int i = 0; i < settings::kCameraKeyCount; ++i) cameraKeyRow(i);
+        // (Sly 1: the rhythm minigame's own keys; with Advanced Input Mapping on they are its action group's)
+        if (m_game == GameId::Sly1 && !advanced) {
+            caption(tr("Rhythm minigame"), color::text2);
+            for (int i = 0; i < settings::kSly1RhythmKeyCount; ++i) rhythmKeyRow(i);
+        }
         ImGui::Indent(px(16));
         caption(tr("Escape also pauses and goes back, and Enter confirms in menus."));
         ImGui::Unindent(px(16));
@@ -1493,8 +1720,106 @@ private:
         }
         describe(tr("Which controller's buttons the launcher shows. Automatic follows the controller you used last."));
         if (updates) updates->settingsRows([this](const char* help) { describe(help); }, m_fixture);
+#if defined(__ANDROID__)
+        vulkanDriverRows();
+#endif
         collectionRows();
     }
+#if defined(__ANDROID__)
+    // ---- Settings > Launcher > Vulkan driver (launcher/android_drivers.h): the system's driver or an imported package
+    // (Mesa Turnip) for every game's Vulkan renderer; Adreno GPUs, arm64, not on VR headsets.
+    std::vector<android::vkdriver::Package> m_drivers;
+    double m_nextDrivers = -1;
+    std::string m_driverNote, m_gpu;
+    bool m_driverImporting = false;
+    void vulkanDriverRows() {
+        namespace drv = android::vkdriver;
+        if (m_gpu.empty())
+            if (const auto* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER))) m_gpu = renderer;
+        if (android::openXrRuntimeInstalled()) return;   // (VR headsets: the system's driver, vk_loader.cpp)
+        if (m_driverImporting) {
+            const auto status = android::driverImport();
+            if (!status.pending) {
+                m_driverImporting = false;
+                if (!status.error.empty()) m_driverNote = trf("The driver package was not imported: %s", status.error.c_str());
+                else if (!status.path.empty()) {
+                    try {
+                        const auto package = drv::importZip(path(status.path), android_get_device_api_level());
+                        drv::select({ package.id, package.library, drv::label(package) });
+                        drv::clearLastError();
+                        m_driverNote = trf("%s imported and chosen. It is used the next time a game starts.", drv::label(package).c_str());
+                    } catch (const std::exception& e) {
+                        m_driverNote = trf("The driver package was not imported: %s", e.what());
+                    }
+                    m_nextDrivers = -1;
+                }
+            }
+        }
+        if (ImGui::GetTime() >= m_nextDrivers) {
+            m_nextDrivers = ImGui::GetTime() + 2.0;
+            m_drivers = m_fixture ? std::vector<drv::Package>{} : drv::installed();
+        }
+        const bool adreno = m_gpu.find("Adreno") != std::string::npos;
+        if (!adreno && m_drivers.empty()) return;   // (custom drivers are for Adreno GPUs)
+        section(tr("Vulkan driver"));
+#if !defined(CANE_ADRENOTOOLS)
+        caption(tr("Custom Vulkan drivers need the arm64 version of SafeHouse."), color::warning);
+        return;
+#endif
+        // (a GPU generation custom drivers are not known to drive yet, android_drivers.h kAdrenoFamilies: still offered,
+        // since a newer driver build may work, with the reason as a warning; the black-picture watch,
+        // custom_driver_watch.h, puts the system driver back if a game shows nothing)
+        const std::string untested = drv::blockedReason(m_gpu);
+        std::vector<std::string> labels{ tr("System driver") };
+        const std::string chosen = drv::selection().id;
+        int index = 0;
+        for (const auto& p : m_drivers) {
+            labels.push_back(drv::label(p));
+            if (p.id == chosen) index = int(labels.size()) - 1;
+        }
+        ImGui::BeginDisabled(m_fixture || m_driverImporting);
+        if (stepperRow(tr("Vulkan driver"), &index, labels, m_gpu.empty() ? nullptr : m_gpu.c_str())) {
+            if (index == 0) drv::select({});
+            else {
+                const auto& p = m_drivers[size_t(index - 1)];
+                drv::select({ p.id, p.library, drv::label(p) });
+            }
+            drv::clearLastError();
+            m_driverNote.clear();
+        }
+        describe(tr("The Vulkan driver every game uses. System driver is the one your device came with. A custom driver (for "
+                    "example Mesa Turnip for Adreno GPUs) can run better or worse: if a game crashes while starting with it, "
+                    "SafeHouse goes back to the system driver by itself. VR always uses the system driver."));
+        if (!untested.empty()) {
+            ImGui::Indent(px(16));
+            caption(tr(untested.c_str()), color::warning);
+            ImGui::Unindent(px(16));
+        }
+        if (linkRow(tr("Import a driver package…"), tr(".zip"), nullptr, Icon::Folder) && !m_fixture) {
+            m_driverNote.clear();
+            try {
+                android::requestDriverImport();
+                m_driverImporting = true;
+            } catch (const std::exception& e) {
+                m_driverNote = e.what();
+            }
+        }
+        describe(tr("A .zip with meta.json and the driver library, as emulators use them (for example a Turnip build). It is "
+                    "copied into the app; SafeHouse ships no drivers."));
+        if (index > 0 && linkRow(tr("Remove this driver"), nullptr, nullptr, Icon::Trash) && !m_fixture) {
+            drv::remove(m_drivers[size_t(index - 1)].id);
+            m_nextDrivers = -1;
+        }
+        ImGui::EndDisabled();
+        const std::string error = drv::lastError();
+        const std::string& note = !m_driverNote.empty() ? m_driverNote : error;
+        if (!note.empty()) {
+            ImGui::Indent(px(16));
+            caption(note.c_str(), color::warning);
+            ImGui::Unindent(px(16));
+        }
+    }
+#endif
     // The Collection Style Launcher (launcher/collection/collection.h): The Sly Collection's (PS3) own menu. It exists
     // only with that menu imported from the player's disc (collection/ps3menu.h): until then the rows say so and lead
     // to the import; afterwards: start it, put it in Steam or on the desktop, import again, remove.
@@ -1666,7 +1991,10 @@ private:
             }
         }
         installLocationRows(gameRunning);
-#if !defined(CANE_ANDROID) && !defined(CANE_IOS)
+#if defined(CANE_ANDROID)
+        storageAccessRows();
+#endif
+#if !defined(CANE_IOS)
         discLibraryRows(gameRunning);
 #endif
         for (GameId g : { GameId::Sly1, GameId::Sly2, GameId::Sly3 }) {
@@ -1767,6 +2095,28 @@ private:
             ImGui::Unindent(px(16));
         }
     }
+#if defined(CANE_ANDROID)
+    // (Android, install_location.h) folders anywhere on the storage: All files access (Android 11+) or the storage
+    // permission (6-10), asked only here. Without it: the private folder and the app's own folders on the storage / SD.
+    bool m_allFiles = false;
+    double m_nextAllFiles = -1;
+    void storageAccessRows() {
+        if (ImGui::GetTime() >= m_nextAllFiles) {
+            m_nextAllFiles = ImGui::GetTime() + 1.0;
+            m_allFiles = !m_fixture && android::allFilesAccess();
+        }
+        if (m_allFiles) {
+            ImGui::Indent(px(16));
+            caption(tr("SafeHouse may use folders anywhere on this device's storage and SD cards."), color::text2);
+            ImGui::Unindent(px(16));
+            return;
+        }
+        if (linkRow(tr("Allow folders anywhere…"), nullptr, nullptr, Icon::Folder) && !m_fixture) android::requestAllFilesAccess();
+        describe(tr("Without this, games install in the app's own storage or its folders on the phone storage and SD card, "
+                    "which Android removes when SafeHouse is uninstalled. With it (Android's \"All files access\"), you can choose "
+                    "any folder for installations and disc images, and they stay when the app is removed."));
+    }
+#endif
     void setInstallRoot(const fs::path& chosen) {
         try {
             m_backend.setInstallRoot(chosen);
@@ -1778,8 +2128,9 @@ private:
         m_nextLocation = 0;
     }
     // "Disc images folder" (backend.h isoLibrary): a folder of the player's own .iso / .chd files that the install
-    // page searches before the usual folders. Not on Android / iOS: the app reads only the disc images picked with
-    // the system's document picker there (no access to other folders).
+    // page searches before the usual folders. Not on iOS (the app reads only the disc images picked with the system's
+    // document picker there). Android (2026-11-24): any folder the app can read (its own folders on the storage / SD
+    // card, or anywhere with All files access, storageAccessRows).
     void discLibraryRows(bool gameRunning) {
         section(tr("Disc images"));
         ImGui::BeginDisabled(m_job.busy || gameRunning);
@@ -2358,6 +2709,7 @@ private:
     settings::Sly2Settings m_sly2;          // Sly 2: the whole Settings.ini (m_settings is its .system while shown)
     settings::Sly2GameOptions m_sly2Saved;  // its game options as last read or written (the pending migration)
     sly2input::Profile m_actions = sly2input::defaults();
+    sly1input::Profile m_actions1 = sly1input::defaults();
     fs::file_time_type m_actionMtime{};
     int m_actionDevice = 0, m_actionGroup = 0;
     settings::LoadResult m_result = settings::LoadResult::Missing;

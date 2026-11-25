@@ -13,8 +13,10 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 if(NOT ANDROID_ABI MATCHES "^(arm64-v8a|x86_64)$")
  message(FATAL_ERROR "SafeHouse Android supports arm64-v8a and the x86_64 emulator ABI")
 endif()
-if(ANDROID_PLATFORM_LEVEL LESS 26)
- message(FATAL_ERROR "SafeHouse Android requires API 26 or newer")
+# (API 21, Android 5.0, since 2026-11-24: the launcher and the games on OpenGL ES; Vulkan from API 24 where the device
+# has it, loaded at run time; newer functions are looked up at run time or guarded, android/README.md "Older Android")
+if(ANDROID_PLATFORM_LEVEL LESS 21)
+ message(FATAL_ERROR "SafeHouse Android requires API 21 or newer")
 endif()
 include(FetchContent)
 find_package(Threads REQUIRED)
@@ -58,9 +60,22 @@ target_compile_options(cane_platform INTERFACE -fsigned-char -ffp-contract=off)
 set(imgui_root "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/include/imgui")
 add_library(cane_ui STATIC ${imgui_root}/imgui.cpp ${imgui_root}/imgui_draw.cpp ${imgui_root}/imgui_tables.cpp
  ${imgui_root}/imgui_widgets.cpp ${imgui_root}/imgui_impl_glfw.cpp ${imgui_root}/imgui_impl_opengl3.cpp
- ${imgui_root}/ImGuiFileDialog.cpp Sly1-Release/glad.c
+ ${imgui_root}/ImGuiFileDialog.cpp Libraries/glad/glad.c
  platform/android/glfw_sdl.cpp platform/android/android_app.cpp platform/android/gles_sly2.cpp)
 target_link_libraries(cane_ui PUBLIC cane_platform SDL2::SDL2 ${CMAKE_DL_LIBS})
+# Custom Vulkan drivers (Mesa Turnip on Adreno; platform/android/vulkan_driver.h, platform/vulkan/vk_loader.cpp):
+# libadrenotools (BSD-2-Clause, Libraries/adrenotools) loads a driver package the player imported in place of the
+# system's driver. arm64 only (the library's own limit); its hooks libhook_impl.so / libmain_hook.so are staged beside
+# the games (scripts/android/build-package.py), as the library loads them from the app's native library folder.
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+ add_subdirectory(Libraries/adrenotools)
+ target_link_libraries(cane_ui PUBLIC adrenotools)
+ target_compile_definitions(cane_ui PUBLIC CANE_ADRENOTOOLS=1)
+ foreach(hook hook_impl main_hook file_redirect_hook gsl_alloc_hook)
+  target_link_options(${hook} PRIVATE "-Wl,-z,max-page-size=16384")
+  set_target_properties(${hook} PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+ endforeach()
+endif()
 # The games and the launcher link "glfw" (Sly2-Release/CMakeLists.txt, cmake/prompts.cmake): the SDL shim.
 add_library(glfw ALIAS cane_ui)
 
@@ -72,7 +87,9 @@ target_link_libraries(cane_chd PUBLIC cane_platform)
 add_library(cane-extractor SHARED "File Extractor/main.cpp" platform/android/native_entry.cpp)
 set_source_files_properties("File Extractor/main.cpp" PROPERTIES COMPILE_DEFINITIONS main=cane_extractor_implementation)
 target_compile_definitions(cane-extractor PRIVATE CANE_ANDROID_EXTRACTOR_ENTRY)
-target_link_libraries(cane-extractor PRIVATE cane_ui cane_chd Threads::Threads)
+# Sly 1's level tools in the extractor's own process (cmake/sly1_pcbrx.cmake)
+include(cmake/sly1_pcbrx.cmake)
+target_link_libraries(cane-extractor PRIVATE cane_ui cane_chd sly1_pcbrx Threads::Threads)
 
 # ---- The launcher (libsafehouse.so)
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
@@ -138,6 +155,34 @@ set(cane_android_games Sly2-Release)
 if(CANE_BUILD_SLY3)
  add_subdirectory(Sly3-Release)
  list(APPEND cane_android_games Sly3-Release)
+endif()
+
+# ---- Sly 1 (libSly1-Release.so, from the Sly1/ submodule: cmake/sly1.cmake's cane_sly1_game): the same app, its own
+# library, a flat window also on a headset (FlatGameActivity, as Sly 3). Vulkan only (the game's OpenGL 4.3 renderer has
+# no OpenGL ES path): Sly 2's OpenGL-on-Vulkan layer with Sly 1's programs compiled at build time.
+option(CANE_BUILD_SLY1 "Build Sly 1 (the Sly1/ submodule) into the Android app" ON)
+if(CANE_BUILD_SLY1)
+ include(cmake/sly1.cmake)
+ add_library(Sly1-Release SHARED "${CMAKE_CURRENT_SOURCE_DIR}/platform/android/native_entry.cpp")
+ cane_sly1_game(Sly1-Release)
+ cane_sly1_renderer(Sly1-Release)
+ if(NOT SLY1_VULKAN_BUILT)
+  message(FATAL_ERROR "Sly 1 on Android needs its Vulkan renderer (glslangValidator and Python 3 at build time), or "
+   "configure with -DCANE_BUILD_SLY1=OFF")
+ endif()
+ set_source_files_properties("${SLY1_GAME_DIR}/main.cpp" TARGET_DIRECTORY Sly1-Release PROPERTIES
+  COMPILE_DEFINITIONS main=cane_sly1_main)
+ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/platform/android/native_entry.cpp" TARGET_DIRECTORY Sly1-Release
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+ target_compile_definitions(Sly1-Release PRIVATE CANE_ANDROID_GAME_ENTRY CANE_ANDROID_GAME_MAIN=cane_sly1_main
+  CANE_SDL_RUMBLE)   # (the controllers' motors through SDL: Input.cpp, platform/pad_rumble.h)
+ target_compile_options(Sly1-Release PRIVATE
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/platform/android/sly_android_compat.h>")
+ # (the GLFW shim and Dear ImGui: cane_ui; movies: FFmpeg; sound: upstream's XAudio2-on-FAudio, FAudio on SDL2)
+ target_link_libraries(Sly1-Release PRIVATE cane_ui cane_android_ffmpeg FAudio-static SDL2::SDL2 Threads::Threads)
+ # (the game's option tables are millions of pointers: 53 MB of relocations unpacked; Android's packed format, API 23+)
+ target_link_options(Sly1-Release PRIVATE "-Wl,--pack-dyn-relocs=android")
+ list(APPEND cane_android_games Sly1-Release)
 endif()
 
 include(cmake/prompts.cmake OPTIONAL)

@@ -73,6 +73,7 @@ std::string PipelineKey::Hash() const {
     AppendBytes(&out, buffer.step);
     AppendBytes(&out, buffer.step_rate);
   }
+  AppendBytes(&out, constant_attributes);
   AppendBytes(&out, target.color);
   AppendBytes(&out, target.depth);
   AppendBytes(&out, target.stencil);
@@ -135,6 +136,12 @@ id<MTLRenderPipelineState> PipelineCache::Pipeline(const PipelineKey& key, id<MT
     vertex_descriptor.layouts[i].stride = buffer.stride;
     vertex_descriptor.layouts[i].stepFunction = buffer.step;
     vertex_descriptor.layouts[i].stepRate = buffer.step_rate;
+  }
+  if (key.constant_attributes) {
+    // (every vertex reads element 0; the stride covers all 16 locations' values)
+    vertex_descriptor.layouts[kConstantAttributeSlot].stride = 16 * kVertexAttributeCount;
+    vertex_descriptor.layouts[kConstantAttributeSlot].stepFunction = MTLVertexStepFunctionConstant;
+    vertex_descriptor.layouts[kConstantAttributeSlot].stepRate = 0;
   }
   if (any_attribute) descriptor.vertexDescriptor = vertex_descriptor;
 

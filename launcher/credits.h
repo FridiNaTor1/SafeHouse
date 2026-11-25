@@ -38,6 +38,7 @@ inline constexpr Developer kDevelopers[] = {
     {"cooperbooperscooper", N_("Developer and contributor: First Person VR mode"), "cooperbooperscooper", 0xEBC113},
     {"fyrnas", N_("Developer and contributor: fixed the Mali GPU shader crash on Android"), "fyrnas", 0x8E5E87},
     {"maxigasparini", N_("Developer and contributor: configurable game and disc image folders"), "maxigasparini", 0x57A95F},
+    {"razziedazzel", N_("Contributor"), "razziedazzel", 0xEBC113},
 };
 inline constexpr int kDeveloperCount = int(sizeof(kDevelopers) / sizeof(kDevelopers[0]));
 // The Collection menu's Developers page: its first page (as it was made for the first five), then pages of up to six.

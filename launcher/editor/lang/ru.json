@@ -217,7 +217,6 @@
   "Insert:": "Вставить:",
   "Its reference still sounds band-limited (an announcement or talk heard through the binocucom): switch the effect on if the dub should too.": "Образец всё же звучит с урезанной полосой (объявление или разговор через бинокулярный передатчик): включите эффект, если озвучка тоже должна так звучать.",
   "Levels not known yet": "Уровни пока неизвестны",
-  "Menus": "Меню",
   "No groups": "Без групп",
   "No microphone could be opened (SDL2 or a recording device is missing).": "Не удалось открыть микрофон (нет SDL2 или устройства записи).",
   "Not in any level": "Ни в одном уровне",

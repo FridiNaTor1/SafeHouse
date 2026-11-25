@@ -106,6 +106,23 @@ PROGRAMS += [
     ('fsreasu_array', 'vrfull.vert', None, 'fsreasu.frag', {'CANE_ARRAY': '1'}, SLY2_SHARED),
     ('fsrrcas', 'vrfull.vert', None, 'fsrrcas.frag', {}, SLY2_SHARED),
 ]
+# Sly 1 (--game Sly1/Sly1-Release: the submodule's game folder): its GLSHADER programs (gl.cpp GL::InitGL) and the
+# shadow layers' copy (shadow.cpp). Their std140 uniform blocks (the camera CMGL, blip's BlipGroup) are read as storage
+# blocks in set 1 at UBO_SLOT + their binding: the layer binds GL_UNIFORM_BUFFER index i there.
+SLY1 = 'Sly1 game'
+SLY1_PROGRAMS = [
+    ('glob', 'glob.vert', None, 'glob.frag', {}, SLY1),
+    ('celborder', 'celborder.vert', None, 'celborder.frag', {}, SLY1),
+    ('dysh', 'dysh.vert', None, 'dysh.frag', {}, SLY1),
+    ('geom', 'geom.vert', None, 'geom.frag', {}, SLY1),
+    ('blot', 'blot.vert', None, 'blot.frag', {}, SLY1),
+    ('blip', 'blip.vert', None, 'blip.frag', {}, SLY1),
+    ('screen', 'screen.vert', None, 'screen.frag', {}, SLY1),
+    ('shadowalpha', 'shadowalpha.vert', None, 'shadowalpha.frag', {}, SLY1),
+    # (its debug window: Dear ImGui's draw lists, platform/render/imgui_gl.cpp)
+    ('cane_imgui', 'imgui.vert', None, 'imgui.frag', {}, 'platform/vulkan/shaders'),
+]
+UBO_SLOT = 14
 # (the layer's own: the masked clears' full-frame triangle, platform/vulkan/shaders)
 NATIVE = 'platform/vulkan/shaders'
 PROGRAMS += [('cane_clear', 'clear.vert', None, 'clear.frag', {}, NATIVE),
@@ -155,6 +172,7 @@ mat3 caneInverse(mat3 m)
     return mat3(adj[0] / det, adj[1] / det, adj[2] / det);
 }
 """
+HELPER_MAT2 = "vec2 caneMulMV(mat2 m, vec2 v) { return m[0] * v.x + m[1] * v.y; }\n"
 TOKEN = re.compile(r'\s+|(?P<tok>[A-Za-z_]\w*|\d+\.?\d*(?:[eE][-+]?\d+)?[uUfF]?|\.\d+(?:[eE][-+]?\d+)?[fF]?|\*=|[-+*/%<>=!&|^]=?|[()\[\]{}.,;?:~])')
 KEYWORDS = {'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default', 'break', 'continue', 'discard',
             'in', 'out', 'inout', 'const', 'uniform', 'flat', 'noperspective', 'smooth'}
@@ -179,6 +197,7 @@ def gl_arithmetic(src, structs, mats):
     src = re.sub(r'\bnormalize\s*\(', 'caneNormalize(', src)
     src = re.sub(r'\binverse\s*\(', 'caneInverse(', src)
     fields = {f for body in structs.values() for kind, f, _ in body if kind.startswith('mat')}
+    floats = set(re.findall(r'\bfloat\s+(\w+)', src))
     is_ident = lambda t: bool(re.fullmatch(r'[A-Za-z_]\w*', t)) and t not in KEYWORDS
     is_operand = lambda t: is_ident(t) or bool(re.fullmatch(r'[\d.]\S*', t))
 
@@ -248,6 +267,10 @@ def gl_arithmetic(src, structs, mats):
                 j = match(toks, j, 1) + 1 if toks[j][0] == '[' else j + 2
             if is_matrix(toks, k + 1, j):
                 continue   # (a matrix product: not lowered here)
+            rt = [x[0] for x in toks[k + 1:j]]
+            if (len(rt) == 1 and (rt[0] in floats or re.fullmatch(r'[\d.]\S*', rt[0]))) or \
+               (len(rt) >= 3 and rt[-2] == '.' and re.fullmatch(r'[xyzwrgba]', rt[-1])):
+                continue   # (a matrix times a scalar: not a matrix x vector product)
             left, right = src[toks[a][1]:toks[k - 1][2]], src[toks[k + 1][1]:toks[j - 1][2]]
             src = src[:toks[a][1]] + f'caneMulMV({left}, {right})' + src[toks[j - 1][2]:]
             done = False
@@ -393,9 +416,16 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
             binding = re.search(r'\bbinding\s*=\s*(\d+)', qualifiers)
             if not binding:
                 fail(f'{key}.{stage}: block {name} has no binding')
-            if kind != 'buffer':
-                fail(f'{key}.{stage}: uniform block {name}: not handled (no Sly 2 program has one)')
             slot = int(binding.group(1))
+            if kind != 'buffer':
+                # (a std140 uniform block: a read-only storage block at UBO_SLOT + its binding, same layout)
+                slot += UBO_SLOT
+                qualifiers = re.sub(r'\bbinding\s*=\s*\d+', f'binding = {slot}', qualifiers)
+                if not re.search(r'\bstd140\b', qualifiers):
+                    fail(f'{key}.{stage}: uniform block {name} is not std140')
+                if re.search(r'\bbinding\s*=\s*' + str(slot) + r'\b', ''.join(m2.group(1) for m2 in sw.BLOCK.finditer(src) if m2.group(3) == 'buffer')):
+                    fail(f'{key}.{stage}: uniform block {name}: storage binding {slot} is taken')
+                access, kind = 'readonly ', 'buffer'
             if slot >= 16:
                 fail(f'{key}.{stage}: storage block {name} binding {slot} above 15')
             storage |= 1 << slot
@@ -439,7 +469,7 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
                 decl.append(f'layout(constant_id = {i + 1}) const {f["type"]} caneS_{f["name"]} = {zero};')
                 decl.append(f'{f["type"]} {f["name"]};')
             spec_used.update(SPEC.index(f['name']) for f in spec_here)
-        decl.append(glsl_fuse.fma_helpers() + HELPERS)
+        decl.append(glsl_fuse.fma_helpers() + HELPERS + (HELPER_MAT2 if 'caneMulMV(mat2' in src else ''))
         if decl:
             func = re.search(r'^[ \t]*(?:void|bool|float|int|uint|vec[234]|ivec[234]|uvec[234]|mat[34]|\w+)\s+\w+\s*\([^;{]*\)\s*\{',
                              src, re.M)
@@ -534,10 +564,15 @@ def main():
 
     work = args.output / 'vk_shaders'
     work.mkdir(parents=True, exist_ok=True)
+    if args.game.replace('\\', '/').endswith('Sly1-Release') and args.game != SLY2:
+        # (Sly 1: its own programs and the layer's)
+        table = [(k, v, g, f, d, args.game if dr == SLY1 else dr) for k, v, g, f, d, dr in SLY1_PROGRAMS] + \
+                [p for p in PROGRAMS if p[5] == NATIVE]
+    else:
+        table = [(k, v, g, f, d, args.game if dr in (SLY2, SLY2_ONLY) else SLY2 if dr == SLY2_SHARED else dr) for k, v, g, f, d, dr in PROGRAMS
+                 if dr != SLY2_ONLY or args.game == SLY2]
     programs = [build_program(args.source, key, (vert, geom, frag), defines, directory, work, args.glslang)
-                for key, vert, geom, frag, defines, directory in
-                [(k, v, g, f, d, args.game if dr in (SLY2, SLY2_ONLY) else SLY2 if dr == SLY2_SHARED else dr) for k, v, g, f, d, dr in PROGRAMS
-                 if dr != SLY2_ONLY or args.game == SLY2]]
+                for key, vert, geom, frag, defines, directory in table]
 
     c = ['// Generated by cmake/vulkan_shaders.py from the GLSL sources: do not edit.',
          '#include "vk_shaders.h"', 'namespace CaneVk::Shaders {', 'namespace {']

@@ -1,4 +1,4 @@
-# The macOS packages players download (SafeHouse.app in a .dmg and a .zip): the launcher, Sly 2 and Sly 3 (on Metal)
+# The macOS packages players download (SafeHouse.app in a .dmg and a .zip): the launcher, Sly 1, Sly 2 and Sly 3 (on Metal)
 # and the disc tools. The FFmpeg libraries come from scripts/macos/ffmpeg.sh (LGPL, the games' codecs only); SDL2 is built
 # from its pinned source by CMake; everything is bundled by scripts/macos/package.py.
 #
@@ -45,9 +45,11 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          submodules: true   # Sly1/ (the Sly 1 game, cmake/sly1.cmake)
 
       - name: Build tools
-        run: brew install ninja nasm
+        # (glslang + spirv-cross: Sly 1's programs as Metal Shading Language, cmake/metal_shaders.py)
+        run: brew install ninja nasm glslang spirv-cross
 
       - name: FFmpeg cache (keyed on the recipe)
         id: ffmpeg-cache
@@ -83,6 +85,9 @@ jobs:
 
       - name: The bundled game starts (Metal, offscreen)
         run: |
+          # (Sly 1: the window, Metal and every program translated to MSL, 30 frames: cmake/metal_shaders.py's output
+          # compiled by the Metal driver at last; no disc needed)
+          SLY1_HIDDENWINDOW=1 dist/SafeHouse.app/Contents/MacOS/Sly1-Release --gl-selftest
           dist/SafeHouse.app/Contents/MacOS/Sly2-Release --rumble-selftest
           dist/SafeHouse.app/Contents/MacOS/Sly3-Release --settings-selftest
           dist/SafeHouse.app/Contents/MacOS/Sly3-Release --action-input-selftest

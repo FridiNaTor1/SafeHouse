@@ -203,6 +203,12 @@ PixelFormatInfo ToPixelFormat(GLenum internal_format) {
       return {MTLPixelFormatRGBA8Unorm, 4, false, false};
     case gl::kSrgb8Alpha8:
       return {MTLPixelFormatRGBA8Unorm_sRGB, 4, false, false};
+    // (BC1 / BC3, Sly 1's PCBRX textures: stored decoded, glCompressedTexSubImage2D decodes on the CPU as the
+    // Vulkan layer does; iOS GPUs before Apple7 have no BC formats at all)
+    case gl::kCompressedRgbS3tcDxt1:
+    case gl::kCompressedRgbaS3tcDxt1:
+    case gl::kCompressedRgbaS3tcDxt5:
+      return {MTLPixelFormatRGBA8Unorm, 4, false, false};
     case gl::kR32f:
       return {MTLPixelFormatR32Float, 4, false, false};
     case gl::kRgba16f:

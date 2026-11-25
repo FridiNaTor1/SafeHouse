@@ -40,6 +40,9 @@ inline constexpr int kDefaultCameraKeys[kCameraKeyCount] = { 263 /*Left*/, 262 /
 inline constexpr int kDefaultTankKeys[2] = { 65 /*A*/, 68 /*D*/ };
 inline constexpr int kGamepadButtonLast = 14;
 inline constexpr int kGamepadLeftTrigger = 1000, kGamepadRightTrigger = 1001;
+// (the advanced action profiles only, sly2_action_bindings.h stickBindable: the right stick deflected, e.g. the hack ship's
+// guns as on the PS2; never a standard binding)
+inline constexpr int kGamepadRightStick = 1002;
 inline constexpr int kDefaultKeyboardBindings[kBindingCount] = {
     87 /*W*/, 83 /*S*/, 65 /*A*/, 68 /*D*/, 74 /*J*/, 76 /*L*/, 75 /*K*/, 73 /*I*/,
     257 /*Enter*/, 259 /*Backspace*/, 81 /*Q*/, 69 /*E*/, 90 /*Z*/, 67 /*C*/,
@@ -58,6 +61,36 @@ inline constexpr int kDefaultGamepadBindings[kBindingCount] = {
     4 /*LEFT_BUMPER*/, 5 /*RIGHT_BUMPER*/, kGamepadLeftTrigger, kGamepadRightTrigger,
     9 /*LEFT_THUMB*/, 10 /*RIGHT_THUMB*/ };
 static_assert(kSly2DefaultKeyboardBindings[4] == kMouseBindingBase + 0 && kSly2DefaultKeyboardBindings[15] == kMouseBindingBase + 1);
+// Sly 1's keyboard / mouse layout (user, 2026-11-24: the same as Sly 2's and Sly 3's action for action). The PS2 buttons'
+// keys are Sly 2's where the games share the action on the same button (move WASD, attack left mouse, the action /
+// interact E, jump Space, Triangle's moves Q, the power-ups' L2 / R2 like the gadgets' 2 / 3, pause Enter, Select
+// Backspace); the binocucom is on L1 in Sly 1 (R3 in Sly 2), so L1 takes Sly 2's binocucom key, the right mouse
+// button, and R3 (Sly 1: centre the camera) the middle one. Layout revision 2 (sly1_settings.h kSly1KeyboardRevision:
+// revision 1 was kSly2DefaultKeyboardBindings, L1 = 1 and R3 = right mouse).
+inline constexpr int kSly1DefaultKeyboardBindings[kBindingCount] = {
+    87 /*W*/, 83 /*S*/, 65 /*A*/, 68 /*D*/, 2000 /*left mouse*/, 69 /*E*/, 32 /*Space*/, 81 /*Q*/,
+    257 /*Enter*/, 259 /*Backspace*/, 2001 /*right mouse*/, 340 /*Left Shift*/, 50 /*2*/, 51 /*3*/,
+    258 /*Tab*/, 2002 /*middle mouse*/ };
+static_assert(kSly1DefaultKeyboardBindings[10] == kSly2DefaultKeyboardBindings[15] && kSly1DefaultKeyboardBindings[15] == kMouseBindingBase + 2);
+// Sly 1's rhythm minigame (Mz. Ruby's fight in A Deadly Dance; user, 2026-11-24): its own keys for its four buttons,
+// used only while the minigame takes the input (the movement keys keep their actions everywhere else): Triangle W,
+// Square A, Circle D, Cross Space, in this order (top, left, right, bottom). Settings.ini [Keyboard] Rhythm Triangle /
+// Square / Circle / Cross (sly1_settings.h); keys only, no mouse buttons (as the camera keys).
+inline constexpr int kSly1RhythmKeyCount = 4;
+inline constexpr int kSly1RhythmPads[kSly1RhythmKeyCount] = { 7 /*Triangle*/, 4 /*Square*/, 5 /*Circle*/, 6 /*Cross*/ };
+inline constexpr int kSly1DefaultRhythmKeys[kSly1RhythmKeyCount] = { 87 /*W*/, 65 /*A*/, 68 /*D*/, 32 /*Space*/ };
+// Sly 1's cutscene / conversation skip (user, 2026-11-24): a binding of its own, not one of the PS2 buttons: R1 on a
+// controller (in Sly 1 only a second binocucom button) and Enter on the keyboard, held 2 seconds (one press with Instant
+// Skip Cutscenes); while a scene can be skipped it only skips. Settings.ini [Controller] / [Keyboard] Skip Cutscene
+// (sly1_settings.h). Before layout revision 3 the skip was the Circle binding.
+inline constexpr int kSly1DefaultSkipKey = 257 /*Enter*/;
+inline constexpr int kSly1DefaultSkipPad = 5 /*RIGHT_BUMPER*/;
+// The rhythm key of a PS2 button (Pad order: 4 Square, 5 Circle, 6 Cross, 7 Triangle), -1 for the other buttons.
+inline constexpr int sly1RhythmSlot(int pad) {
+    for (int i = 0; i < kSly1RhythmKeyCount; ++i)
+        if (kSly1RhythmPads[i] == pad) return i;
+    return -1;
+}
 // Field value ranges (gl.h AspectMode/WindowMode/GuiStyle).
 enum FogType : int { Fog_Off = 0, Fog_PS2 = 1, Fog_PS3 = 2 };
 enum WindowModeValue : int { Window_Windowed = 0, Window_Borderless = 1, Window_Fullscreen = 2 };

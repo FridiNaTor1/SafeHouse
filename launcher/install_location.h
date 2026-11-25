@@ -4,10 +4,17 @@
 // /media and /mnt, e.g. the Steam Deck's microSD card; macOS: /Volumes), each with its free space. A game installs
 // into <drive>/SafeHouse/<game> there (LauncherBackend::installRootFor()). Any other folder comes from "Choose a
 // folder…" (the system's folder picker).
+// Android (2026-11-24): the app's own folders on the shared storage and SD cards (no permission needed; Android
+// removes them with the app), and with all files access the storage volumes' roots (NativeBridge.externalFolders).
+// The games read their installation with ordinary file access, so a Storage Access Framework folder (a content URI)
+// cannot hold one: SAF picks copy disc images in (NativeBridge.selectIso) instead.
 #include <string>
 #include <vector>
 
 #include "backend.h"
+#if defined(__ANDROID__)
+#include "android/android_app.h"
+#endif
 #ifdef _WIN32
 #include <cwctype>
 #include <windows.h>
@@ -39,6 +46,18 @@ inline std::string freeText(uint64_t bytes) {
 }
 inline std::vector<InstallPlace> otherDrives() {
     std::vector<InstallPlace> out;
+#if defined(__ANDROID__)
+    int cards = 0;
+    for (const auto& [folder, kind] : android::externalFolders()) {
+        std::string label;
+        if (kind == "primary") label = tr("Phone storage (the app's folder)");
+        else if (kind == "removable") label = ++cards > 1 ? trf("SD card %d (the app's folder)", cards) : std::string(tr("SD card (the app's folder)"));
+        else if (kind == "shared") label = tr("Phone storage");
+        else label = trf("SD card (%s)", utf8(fs::path(folder).filename()).c_str());
+        out.push_back({path(folder), label});
+    }
+    return out;
+#endif
 #ifdef _WIN32
     const DWORD mask = GetLogicalDrives();
     wchar_t system[MAX_PATH] = {};

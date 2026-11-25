@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "glsl_interface.h"
+#include "prebuilt_program.h"
 
 namespace cane::gl_metal {
 
@@ -19,6 +20,9 @@ struct UniformField {
   uint32_t size = 0;
   // Sampler uniforms live outside the block: this is their texture slot.
   int texture_slot = -1;
+  // (prebuilt programs) array elements and the bytes between them (std140); 1 / size otherwise
+  uint32_t count = 1;
+  uint32_t stride = 0;
 };
 
 // Byte layout of the uniform block handed to the MSL `Uniforms` struct. The
@@ -44,6 +48,16 @@ struct CompiledProgram {
   id<MTLFunction> fragment = nil;
   UniformLayout layout;
   std::vector<int> storage_bindings;
+  // (prebuilt programs, prebuilt_program.h: the resources each stage reads, the vertex inputs, the length() helpers)
+  bool prebuilt = false;
+  uint32_t storage_vertex = 0;
+  uint32_t storage_fragment = 0;
+  uint32_t blocks_vertex = 0;
+  uint32_t blocks_fragment = 0;
+  std::string block_names;
+  uint32_t input_mask = 0;
+  uint32_t input_kinds = 0;
+  std::vector<prebuilt::Length> lengths;
 };
 
 struct UtilityFunctions {
@@ -63,6 +77,9 @@ class ShaderLibrary {
             CompiledProgram* out, std::string* log);
 
   bool CompileUtilities(UtilityFunctions* out, std::string* log);
+
+  // A program translated at build time (cmake/metal_shaders.py): its two stages' MSL, its table.
+  bool LinkPrebuilt(const prebuilt::Program& program, CompiledProgram* out, std::string* log);
 
  private:
   std::string Prefix() const;

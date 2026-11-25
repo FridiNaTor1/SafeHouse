@@ -385,6 +385,12 @@ void InitVault(SW* psw, LO* plo)
         for (LO* p : v.aploAseg) std::printf(" %d/0x%X", p ? p->oid : -1, p ? p->Cid() : 0);
         std::printf(", dial pose %d\n", v.ploPoseDial ? v.ploPoseDial->oid : -1);
     }
+    // (debug: SLY2N_VAULTRESET=1: the vault closed and its reward not owned at the world's start, to test an opening)
+    if (std::getenv("SLY2N_VAULTRESET") && v.idReward != -1)
+    {
+        SetVaultOpened(false);
+        SetItemAcquired(nullptr, v.idReward, false);
+    }
     // (PC) a save written by the builds that autosaved after setting fVault (above) can hold the vault open without its
     // reward: the power-up given here, so it is not lost for good (the original cannot save that state)
     if (FVaultOpened() && v.idReward != -1 && !FPowerupOwned(v.idReward))

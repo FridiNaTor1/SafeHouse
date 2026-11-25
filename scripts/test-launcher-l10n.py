@@ -2,7 +2,7 @@
 """The launcher's languages (launcher/lang/*.json, launcher/l10n.h).
 
 Checks: every tr() / trf() / N_() / trv() literal in the launcher sources (plus the Sly 2 action names the launcher
-shows, platform/sly2_action_bindings.h) is a key of en.json and every en.json key is used; every language file has
+shows, platform/sly2_action_bindings.h and sly1_action_bindings.h) is a key of en.json and every en.json key is used; every language file has
 exactly en.json's keys, no empty text, the same printf specifiers in the same order and the same leading / trailing
 spaces and line breaks; then, with the launcher binary: --l10n-check (every embedded language loads, the fonts have
 every character it prints) and the system-language detection (LANG / LC_* / LANGUAGE) in private HOME / XDG folders.
@@ -94,10 +94,11 @@ def extract(sources=None):
     if sources is not None:
         keys.pop("", None)
         return keys
-    actions = (ROOT / "platform" / "sly2_action_bindings.h").read_text(encoding="utf-8")
-    for m in re.finditer(r'X\(\w+, "[^"]*", "([^"]*)", "([^"]*)"', actions):
-        keys.setdefault(m.group(1), "sly2_action_bindings.h")
-        keys.setdefault(m.group(2), "sly2_action_bindings.h")
+    for table in ("sly2_action_bindings.h", "sly1_action_bindings.h"):
+        actions = (ROOT / "platform" / table).read_text(encoding="utf-8")
+        for m in re.finditer(r'X\(\w+, "[^"]*", "([^"]*)", "([^"]*)"', actions):
+            keys.setdefault(m.group(1), table)
+            keys.setdefault(m.group(2), table)
     brand = (ROOT / "platform" / "brand.h").read_text(encoding="utf-8")
     for m in re.finditer(r'\b(?:credit|discordLabel|patreonLabel|sly3Notice) =\s*((?:"(?:[^"\\]|\\.)*"\s*)+);', brand):
         keys.setdefault(literals(m.group(1), 0)[0], "brand.h")

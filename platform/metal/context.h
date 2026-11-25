@@ -54,6 +54,10 @@ struct RenderTarget {
   int height = 0;
   int samples = 1;
   bool is_default = false;
+  // (glFramebufferTextureLayer / a mip level: the attachments' slice and level)
+  int color_slice = 0;
+  int color_level = 0;
+  int depth_slice = 0;
   RenderTargetKey Key() const;
 };
 
@@ -92,6 +96,11 @@ class Context {
   const char* GetStringIndexed(GLenum name, uint32_t index);
   bool GetInteger(GLenum name, int* out);
   bool GetFloat(GLenum name, float* out);
+  bool IsEnabled(GLenum cap);
+  bool GetStateInteger(GLenum name, int* out);
+  bool GetStateFloat(GLenum name, float* out);
+  void GetTexLevelParameter(GLenum target, int level, GLenum pname, int* out);
+  void GetFramebufferAttachmentParameter(GLenum target, GLenum attachment, GLenum pname, int* out);
 
   // Buffers.
   void GenBuffers(int count, uint32_t* names);
@@ -99,6 +108,7 @@ class Context {
   void BindBuffer(GLenum target, uint32_t name);
   void BindBufferRange(GLenum target, uint32_t index, uint32_t name, size_t offset, size_t size);
   void BufferData(GLenum target, size_t size, const void* data, GLenum usage);
+  void BufferStorage(GLenum target, size_t size, const void* data, GLbitfield flags);
   void BufferSubData(GLenum target, size_t offset, size_t size, const void* data);
   void* MapBufferRange(GLenum target, size_t offset, size_t length, GLbitfield access);
   bool UnmapBuffer(GLenum target);
@@ -118,6 +128,9 @@ class Context {
   void TexSubImage3D(GLenum target, int level, int x, int y, int z, int width, int height,
                      int depth, GLenum format, GLenum type, const void* data);
   void TexParameteri(GLenum target, GLenum pname, int value);
+  void CompressedTexSubImage2D(GLenum target, int level, int x, int y, int width, int height,
+                               GLenum format, size_t size, const void* data);
+  void GetTexImage(GLenum target, int level, GLenum format, GLenum type, void* data);
   void GenerateMipmap(GLenum target);
   void PixelStorei(GLenum pname, int value);
   void GenSamplers(int count, uint32_t* names);
@@ -139,12 +152,16 @@ class Context {
   void VertexAttribPointer(uint32_t index, int components, GLenum type, bool normalized,
                            bool integer, int stride, size_t offset);
   void VertexAttribDivisor(uint32_t index, int divisor);
+  void VertexAttrib(uint32_t index, const float* values, int count);
 
   // Framebuffers.
   void GenFramebuffers(int count, uint32_t* names);
   void DeleteFramebuffers(int count, const uint32_t* names);
   void BindFramebuffer(GLenum target, uint32_t name);
   void FramebufferTexture2D(GLenum target, GLenum attachment, uint32_t texture, int level);
+  void FramebufferTextureLayer(GLenum target, GLenum attachment, uint32_t texture, int level,
+                               int layer);
+  void ClearBuffer(GLenum buffer, int draw_buffer, const float* value);
   void FramebufferRenderbuffer(GLenum target, GLenum attachment, uint32_t renderbuffer);
   GLenum CheckFramebufferStatus(GLenum target);
   void BlitFramebuffer(int sx0, int sy0, int sx1, int sy1, int dx0, int dy0, int dx1, int dy1,
@@ -169,6 +186,12 @@ class Context {
   void UniformInts(int location, int count, const int* values);
   void UniformFloats(int location, int count, const float* values);
   void UniformMatrix4(int location, int count, bool transpose, const float* values);
+  void UniformMatrix3(int location, int count, bool transpose, const float* values);
+  void GetUniform(uint32_t program, int location, void* out);
+  uint32_t GetUniformBlockIndex(uint32_t program, const char* name);
+  bool IsProgram(uint32_t name);
+  // (prebuilt_program.h) a GL program name for a program translated at build time; 0 on failure (logged)
+  uint32_t LinkPrebuilt(const prebuilt::Program& program);
 
   // Fixed-function state.
   void SetCapability(GLenum cap, bool enabled);
@@ -190,10 +213,14 @@ class Context {
   void FrontFace(GLenum face);
   void LineWidth(float width);
   void ClipControl(GLenum origin, GLenum depth);
+  void DepthRange(float near_value, float far_value);
+  void PointSize(float size);
 
   // Drawing.
   void Clear(GLbitfield mask);
   void DrawArrays(GLenum mode, int first, int count);
+  void DrawArraysInstancedBaseInstance(GLenum mode, int first, int count, int instances,
+                                       uint32_t base_instance);
   void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, int count, GLenum type,
                                                    size_t indices, int instances, int base_vertex,
                                                    uint32_t base_instance);
@@ -216,6 +243,7 @@ class Context {
     std::array<id<MTLBuffer>, kVertexBufferCount> vertex_buffers{};
     std::array<size_t, kVertexBufferCount> vertex_offsets{};
     int vertex_buffer_count = 0;
+    bool constant_attributes = false;
     bool valid = false;
   };
 
@@ -236,6 +264,12 @@ class Context {
     std::array<size_t, kVertexBufferCount> vertex_offsets{};
     std::array<id<MTLBuffer>, kStorageBufferCount> storage_buffers{};
     std::array<size_t, kStorageBufferCount> storage_offsets{};
+    std::array<id<MTLBuffer>, kStorageBufferCount> fragment_storage_buffers{};
+    std::array<size_t, kStorageBufferCount> fragment_storage_offsets{};
+    std::array<id<MTLBuffer>, kUniformBlockCount> block_buffers{};
+    std::array<size_t, kUniformBlockCount> block_offsets{};
+    std::array<id<MTLBuffer>, kUniformBlockCount> fragment_block_buffers{};
+    std::array<size_t, kUniformBlockCount> fragment_block_offsets{};
     ProgramRecord* uniform_program = nullptr;
     bool viewport_set = false;
     bool scissor_set = false;
@@ -289,6 +323,9 @@ class Context {
   ProgramRecord* CurrentProgram();
   void WriteUniform(ProgramRecord* program, const UniformField& field, const void* data,
                     size_t bytes);
+  void WriteUniformElements(ProgramRecord* program, const UniformField& field, uint32_t element,
+                            const void* data, size_t bytes);
+  const UniformField* FieldAt(ProgramRecord* program, int location, uint32_t* element);
 
   // Rendering (context_render.mm).
   bool EnsureRenderEncoder(uint32_t framebuffer);
@@ -298,6 +335,7 @@ class Context {
   MTLViewport ViewportFor(const Rect& rect) const;
   MTLScissorRect ScissorFor(const Rect& rect) const;
   MTLScissorRect FullScissor() const;
+  MTLViewport FullViewport(const RenderTarget& target) const;
   void ApplyRasterState();
   bool ClearCoversTarget(GLbitfield mask, const RenderTarget& target) const;
   void ClearWithDraw(GLbitfield mask);
@@ -306,6 +344,9 @@ class Context {
   bool BindUniforms(ProgramRecord* program);
   void BindTextures(ProgramRecord* program);
   void BindStorageBuffers(ProgramRecord* program);
+  void BindPrebuiltBuffers(ProgramRecord* program);
+  void UpdateLengths(ProgramRecord* program);
+  size_t RangeBytes(const BufferRange& range) const;
   MTLVertexFormat VertexFormatFor(const VertexAttribute& attribute) const;
   void ResolveMultisample(id<MTLTexture> source, id<MTLTexture> destination);
   id<MTLTexture> ScratchResolveTexture(id<MTLTexture> like);
@@ -364,6 +405,9 @@ class Context {
   int drawable_height_ = 0;
   std::string renderer_name_;
 };
+
+// The process's context (gl_entry_points.mm), or null before CreateContext.
+Context* CurrentContext();
 
 }  // namespace cane::gl_metal
 

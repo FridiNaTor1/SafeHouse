@@ -121,9 +121,32 @@ inline constexpr int kOutlineThicknessMin = 25, kOutlineThicknessMax = 300, kOut
 enum Sly2HudPlacement : int { HudPlacement_4_3 = 0, HudPlacement_16_9 = 1, HudPlacement_16_10 = 2, HudPlacement_Match = 3 };
 inline constexpr int kHudPlacementCount = 4;
 
+// (Sly 1 only, sly1_settings.h) the options of Sly 1's own PC menu (ProjectCane's Options pages) that the other games
+// do not have; Sly 1's other options are SystemSettings fields.
+struct Sly1Options {
+    int autoIconify = 0;              // [Display] Minimize When Unfocused
+    float gamma = 1.0f;               // [Graphics] Brightness: the output gamma, 0.50 to 1.50
+    int textureFiltering = 1;         // [Graphics] Texture Filtering: 0 Bilinear, 1 Trilinear
+    int resolutionScale = 100;        // [Graphics] Resolution Scale (%, 50 to 200; with Internal Resolution Native)
+    int keyboardRevision = 0;         // [Keyboard] Layout Revision: the default layout the bindings were made with (0: none
+                                      // in the file, an older one; sly1_settings.h kSly1KeyboardRevision)
+    float deadZone = 0.35f;           // [Controller] Dead Zone: the sticks' (0.05 to 0.50)
+    // [Keyboard] Rhythm Triangle / Square / Circle / Cross: the rhythm minigame's own keys (system_settings.h
+    // kSly1RhythmPads' order; kKeyUnknown: none)
+    std::array<int, kSly1RhythmKeyCount> rhythmKeys{ kSly1DefaultRhythmKeys[0], kSly1DefaultRhythmKeys[1],
+                                                     kSly1DefaultRhythmKeys[2], kSly1DefaultRhythmKeys[3] };
+    // [Keyboard] / [Controller] Skip Cutscene: the cutscene / conversation skip's own key (or mouse button) and controller
+    // button (system_settings.h kSly1DefaultSkipKey / kSly1DefaultSkipPad; kKeyUnknown: none)
+    int skipKey = kSly1DefaultSkipKey;
+    int skipPad = kSly1DefaultSkipPad;
+    std::string audioDeviceId;        // the old [Audio] Output Device ID (Windows: an endpoint's id) until the game turns
+                                      // it into Output Device (game.outputDevice, by name; sly1_settings.h sly1Upgrade)
+};
+
 struct Sly2Settings {
     SystemSettings system = sly2Defaults();
     Sly2GameOptions game;
+    Sly1Options sly1;
     Sly2VrOptions vr;
     Sly2UpscaleOptions upscale;
     int outlineThickness = 100;   // [Graphics] Outline Thickness (%)
@@ -702,13 +725,26 @@ inline const std::vector<std::pair<const char*, const char*>>& sly2Sections() {
 inline constexpr const char* kSly2MetaSection = "SafeHouse";
 
 // A game's file: its keys, its sections in order, its first comment line and whether it carries the save-kept options'
-// migration (Sly 2's; Sly 3's file has the same format and a schema of its own: sly3_settings.h).
+// migration (Sly 2's; Sly 3's file has the same format and a schema of its own: sly3_settings.h). defaults: the game's
+// defaults when they are not Sly 2's (Sly 1: its own keyboard layout; sly1_settings.h); null: Sly2Settings{}. The
+// default keyboard table for an invalid binding is the defaults' own. fixup: after the shared clamps (sanitizeStatic) on
+// reading and writing, given the values before them (Sly 1: its PS2 448-line internal resolution).
 struct GameIniLayout {
     const std::vector<Sly2Key>& (*schema)();
     const std::vector<std::pair<const char*, const char*>>& (*sections)();
     const char* title;
     bool saveOptions;
+    Sly2Settings (*defaults)() = nullptr;
+    void (*fixup)(Sly2Settings& s, const SystemSettings& before) = nullptr;
 };
+inline Sly2Settings layoutDefaults(const GameIniLayout& layout) { return layout.defaults ? layout.defaults() : Sly2Settings{}; }
+// The shared clamps with the layout's default keys, then its fixup.
+inline void sanitizeForLayout(Sly2Settings& s, const GameIniLayout& layout) {
+    const SystemSettings before = s.system;
+    if (layout.defaults) sanitizeStatic(s.system, 0, 0, layout.defaults().system.keyboardBindings);
+    else sanitizeStatic(s.system, 0, 0, kSly2DefaultKeyboardBindings);
+    if (layout.fixup) layout.fixup(s, before);
+}
 inline const GameIniLayout& sly2Layout() {
     static const GameIniLayout layout{ sly2Schema, sly2Sections, "SafeHouse - Sly 2: Band of Thieves settings.", true };
     return layout;
@@ -759,7 +795,7 @@ inline std::string sly2ToIni(const Sly2Settings& s) { return gameToIni(s, sly2La
 // Reads INI text over the defaults (a key missing or invalid keeps its default). invalidOut: the keys whose value
 // could not be read.
 inline Sly2Settings gameFromIni(std::string_view text, const GameIniLayout& layout, std::vector<std::string>* invalidOut = nullptr) {
-    Sly2Settings s;
+    Sly2Settings s = layoutDefaults(layout);
     const ini::Document doc = ini::parse(text);
     const auto& schema = layout.schema();
     for (const auto& section : doc.sections) {
@@ -794,14 +830,14 @@ inline Sly2Settings gameFromIni(std::string_view text, const GameIniLayout& layo
             if (match->read(attempt, e.value)) s = std::move(attempt);
             else {
                 // (the default: a key repeated later in the file still wins)
-                const Sly2Settings defaults;
+                const Sly2Settings defaults = layoutDefaults(layout);
                 std::string d = match->write(defaults);
                 match->read(s, d);
                 if (invalidOut) invalidOut->push_back(std::string(match->section) + "/" + match->key);
             }
         }
     }
-    sanitizeStatic(s.system, 0, 0, kSly2DefaultKeyboardBindings);
+    sanitizeForLayout(s, layout);
     s.game.invertBinocucom = s.game.invertBinocucom != 0;
     s.game.invertTurret = s.game.invertTurret != 0;
     s.game.speakers = std::clamp(s.game.speakers, 0, 2);
@@ -819,7 +855,7 @@ enum class Sly2Load { Ok, Migrated, Missing, Unreadable };
 
 inline Sly2Load loadGameIni(const fs::path& userDir, const GameIniLayout& layout, Sly2Settings& out,
                             std::vector<std::string>* invalidOut = nullptr) {
-    out = Sly2Settings{};
+    out = layoutDefaults(layout);
     const fs::path file = sly2SettingsPath(userDir);
     std::error_code ec;
     if (fs::exists(file, ec)) {
@@ -833,8 +869,8 @@ inline Sly2Load loadGameIni(const fs::path& userDir, const GameIniLayout& layout
     const LoadResult result = load(settingsPath(userDir), old);
     if (layout.saveOptions) out.pendingSaveOptions = allSaveOptions();
     if (!loaded(result)) return Sly2Load::Missing;
-    sanitizeStatic(old, 0, 0, kSly2DefaultKeyboardBindings);
     out.system = old;
+    sanitizeForLayout(out, layout);
     return Sly2Load::Migrated;
 }
 
@@ -844,7 +880,7 @@ inline Sly2Load loadSly2(const fs::path& userDir, Sly2Settings& out, std::vector
 
 inline bool saveGameIni(const fs::path& userDir, const GameIniLayout& layout, const Sly2Settings& s) {
     Sly2Settings copy = s;
-    sanitizeStatic(copy.system, 0, 0, kSly2DefaultKeyboardBindings);
+    sanitizeForLayout(copy, layout);
     return ini::writeFileAtomic(sly2SettingsPath(userDir), gameToIni(copy, layout));
 }
 inline bool saveSly2(const fs::path& userDir, const Sly2Settings& s) { return saveGameIni(userDir, sly2Layout(), s); }

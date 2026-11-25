@@ -60,7 +60,8 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         super(context);
         setFocusable(false); setWillNotDraw(false);
         Typeface face;
-        try { face = context.getResources().getFont(R.font.atkinson_hyperlegible_bold); }
+        // (font resources: Android 8+; older versions draw the system's bold face)
+        try { face = Build.VERSION.SDK_INT >= 26 ? context.getResources().getFont(R.font.atkinson_hyperlegible_bold) : Typeface.DEFAULT_BOLD; }
         catch (RuntimeException missing) { face = Typeface.DEFAULT_BOLD; }
         text.setTypeface(face); text.setTextAlign(Paint.Align.CENTER);
         fill.setStyle(Paint.Style.FILL);
@@ -95,12 +96,17 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     // Physical input that replaces the on-screen pad: a gamepad (a handheld's built-in one included), or an
     // external mouse, touchpad or alphabetic keyboard (USB / Bluetooth). A phone's own devices do not count: the
     // volume and power keys are keyboards, and a built-in pen or touchpad reports itself as a mouse.
+    // An input device that is not part of the phone (InputDevice.isExternal: Android 10+; before, every non-virtual
+    // gamepad, mouse or keyboard counts, as most older phones have none built in).
+    private static boolean external(InputDevice device) {
+        return Build.VERSION.SDK_INT < 29 || device.isExternal();
+    }
     private static boolean isGamepad(InputDevice device) {
         int sources = device.getSources();
         boolean pad = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD;
         boolean stick = (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
         if (!pad && !stick) return false;
-        if (device.isExternal()) return true;
+        if (external(device)) return true;
         // (built in: some phones' sensors claim to be gamepads; a real pad has face buttons or stick axes)
         boolean[] keys = device.hasKeys(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B);
         boolean buttons = keys.length == 2 && keys[0] && keys[1];
@@ -115,10 +121,10 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             InputDevice device = InputDevice.getDevice(id);
             if (device == null || device.isVirtual()) continue;
             int sources = device.getSources();
-            boolean pointer = device.isExternal() &&
+            boolean pointer = external(device) &&
                 ((sources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
                  (sources & InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD);
-            boolean keyboard = device.isExternal() &&
+            boolean keyboard = external(device) &&
                 device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC;
             found |= isGamepad(device) || pointer || keyboard;
         }
@@ -157,7 +163,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
 
     @Override protected void onSizeChanged(int w, int h, int oldWidth, int oldHeight) { relayout(); }
     @Override public WindowInsets onApplyWindowInsets(WindowInsets insets) { relayout(insets); return super.onApplyWindowInsets(insets); }
-    private void relayout() { relayout(getRootWindowInsets()); }
+    private void relayout() { relayout(Build.VERSION.SDK_INT >= 23 ? getRootWindowInsets() : null); }
     private void relayout(WindowInsets insets) {
         float left = 0, top = 0, right = 0, bottom = 0;
         float[] rects = null;

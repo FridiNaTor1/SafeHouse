@@ -51,6 +51,10 @@ if(NOT nacp_version)
   set(nacp_version "${CMAKE_PROJECT_VERSION}")
 endif()
 option(CANE_SWITCH_LTO "Link-time optimization for the Switch build (slower link, faster game)" ON)
+# Sly 1 on the Switch: the game from the Sly1/ submodule (cmake/sly1.cmake's cane_sly1_game(), as the desktop, Android
+# and iOS builds), drawn by its own deko3d backend (platform/switch/sly1/deko: the fork's renderer calls it under
+# CANE_DEKO3D). OFF leaves Sly 1 out (the launcher shows it as not ported).
+option(CANE_SWITCH_SLY1 "Switch: build Sly 1 (the Sly1/ submodule)" ON)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 if(NINTENDO_SWITCH2)
@@ -113,12 +117,15 @@ add_custom_command(OUTPUT "${gen}/deko_shaders.cpp"
   COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_shaders.py" --source "${root}" --output "${gen}" --uam "${CANE_UAM}"
           --gpu ${cane_shader_gpu}
   DEPENDS ${deko_shader_sources} "${root}/cmake/switch_shaders.py" VERBATIM)
+if(CANE_SWITCH_SLY1)
+set(SLY1_DIR "${root}/Sly1" CACHE PATH "The Sly 1 submodule (the ProjectCane fork)")
 file(GLOB sly1_shader_sources CONFIGURE_DEPENDS "${root}/platform/switch/sly1/deko/shaders/*"
-  "${root}/Sly1-Release/*.vert" "${root}/Sly1-Release/*.frag")
+  "${SLY1_DIR}/Sly1-Release/*.vert" "${SLY1_DIR}/Sly1-Release/*.frag")
 add_custom_command(OUTPUT "${gen}/sly1/deko/deko_shaders.h"
-  COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_shaders_sly1.py" --source "${root}" --output "${gen}/sly1/deko" --uam "${CANE_UAM}"
-          --gpu ${cane_shader_gpu}
+  COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_shaders_sly1.py" --source "${root}" --game "${SLY1_DIR}/Sly1-Release"
+          --output "${gen}/sly1/deko" --uam "${CANE_UAM}" --gpu ${cane_shader_gpu}
   DEPENDS ${sly1_shader_sources} "${root}/cmake/switch_shaders_sly1.py" VERBATIM)
+endif()
 
 # ---- the Switch layer, shared by the launcher and the games
 add_library(cane_switch STATIC
@@ -134,14 +141,14 @@ add_library(cane_switch STATIC
   "${root}/platform/switch/deko/imgui_impl_deko.cpp"
   "${imgui_root}/imgui.cpp" "${imgui_root}/imgui_draw.cpp" "${imgui_root}/imgui_tables.cpp" "${imgui_root}/imgui_widgets.cpp"
   "${imgui_root}/imgui_impl_glfw.cpp"
-  "${root}/Sly1-Release/glad.c"
+  "${root}/Libraries/glad/glad.c"
   "${gen}/switch_assets.h")
 target_include_directories(cane_switch BEFORE PUBLIC "${root}/platform/switch/include")
 target_include_directories(cane_switch PUBLIC "${root}/Libraries/include" "${root}/platform/switch" "${gen}" "${PORTLIBS}/include")
 target_compile_definitions(cane_switch PUBLIC ${cane_switch_defines})
 target_compile_options(cane_switch PRIVATE ${cane_switch_options})
 set_source_files_properties("${imgui_root}/imgui.cpp" "${imgui_root}/imgui_draw.cpp" "${imgui_root}/imgui_tables.cpp"
-  "${imgui_root}/imgui_widgets.cpp" "${imgui_root}/imgui_impl_glfw.cpp" "${root}/Sly1-Release/glad.c" PROPERTIES COMPILE_OPTIONS "-w")
+  "${imgui_root}/imgui_widgets.cpp" "${imgui_root}/imgui_impl_glfw.cpp" "${root}/Libraries/glad/glad.c" PROPERTIES COMPILE_OPTIONS "-w")
 if(CANE_SWITCH_LTO)
   set_target_properties(cane_switch PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
 endif()
@@ -261,60 +268,50 @@ add_custom_target(sly3_version
 add_dependencies(sly3_game sly3_version)
 target_sources(sly3_game PRIVATE "${gen}/sly3/embedded_shaders.h" "${gen}/sly3/sly2n_logo.h" ${prompt_headers})
 
-# ---- Sly 1: the vcxproj's sources, as the desktop build takes them
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${root}/Sly1-Release/Sly1-Release.vcxproj")
-file(STRINGS "${root}/Sly1-Release/Sly1-Release.vcxproj" sly1_lines REGEX "<ClCompile Include=")
-set(sly1_sources "")
-foreach(line IN LISTS sly1_lines)
-  string(REGEX REPLACE ".*Include=\"([^\"]+)\".*" "\\1" source "${line}")
-  string(REPLACE "\\" "/" source "${source}")
-  # no XAPO reverb: audio_switch.h runs the reverb itself
-  if(NOT source MATCHES "^\\.\\." AND NOT source STREQUAL "glad.c" AND NOT source STREQUAL "spu_reverb_xapo.cpp")
-    list(APPEND sly1_sources "${root}/Sly1-Release/${source}")
-  endif()
-endforeach()
-# the installer's extraction: iso_extractor and the File Extractor's native tools
-set(brx_rebuilder "${root}/File Extractor GUI/NativeTools/BrxRebuilder")
-set(pal_extractor "${root}/File Extractor GUI/NativeTools/PalExtractor")
-set(brx_sources "")
-foreach(source AssetWalker BinaryInputStream BrxWalker GeometryWalker ObjectWalker OptionWalker SpliceWalker TriangleList)
-  list(APPEND brx_sources "${brx_rebuilder}/${source}.cpp")
-endforeach()
-set(pal_sources "")
-foreach(source AssetWalker BinaryInputStream BrxWalker GeometryWalker ObjectWalker OptionWalker PalIsoExtractor SpliceWalker)
-  list(APPEND pal_sources "${pal_extractor}/${source}.cpp")
-endforeach()
-# Sly 1's deko3d backend and ImGui renderer, in Sly 1's object only
-set(sly1_switch_sources "${root}/platform/installer/iso_extractor.cpp" "${root}/platform/switch/sly1/vtables.cpp"
-  "${root}/platform/switch/sly1/audio_prefetch.cpp" "${root}/platform/switch/sly1/deko/backend.cpp"
-  "${root}/platform/switch/sly1/deko/imgui.cpp")
+# ---- Sly 1 (CANE_SWITCH_SLY1, above): the Sly1/ submodule's sources and settings (cmake/sly1.cmake cane_sly1_game:
+# the vcxproj's list, SafeHouse's files in Sly1-Release/safehouse, <safehouse/...> headers, CANE_SAFEHOUSE), with the
+# Switch's parts: the deko3d backend and its ImGui renderer, the game's descriptor (platform/switch/sly1/game.cpp), and
+# platform/switch/sly1/include (SDL.h: upstream's controller code over the Switch layer's pads). The audio is the Switch
+# mixer (platform/switch/audio_switch.h, through the fork's platform/audio_linux.h). The installer (the disc's
+# extraction, sly1_pcbrx: the submodule's level tools) is linked into SafeHouse.nro beside the launcher, outside the
+# game object: the level tools' class names are the game's own.
+set(sly1_switch_installer OFF)
+if(CANE_SWITCH_SLY1)
+include("${root}/cmake/sly1.cmake")
 file(MAKE_DIRECTORY "${gen}/sly1/deko")
-add_library(sly1_game STATIC ${sly1_sources} "${imgui_root}/imgui_demo.cpp" "${imgui_root}/ImGuiFileDialog.cpp"
-  "${root}/Libraries/miniz/miniz.c" "${root}/assets/prompts/prompt_data.cpp" ${sly1_switch_sources} ${brx_sources} ${pal_sources}
-  "${gen}/sly1/deko/deko_shaders.h" ${prompt_headers})
+set(sly1_switch_sources "${root}/platform/switch/sly1/game.cpp" "${root}/platform/switch/sly1/deko/backend.cpp"
+  "${root}/platform/switch/sly1/deko/imgui.cpp"
+  # (the renderer choice and the prebuilt programs' ImGui, as on the desktop: Vulkan is not built here, so the game
+  # stays on its GL calls, which the deko3d backend runs)
+  "${root}/platform/vulkan/vk_game.cpp" "${root}/platform/render/imgui_gl.cpp" "${imgui_root}/ImGuiFileDialog.cpp")
+# (the controller prompt atlases and SDL_GameControllerDB, as Sly 2's: the fork's prompt_glyphs.cpp / input)
+add_library(sly1_game STATIC ${sly1_switch_sources} "${gen}/sly1/deko/deko_shaders.h" "${root}/assets/prompts/prompt_data.cpp"
+  ${prompt_headers})
+cane_sly1_game(sly1_game)
 cane_switch_game(sly1_game sly1)
-target_include_directories(sly1_game BEFORE PRIVATE "${root}/platform/switch/sly1")
-target_include_directories(sly1_game PRIVATE "${root}/Sly1-Release" "${root}/platform" "${root}/Libraries/miniz" "${gen}/sly1"
-  "${gen}/sly1/deko" "${root}/assets/prompts" "${gen}/prompts")
-# fused multiply-adds, as in Project Cane's Switch build (Sly 2 keeps -ffp-contract=off)
-target_compile_options(sly1_game PRIVATE -ffp-contract=fast)
-target_compile_definitions(sly1_game PRIVATE GLFW_STATIC GLM_ENABLE_EXPERIMENTAL USE_STD_FILESYSTEM IMGUI_IMPL_OPENGL_LOADER_CUSTOM
-  _ENABLE_EXTENDED_ALIGNED_STORAGE CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
-# the native tools' CBinaryInputStream, renamed apart from the game's
-set_source_files_properties(${brx_sources} "${root}/platform/installer/iso_extractor.cpp" PROPERTIES
-  COMPILE_DEFINITIONS CBinaryInputStream=CaneBrxInputStream SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(${pal_sources} ${sly1_switch_sources} "${imgui_root}/imgui_demo.cpp" "${imgui_root}/ImGuiFileDialog.cpp"
-  "${root}/Libraries/miniz/miniz.c" "${root}/assets/prompts/prompt_data.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties("${imgui_root}/imgui_demo.cpp" "${imgui_root}/ImGuiFileDialog.cpp" PROPERTIES COMPILE_OPTIONS "-w")
-set_source_files_properties("${root}/Sly1-Release/alo.cpp" PROPERTIES COMPILE_DEFINITIONS ALO_IMPLEMENTATION SKIP_PRECOMPILE_HEADERS ON)
-file(MAKE_DIRECTORY "${gen}/sly1")
-# the desktop build's precompiled headers, compat.h first
-set(sly1_pch "${root}/platform/switch/sly1/compat.h")
-foreach(header platform/platform.h Sly1-Release/sw.h Sly1-Release/save.h Sly1-Release/freeze.h Sly1-Release/act.h Sly1-Release/wr.h
-               Sly1-Release/shadow.h Sly1-Release/fader.h Sly1-Release/splicemap.h Sly1-Release/gc.h)
-  list(APPEND sly1_pch "${root}/${header}")
-endforeach()
-target_precompile_headers(sly1_game PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${sly1_pch}>")
+target_include_directories(sly1_game BEFORE PRIVATE "${root}/platform/switch/sly1/include")
+target_include_directories(sly1_game PRIVATE "${root}/platform/switch/sly1" "${gen}/sly1/deko" "${root}/platform" "${root}/assets/prompts"
+  "${gen}/prompts")
+# (main.cpp's main is the descriptor's run: platform/switch/sly1/game.cpp)
+set_property(SOURCE "${SLY1_GAME_DIR}/main.cpp" TARGET_DIRECTORY sly1_game APPEND PROPERTY COMPILE_DEFINITIONS main=Sly1Main)
+target_compile_definitions(sly1_game PRIVATE GLM_ENABLE_EXPERIMENTAL USE_STD_FILESYSTEM IMGUI_IMPL_OPENGL_LOADER_CUSTOM
+  CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
+set_source_files_properties(${sly1_switch_sources} "${root}/assets/prompts/prompt_data.cpp" TARGET_DIRECTORY sly1_game
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties("${imgui_root}/ImGuiFileDialog.cpp" TARGET_DIRECTORY sly1_game PROPERTIES COMPILE_OPTIONS "-w")
+# the first-boot installer: the disc's extraction (platform/installer/iso_extractor.cpp) on the level tools
+include("${root}/cmake/sly1_pcbrx.cmake")
+target_compile_options(sly1_pcbrx PRIVATE ${cane_switch_options})
+add_library(sly1_installer STATIC "${root}/platform/installer/iso_extractor.cpp" "${root}/platform/switch/sly1/install.cpp")
+target_link_libraries(sly1_installer PUBLIC sly1_pcbrx PRIVATE cane_switch)
+target_include_directories(sly1_installer PRIVATE "${root}/File Extractor" "${root}/platform")
+target_compile_options(sly1_installer PRIVATE ${cane_switch_options})
+if(CANE_SWITCH_LTO)
+  set_target_properties(sly1_pcbrx sly1_installer PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+    INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+endif()
+set(sly1_switch_installer ON)
+endif()
 
 # ---- SafeHouse.nro: the launcher's main and the games' objects
 set_source_files_properties(${cane_switch_game_objects} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
@@ -324,6 +321,12 @@ set_target_properties(safehouse PROPERTIES OUTPUT_NAME ${cane_program} SUFFIX ".
 target_link_libraries(safehouse PRIVATE cane_switch)
 target_compile_options(safehouse PRIVATE ${cane_switch_options})
 target_compile_definitions(safehouse PRIVATE "CANE_SWITCH_VERSION=\"${SAFEHOUSE_VERSION}\"")
+if(sly1_switch_installer)
+  target_link_libraries(safehouse PRIVATE sly1_installer)
+else()
+  # (platform/switch/launcher/launcher.cpp: no cane_game_sly1; Sly 1's cover reads "not ported yet")
+  target_compile_definitions(safehouse PRIVATE CANE_SWITCH_NO_SLY1)
+endif()
 set_property(TARGET safehouse PROPERTY CXX_LINKER_LAUNCHER "${link_launcher}")
 # every pthread starts on cores 1-2 and getenv is cached (platform/switch/runtime.cpp)
 target_link_options(safehouse PRIVATE

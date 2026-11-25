@@ -118,7 +118,7 @@ bool Context::CreatePlaceholders(std::string* error) {
                              withBytes:&black
                            bytesPerRow:4
                          bytesPerImage:4];
-  placeholder_buffer_ = [device_ newBufferWithLength:256 options:MTLResourceStorageModeShared];
+  placeholder_buffer_ = [device_ newBufferWithLength:65536 options:MTLResourceStorageModeShared];
   std::memset(placeholder_buffer_.contents, 0, 256);
   if (!placeholder_2d_ || !placeholder_2d_array_ || !placeholder_buffer_) {
     if (error) *error = "Metal placeholder resources failed";
@@ -398,7 +398,7 @@ bool Context::GetInteger(GLenum name, int* out) {
       out[3] = state_.raster.scissor_box.height;
       return true;
     default:
-      return false;
+      return GetStateInteger(name, out);  // (context_extended.mm)
   }
 }
 
@@ -407,6 +407,7 @@ bool Context::GetFloat(GLenum name, float* out) {
     *out = 16.0f;
     return true;
   }
+  if (GetStateFloat(name, out)) return true;
   int value = 0;
   if (!GetInteger(name, &value)) return false;
   *out = static_cast<float>(value);

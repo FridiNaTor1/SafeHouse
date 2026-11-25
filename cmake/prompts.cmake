@@ -33,6 +33,7 @@ if(TARGET glfw AND EXISTS "${cane_prompt_source}/prompt_atlas_rects.inc" AND EXI
  target_sources(cane_prompts INTERFACE $<TARGET_OBJECTS:cane_prompts_data>)
  target_include_directories(cane_prompts INTERFACE "${cane_prompt_source}")
  target_compile_definitions(cane_prompts INTERFACE CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
+ # (Sly1-Release: the fork's prompt_glyphs.cpp / input; Sly 2 and Sly 3 link their own copy)
  foreach(target Sly1-Release cane-launcher)
   if(TARGET ${target})
    target_link_libraries(${target} PRIVATE cane_prompts)

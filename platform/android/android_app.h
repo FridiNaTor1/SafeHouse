@@ -18,6 +18,25 @@ struct ChildProcess {
 ChildProcess startProcess(const std::vector<std::string>& arguments);
 bool processRunning(std::int64_t handle);
 int processExitCode(std::int64_t handle);
+// Why a child ended without reporting its exit code (its process crashed, Android closed it, its window was closed),
+// from the child's own report or Android's record of the process (ApplicationExitInfo, API 30+); "" when it reported
+// its code or nothing is known. A crash reads "crash: <program> crashed: <how>" (process.h CrashWatch), anything else
+// "exit reason: <how>". Call before processExitCode (which forgets the child).
+std::string processExitReason(std::int64_t handle);
+// Android's record of how a process of this app ended (ActivityManager.getHistoricalProcessExitReasons, API 30+):
+// found: a record exists; crash: it crashed (Java or native), hung (ANR) or failed to start, not closed by the system
+// or the user; description: e.g. "native crash, signal 11", "low memory", "killed (signal 9)".
+struct ExitRecord {
+    bool found = false;
+    bool crash = false;
+    int reason = 0, status = 0;
+    std::string description;
+};
+ExitRecord processExitRecord(long pid);
+// An OpenXR runtime is installed (a headset: Meta Quest, Pico, ...; NativeBridge.openXrRuntimeInstalled): the runtime
+// brokers' content providers, a runtime manifest in the system's etc/openxr folders, or a known headset maker. False
+// on a phone, where the games then do not load the OpenXR loader at all.
+bool openXrRuntimeInstalled();
 void cancelProcess(std::int64_t handle);
 std::string filesDirectory();
 std::string nativeLibraryDirectory();
@@ -42,6 +61,10 @@ struct ImportStatus {
     std::string error;
 };
 ImportStatus isoSelection();
+// A custom Vulkan driver package (.zip) picked with the document picker, copied into files/drivers/ (status.path; handed
+// over once: the launcher unpacks it, launcher/android_drivers.h).
+void requestDriverImport();
+ImportStatus driverImport();
 ImportStatus modImport();
 void openFolder(const std::string& path);
 void openUrl(const std::string& url);
@@ -49,6 +72,22 @@ void openUrl(const std::string& url);
 // status, or -1 server name not found, -2 no connection, -3 timed out, -4 larger than maxBytes, -5 another failure.
 // The body when status is 200.
 std::string httpGet(const std::string& url, bool api, const std::string& userAgent, std::size_t maxBytes, int& status);
+// Storage besides the private folder (NativeBridge.externalFolders): {path, kind}; kind "primary" / "removable": the
+// app's own folders on the shared storage / an SD card (no permission; removed with the app), "shared" / "card": a
+// volume's root (with all files access).
+std::vector<std::pair<std::string, std::string>> externalFolders();
+// All files access (Android 11+) or the storage permission (6-10); requestAllFilesAccess asks for it.
+bool allFilesAccess();
+void requestAllFilesAccess();
+// The launcher's update download: `url` into the file `path` (HTTPS; redirects followed). The HTTP status, or the
+// negative codes of httpGet (-6 cancelled). *total: the announced length (-1 unknown). Blocks; downloadLength() and
+// cancelDownload() may be called from another thread meanwhile.
+int httpDownload(const std::string& url, const std::string& path, const std::string& userAgent, std::uint64_t* total);
+std::uint64_t downloadLength();
+void cancelDownload();
+// Hands an APK to Android's installer (a PackageInstaller session; the system asks the player to confirm). "" when
+// the installer took it, else why not (e.g. SafeHouse may not install apps yet: Android's setting opened).
+std::string installPackage(const std::string& apkPath);
 // Starts another part of the app on its own (collection/collection.h spawnDetached): no arguments = the launcher, else
 // the direct activity with these launcher arguments (--collection, --play GAME). False when Android refused.
 bool startApp(const std::vector<std::string>& arguments);

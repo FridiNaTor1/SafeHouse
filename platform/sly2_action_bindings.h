@@ -62,7 +62,7 @@ namespace cane::sly2input {
  X(RcFire, "rc_fire", "RC helicopter fire", "RC helicopter", 2000, 2) \
  X(RcBomb, "rc_bomb", "RC helicopter drop bomb", "RC helicopter", 2001, 0) \
  X(RcCamera, "rc_camera", "RC helicopter camera", "RC helicopter", 258, 10) \
- X(HackFire, "hack_fire", "Fire hacking ship", "Minigames", 2000, 2) \
+ X(HackFire, "hack_fire", "Fire hacking ship", "Minigames", 2000, 1002) \
  X(DanceSquare, "dance_left", "Dance left / Square cue", "Minigames", 65, 2) \
  X(DanceCircle, "dance_right", "Dance right / Circle cue", "Minigames", 68, 1) \
  X(DanceCross, "dance_down", "Dance down / Cross cue", "Minigames", 83, 0) \
@@ -102,6 +102,17 @@ inline constexpr bool isNoclipAction(Action action) {
 }
 
 inline constexpr size_t kActionCount = size_t(Action::Count);
+// The actions a controller can also bind to the right stick (settings::kGamepadRightStick, held while it is deflected):
+// the hack ship's guns, which the PS2 fires with the right stick (its direction the aim). Its default (issue #74: a
+// button only, the stick could not be restored).
+inline constexpr bool stickBindable(Action action) { return action == Action::HackFire; }
+inline bool validPadBinding(Action action, int binding) {
+    return binding == settings::kKeyUnknown || settings::validGamepadBinding(binding) ||
+           (binding == settings::kGamepadRightStick && stickBindable(action));
+}
+// (the file's "revision": 2 since the hack ship's right stick; a revision 1 file's hack_fire on Square (2, the old
+// default) moves to the stick)
+inline constexpr int kProfileRevision = 2;
 struct ActionInfo { const char* id; const char* label; const char* group; int defaultKey; int defaultPad; };
 inline constexpr std::array<ActionInfo, kActionCount> kActions{{
 #define CANE_ACTION_INFO(name, id, label, group, key, pad) {id, label, group, key, pad},
@@ -133,6 +144,7 @@ inline Profile load(const fs::path& userDir) {
         const auto json = nlohmann::json::parse(in);
         if (json.value("version", 0) != 1) { p.readOnly = true; return p; }
         p.enabled = json.value("enabled", false);
+        const int revision = json.value("revision", 1);
         if (json.contains("actions") && json["actions"].is_object()) {
             const auto& actions = json["actions"];
             for (size_t i = 0; i < kActionCount; ++i) {
@@ -141,7 +153,8 @@ inline Profile load(const fs::path& userDir) {
                 const int key = it->value("keyboard", p.keyboard[i]);
                 const int pad = it->value("controller", p.gamepad[i]);
                 if (key == settings::kKeyUnknown || settings::validKeyboardBinding(key)) p.keyboard[i] = key;
-                if (pad == settings::kKeyUnknown || settings::validGamepadBinding(pad)) p.gamepad[i] = pad;
+                if (validPadBinding(Action(i), pad)) p.gamepad[i] = pad;
+                if (revision < 2 && Action(i) == Action::HackFire && pad == 2) p.gamepad[i] = settings::kGamepadRightStick;
             }
         }
     } catch (const nlohmann::json::exception&) { p = defaults(); p.readOnly = true; }
@@ -149,7 +162,7 @@ inline Profile load(const fs::path& userDir) {
 }
 inline bool save(const fs::path& userDir, const Profile& p) {
     if (p.readOnly) return false;
-    nlohmann::json json{{"version", 1}, {"enabled", p.enabled}, {"actions", nlohmann::json::object()}};
+    nlohmann::json json{{"version", 1}, {"revision", kProfileRevision}, {"enabled", p.enabled}, {"actions", nlohmann::json::object()}};
     for (size_t i = 0; i < kActionCount; ++i)
         json["actions"][kActions[i].id] = {{"keyboard", p.keyboard[i]}, {"controller", p.gamepad[i]}};
     const fs::path file = profilePath(userDir);

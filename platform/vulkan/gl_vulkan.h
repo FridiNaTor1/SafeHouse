@@ -48,6 +48,11 @@ struct Options
     const ExternalDevice* external = nullptr;   // (VR) instance / device through OpenXR
     bool singleThread = false;        // no submission worker (SLY2N_VKTHREAD=0 / SLY2N_VRVKTHREAD=0)
     void (*onWorkerThread)() = nullptr;   // called on the submission worker as it starts (VR: the thread told to the runtime)
+    // glBufferStorage and persistent, coherent glMapBufferRange (GL 4.4): the game writes its per-frame streams straight
+    // into the buffer's memory, fencing its own slots (glFenceSync / glClientWaitSync). Off: ProcAddress has no
+    // glBufferStorage and glMapBufferRange answers nullptr, so the game uses glBufferSubData (each update of a buffer
+    // already read this frame is then a copy, ending the render pass). Sly 1 (platform/vulkan/vk_game.cpp) turns it on.
+    bool persistentMaps = false;
 };
 // The instance, device and (visible) swapchain for the window (created with GLFW_CLIENT_API = GLFW_NO_API). False
 // (and why) when Vulkan cannot run the game here: the caller falls back to OpenGL.
@@ -65,6 +70,10 @@ void Shutdown();
 void* ProcAddress(const char* name);
 // The frame: submits the commands and presents the window's picture (glfwSwapBuffers).
 void Present();
+// The window's picture as it is before Present: 1 when it has something brighter than near-black, 0 when all of it is
+// (near-)black, -1 when there is none. A full read-back (a pipeline stall): for the custom driver's check only
+// (custom_driver_watch.h).
+int SampleWindowPicture();
 // (Android) the window's surface comes and goes (platform/android/android_app.h windowSurfaceSerial): `serial` returns
 // a number that changes whenever the platform replaced the surface and 0 while there is none (the app in the
 // background). Each Present asks it: the layer then renders and submits without presenting, and makes its surface and

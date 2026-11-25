@@ -2,7 +2,7 @@
 # launcher/assets/developers/<name>.png and <name>-silhouette.png. cane_embed_developers(target) embeds them all as one
 # generated header, launcher_developers.h (cmake/embed-developers.cmake: cane_developer_pictures[], each picture then
 # its silhouette). Used by the desktop, Android and iOS builds.
-set(CANE_DEVELOPERS fridinator theclub654 menaman123 thematuu nagaa95 cooperbooperscooper fyrnas maxigasparini)
+set(CANE_DEVELOPERS fridinator theclub654 menaman123 thematuu nagaa95 cooperbooperscooper fyrnas maxigasparini razziedazzel)
 
 function(cane_embed_developers target)
  set(root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/..")

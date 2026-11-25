@@ -100,14 +100,14 @@ def main(argv=None):
     parser.add_argument('--sdk', type=Path, default=Path(os.environ.get('ANDROID_HOME', Path.home() / 'Android/Sdk')))
     parser.add_argument('--ndk', type=Path)
     parser.add_argument('--abi', choices=ABI_TARGETS, default='arm64-v8a')
-    parser.add_argument('--api', type=int, default=26)
+    parser.add_argument('--api', type=int, default=21)   # (Android 5.0: the app's minSdk, android/app/build.gradle)
     parser.add_argument('--prefix', type=Path, default=Path('build/android-deps'))
     parser.add_argument('--cache', type=Path, action='append', default=[], help='Reuse only checksum-matching locked archives')
     parser.add_argument('--parallel', type=int, default=4)
     parser.add_argument('--download-only', action='store_true')
     options = parser.parse_args(argv)
-    if options.api < 26 or options.parallel < 1:
-        parser.error('Android API must be at least 26 and parallelism must be positive')
+    if options.api < 21 or options.parallel < 1:
+        parser.error('Android API must be at least 21 and parallelism must be positive')
     if platform.system() not in ('Linux', 'Darwin'):
         parser.error('Use Linux, macOS, or WSL to build the POSIX native dependencies')
     options.ndk = (options.ndk or options.sdk / 'ndk' / NDK_VERSION).resolve()

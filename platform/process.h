@@ -100,6 +100,12 @@ inline int runProcess(const std::vector<std::string>& arguments, const fs::path&
     }
     close(output);
     while (mobile::processRunning(child.handle) && !cancelled) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+#if defined(__ANDROID__)
+    // (a child that ended without its exit code: why, from its activity or Android's record: "crash: ..." (CrashWatch)
+    // or "exit reason: ..." (explainedProcess shows that, not the output's last error line))
+    if (!cancelled)
+        if (const std::string why = mobile::processExitReason(child.handle); !why.empty()) log(why);
+#endif
     code = mobile::processExitCode(child.handle);
 #elif defined(_WIN32)
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};

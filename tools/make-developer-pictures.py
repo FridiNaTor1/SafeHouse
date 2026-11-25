@@ -3,14 +3,15 @@
 
     tools/make-developer-pictures.py NAME=PICTURE ... [--out launcher/assets/developers]
 
-For each developer (fridinator, theclub654, menaman123, thematuu, nagaa95, cooperbooperscooper, fyrnas, maxigasparini)
+For each developer (fridinator, theclub654, menaman123, thematuu, nagaa95, cooperbooperscooper, fyrnas, maxigasparini,
+razziedazzel)
 and the picture its owner supplied:
   <name>.png             the picture, square, 512 x 512
   <name>-silhouette.png  its subject as a black shape with alpha (cut out of the picture itself, so it lines up with
                          the picture when the page cross-fades between the two), with a few plain prop shapes around it
                          that hint at what the person did (drawn here: a gear and a spanner, stars, a laptop, a puzzle
                          piece and a branch line, a handheld and a chip, a VR headset, a chip and a spanner, a folder
-                         and a disc)
+                         and a disc, music notes)
 
 How each subject is told from its background is written per picture below (a plain wall, a flat grey, the picture's
 own alpha, a starry sky, a pale square). Needs Pillow and NumPy.
@@ -106,6 +107,12 @@ def subject(name, picture):
     if name in ("fyrnas", "maxigasparini"):
         # a pattern of coloured squares on a pale grey square: what has colour
         return spread > 40
+    if name == "razziedazzel":
+        # a drawn portrait on flat dark grey (with a pale green glow around it and a few stars): what is far enough
+        # from the grey
+        grey = np.median(a[:30, :30, :3].reshape(-1, 3), axis=0)
+        far = np.abs(a[..., :3] - grey).sum(axis=2) > 70
+        return largest(far)
     raise SystemExit(f"no rule for {name}")
 
 
@@ -202,6 +209,16 @@ def disc(d, cx, cy, radius):
     d.arc((cx - radius * 0.72, cy - radius * 0.72, cx + radius * 0.72, cy + radius * 0.72), 200, 290, fill=0, width=max(1, int(radius * 0.08)))
 
 
+def note(d, x, y, h):
+    """A pair of joined music notes (eighth notes with a beam)."""
+    r = h * 0.17
+    for cx, top in ((x, y + h * 0.1), (x + h * 0.55, y)):
+        d.ellipse((cx - r * 1.25, top + h - r, cx + r * 1.25, top + h + r), fill=255)
+        d.rectangle((cx + r * 1.0, top, cx + r * 1.0 + h * 0.08, top + h), fill=255)
+    d.polygon([(x + r * 1.0, y + h * 0.1), (x + h * 0.55 + r * 1.0 + h * 0.08, y), (x + h * 0.55 + r * 1.0 + h * 0.08, y + h * 0.18),
+               (x + r * 1.0, y + h * 0.28)], fill=255)
+
+
 def props(name):
     """The prop shapes of a developer, as an 8-bit mask of the full square."""
     big = Image.new("L", (SIZE * SCALE, SIZE * SCALE), 0)
@@ -231,6 +248,9 @@ def props(name):
     elif name == "maxigasparini":  # the game and disc image folders: a folder and a disc
         folder(d, 4 * u, 80 * u, 24 * u)
         disc(d, 88 * u, 12 * u, 10 * u)
+    elif name == "razziedazzel":  # a contributor who put Sly 1's sounds right: music notes and a branch line
+        note(d, 78 * u, 74 * u, 18 * u)
+        branch(d, 8 * u, 4 * u, 20 * u)
     return big.resize((SIZE, SIZE), Image.LANCZOS)
 
 

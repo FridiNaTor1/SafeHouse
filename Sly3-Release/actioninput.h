@@ -34,5 +34,6 @@ bool Take(PADCTL* pad, Action action, uint32_t originalButton, float dt);
 bool Within(PADCTL* pad, Action action, uint32_t originalButton, float dt);
 bool Held(PADCTL* pad, Action action, uint32_t originalButton);
 int SelfTest();
-int CaptureController(GLFWwindow* window);
+// (fRightStick: the right stick pushed out is a binding too, settings::kGamepadRightStick: input::stickBindable actions)
+int CaptureController(GLFWwindow* window, bool fRightStick = false);
 } // namespace sly2actions

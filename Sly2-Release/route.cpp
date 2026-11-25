@@ -19,7 +19,7 @@
 // teleport X Y Z [H]: the current player put there (as SLY2N_TELEPORT: Z is the object's, H the heading, camera cut) at the
 // step's start (one frame); waittask OID STATE N [CSV]: until the task's state is >= STATE (after N frames it goes on), the CSV's
 // presses meanwhile (e.g. CROSS taps through a dialog); skipif OID STATE N: the next N steps skipped when the task's state is
-// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N: world record N loaded in this process (the debug menu's warp); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
+// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N: world record N loaded in this process (the debug menu's warp); exit OID [POINT]: that exit fired (as a door's script, POINT its checkpoint); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
 #include "activate.h"
 #include "crv.h"
 #include "actor.h"
@@ -60,7 +60,7 @@ namespace
 struct PRESSR { int at = 1, c = 1, axis = -1; uint16_t grf = 0; uint8_t b = 0x80; };
 struct STEPR
 {
-    enum { Move, Wait, Input, Aim, WaitObj, Chase, Point, Teleport, WaitTask, TaskReq, WaitClock, Giver, IntoVol, SetPos, OnLo, Tail, SkipIf, SetPosLo, WaitScpt, HackDock, NoJt, WarpWorld } kind = Wait;
+    enum { Move, Wait, Input, Aim, WaitObj, Chase, Point, Teleport, WaitTask, TaskReq, WaitClock, Giver, IntoVol, SetPos, OnLo, Tail, SkipIf, SetPosLo, WaitScpt, HackDock, NoJt, WarpWorld, Exit } kind = Wait;
     float h = 0; bool fH = false;
     int cid = 0, oid = 0;
     int frames = 0;
@@ -283,6 +283,14 @@ void Load()
             // point; the route goes on through the load (e.g. tools/spintripregress.py's trip)
             s.kind = STEPR::WarpWorld; s.frames = 1;
             s.oid = std::atoi(f[1].c_str());
+        }
+        else if (f[0] == "exit" && f.size() >= 2)
+        {
+            // exit OID [POINT]: that exit (class 0x1A) armed and fired as the world's scripts fire it (a door, a vent;
+            // POINT: its checkpoint set first, as those scripts do: e.g. Ep7's burn room door, exit 3010 to 33766)
+            s.kind = STEPR::Exit; s.frames = 1;
+            s.oid = std::atoi(f[1].c_str());
+            s.cid = f.size() >= 3 ? std::atoi(f[2].c_str()) : -1;
         }
         else if (f[0] == "skipif" && f.size() >= 4)
         {
@@ -632,6 +640,19 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     {
         std::printf("route: step %d warpworld %d (frame %d)\n", r.istep + 1, s->oid, frame);
         RequestWorldWarp(g_psw, s->oid);  // (transition.h: as the debug menu)
+    }
+    if (s->kind == STEPR::Exit && rel == 1 && g_psw)
+    {
+        void SetExitState(LO* plo, int n);   // (frontend.cpp)
+        void TriggerExit(LO* plo);
+        LO* plo = PloFindSwObjectByOid(g_psw, s->oid);
+        std::printf("route: step %d exit %d%s (frame %d)\n", r.istep + 1, s->oid, plo ? "" : " (none)", frame);
+        if (plo && plo->Cid() == 0x1A)
+        {
+            if (s->cid != -1) plo->SetField(0, 0x150, uint32_t(s->cid));
+            SetExitState(plo, 3);
+            TriggerExit(plo);
+        }
     }
     if (s->kind == STEPR::SkipIf && rel == 1)
     {

@@ -102,7 +102,9 @@ public final class SafeHouseDocumentsProvider extends DocumentsProvider {
     @Override public Cursor queryChildDocuments(String parent, String[] projection, String sortOrder) throws FileNotFoundException {
         File[] children = file(parent).listFiles();
         if (children == null) throw new FileNotFoundException("Cannot read SafeHouse folder");
-        Arrays.sort(children, Comparator.comparing((File item) -> !item.isDirectory()).thenComparing(File::getName, String.CASE_INSENSITIVE_ORDER));
+        // (folders first, then by name; java.util.Comparator's combinators need Android 7)
+        Arrays.sort(children, (a, b) -> a.isDirectory() != b.isDirectory() ? (a.isDirectory() ? -1 : 1)
+            : String.CASE_INSENSITIVE_ORDER.compare(a.getName(), b.getName()));
         MatrixCursor result = new MatrixCursor(projection == null ? DOC_COLUMNS : projection);
         for (File child : children) if (!child.getName().startsWith(".")) include(result, child);
         return result;
@@ -116,6 +118,7 @@ public final class SafeHouseDocumentsProvider extends DocumentsProvider {
         try { return file(child).getPath().startsWith(file(parent).getPath() + File.separator); }
         catch (FileNotFoundException error) { return false; }
     }
+    @android.annotation.TargetApi(26)   // (called by Android 8+ only)
     @Override public DocumentsContract.Path findDocumentPath(String parentId, String childId) throws FileNotFoundException {
         File selected = file(childId), ancestor = parentId == null ? root() : file(parentId);
         if (!selected.exists() || (!selected.equals(ancestor) && !isChildDocument(parentId == null ? ROOT : parentId, childId)))

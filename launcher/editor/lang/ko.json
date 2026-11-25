@@ -217,7 +217,6 @@
   "Insert:": "삽입:",
   "Its reference still sounds band-limited (an announcement or talk heard through the binocucom): switch the effect on if the dub should too.": "원본이 그래도 대역이 좁게 들립니다(안내 방송이나 쌍안 통신기로 듣는 대화). 더빙도 그래야 하면 효과를 켜세요.",
   "Levels not known yet": "레벨을 아직 모름",
-  "Menus": "메뉴",
   "No groups": "그룹 없음",
   "No microphone could be opened (SDL2 or a recording device is missing).": "마이크를 열 수 없습니다(SDL2 또는 녹음 장치가 없습니다).",
   "Not in any level": "어느 레벨에도 없음",
