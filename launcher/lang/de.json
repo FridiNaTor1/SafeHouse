@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip braucht eine Adreno-6xx-GPU oder neuer.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Von Mesa Turnip ist noch nicht bekannt, dass es auf dieser Adreno-GPU läuft.",
   "Rhythm minigame": "Rhythmus-Minispiel",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Nur im Rhythmus-Minispiel (der Kampf gegen Mz. Ruby): Diese Taste spielt dort diesen Knopf. Überall sonst behält sie ihre übliche Aktion."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Nur im Rhythmus-Minispiel (der Kampf gegen Mz. Ruby): Diese Taste spielt dort diesen Knopf. Überall sonst behält sie ihre übliche Aktion.",
+  "Your saves are already in that folder.": "Deine Spielstände sind bereits in diesem Ordner.",
+  "Choose a folder outside the current save folder.": "Wähle einen Ordner außerhalb des aktuellen Spielstandordners.",
+  "Not enough free space there: your saves need %s.": "Dort ist nicht genug Platz frei: Deine Spielstände brauchen %s.",
+  "Moving your saves": "Spielstände werden verschoben",
+  "Saves moved": "Spielstände verschoben",
+  "Save location": "Speicherort",
+  "Keep saves in": "Spielstände speichern in",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Wo SafeHouse deine Spielstände, die Einstellungen der Spiele und Mods aufbewahrt (Sly 1, 2 und 3). Mit einem Ordner im Telefonspeicher kannst du Spielstände mit einem Dateimanager oder einem Computer hinein- und herauskopieren.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Wo SafeHouse deine Spielstände, die Einstellungen der Spiele und Mods aufbewahrt (Sly 1, 2 und 3). Ein anderer Ordner, z. B. auf einem anderen Laufwerk, macht es leicht, sie hinein- und herauszukopieren.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Ein beliebiger Ordner, über die Ordnerauswahl des Systems. Deine Spielstände kommen in einen Ordner \"SafeHouse Saves\" darin.",
+  "Saves go to: %s": "Spielstände kommen nach: %s",
+  "That folder already has saves.": "Dieser Ordner enthält bereits Spielstände.",
+  "Move my saves there": "Meine Spielstände dorthin verschieben",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Kopiert deine Spielstände, die Einstellungen der Spiele und Mods dorthin und prüft jede Datei; erst dann werden die alten Kopien entfernt. Eine gleichnamige Datei, die schon dort ist, wird in einem Ordner \"Replaced\" aufbewahrt.",
+  "Use the saves there": "Die Spielstände dort verwenden",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Wechselt zu den Spielständen in diesem Ordner. Deine aktuellen Spielstände bleiben, wo sie sind.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "Der Spielstandordner %s ist nicht verfügbar (ein Laufwerk, das nicht angeschlossen ist?). Bis er wieder da ist, wird der Standardordner verwendet.",
+  "Choose where SafeHouse keeps your saves": "Wähle, wo SafeHouse deine Spielstände aufbewahrt"
  }
 }

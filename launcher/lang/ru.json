@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Для Mesa Turnip нужен GPU Adreno 6xx или новее.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Пока неизвестно, работает ли Mesa Turnip на этом GPU Adreno.",
   "Rhythm minigame": "Ритм-мини-игра",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Только в ритм-мини-игре (бой с Mz. Ruby): эта клавиша нажимает там эту кнопку. Везде в остальном она сохраняет своё обычное действие."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Только в ритм-мини-игре (бой с Mz. Ruby): эта клавиша нажимает там эту кнопку. Везде в остальном она сохраняет своё обычное действие.",
+  "Your saves are already in that folder.": "Ваши сохранения уже в этой папке.",
+  "Choose a folder outside the current save folder.": "Выберите папку вне текущей папки сохранений.",
+  "Not enough free space there: your saves need %s.": "Там недостаточно свободного места: сохранениям нужно %s.",
+  "Moving your saves": "Перенос сохранений",
+  "Saves moved": "Сохранения перенесены",
+  "Save location": "Расположение сохранений",
+  "Keep saves in": "Хранить сохранения в",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Где SafeHouse хранит ваши сохранения, настройки игр и моды (Sly 1, 2 и 3). Папка в памяти телефона позволяет копировать сохранения туда и обратно файловым менеджером или с компьютера.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Где SafeHouse хранит ваши сохранения, настройки игр и моды (Sly 1, 2 и 3). Другая папка, например на другом диске, упрощает их копирование туда и обратно.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Любая папка, через системный выбор папки. Сохранения кладутся в папку \"SafeHouse Saves\" внутри неё.",
+  "Saves go to: %s": "Сохранения будут в: %s",
+  "That folder already has saves.": "В этой папке уже есть сохранения.",
+  "Move my saves there": "Перенести мои сохранения туда",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Копирует туда ваши сохранения, настройки игр и моды и проверяет каждый файл; только после этого старые копии удаляются. Файл с тем же именем, который там уже есть, сохраняется в папке \"Replaced\".",
+  "Use the saves there": "Использовать сохранения оттуда",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Переключает на сохранения в этой папке. Текущие сохранения остаются на месте.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "Папка сохранений %s недоступна (диск не подключён?). Пока она не вернётся, используется папка по умолчанию.",
+  "Choose where SafeHouse keeps your saves": "Выберите, где SafeHouse хранит ваши сохранения"
  }
 }

@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip kræver en Adreno 6xx-GPU eller nyere.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Det vides endnu ikke, om Mesa Turnip virker på denne Adreno-GPU.",
   "Rhythm minigame": "Rytme-minispil",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Kun i rytme-minispillet (kampen mod Mz. Ruby): denne tast spiller den knap der. Alle andre steder beholder den sin sædvanlige handling."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Kun i rytme-minispillet (kampen mod Mz. Ruby): denne tast spiller den knap der. Alle andre steder beholder den sin sædvanlige handling.",
+  "Your saves are already in that folder.": "Dine gemte spil er allerede i den mappe.",
+  "Choose a folder outside the current save folder.": "Vælg en mappe uden for den nuværende mappe med gemte spil.",
+  "Not enough free space there: your saves need %s.": "Der er ikke nok ledig plads der: dine gemte spil kræver %s.",
+  "Moving your saves": "Flytter dine gemte spil",
+  "Saves moved": "Gemte spil flyttet",
+  "Save location": "Placering af gemte spil",
+  "Keep saves in": "Gem spil i",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Hvor SafeHouse opbevarer dine gemte spil, spillenes indstillinger og mods (Sly 1, 2 og 3). Med en mappe på telefonens lager kan du kopiere gemte spil ind og ud med en filhåndtering eller en computer.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Hvor SafeHouse opbevarer dine gemte spil, spillenes indstillinger og mods (Sly 1, 2 og 3). En anden mappe, f.eks. på et andet drev, gør det nemt at kopiere dem ind og ud.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "En hvilken som helst mappe, med systemets mappevælger. Dine gemte spil lægges i en mappe \"SafeHouse Saves\" i den.",
+  "Saves go to: %s": "Gemte spil placeres i: %s",
+  "That folder already has saves.": "Den mappe har allerede gemte spil.",
+  "Move my saves there": "Flyt mine gemte spil dertil",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Kopierer dine gemte spil, spillenes indstillinger og mods dertil og kontrollerer hver fil; først derefter fjernes de gamle kopier. En fil med samme navn, der allerede er der, gemmes i en mappe \"Replaced\".",
+  "Use the saves there": "Brug de gemte spil der",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Skifter til de gemte spil i den mappe. Dine nuværende gemte spil bliver, hvor de er.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "Mappen med gemte spil %s er ikke tilgængelig (et drev, der ikke er tilsluttet?). Standardmappen bruges, indtil den er tilbage.",
+  "Choose where SafeHouse keeps your saves": "Vælg, hvor SafeHouse opbevarer dine gemte spil"
  }
 }

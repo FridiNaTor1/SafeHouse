@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <ctime>
@@ -92,6 +93,8 @@ inline UserPaths upgradedUserPaths(folders::Report* report = nullptr) {
 struct LauncherBackend {
     folders::Report folderUpgrade;
     UserPaths locations = upgradedUserPaths(&folderUpgrade);
+    // The profile's own user folder (locations.user before Settings > Games "Keep saves in" moves it, saveRoot()).
+    const fs::path defaultUser = locations.user;
     fs::path tools = executableDirectory();
     json config = json::object();
     LauncherBackend() {
@@ -130,7 +133,7 @@ struct LauncherBackend {
                 if (config.contains("logging") && !config.at("logging").is_boolean())
                     config.erase("logging");
                 // Launcher preferences fall back to their defaults one by one.
-                for (auto key : {"sly2_iso_path", "sly3_iso_path", "last_game", "sly2_runtime", "browse_dir", "skipped_update", "install_dir", "iso_library_dir"})
+                for (auto key : {"sly2_iso_path", "sly3_iso_path", "last_game", "sly2_runtime", "browse_dir", "skipped_update", "install_dir", "iso_library_dir", "user_dir"})
                     if (config.contains(key) && !config.at(key).is_string()) config.erase(key);
                 // "sly2_wide_backgrounds" (Sly 2's "Widescreen backgrounds", removed 2026-11-05) is ignored and kept as it is.
                 for (auto key : {"show_logs", "start_fullscreen", "sly2_native_preview", "sly3_notice_hidden", "check_updates", "keep_imported_iso"})
@@ -148,6 +151,7 @@ struct LauncherBackend {
                 config = json::object();
             }
         }
+        applySaveRoot();
         if (config.contains("runtime_dir"))
             tools = locations.portable ? runtimeStorage(locations) / "runtime" / "bin"
                                        : path(config.at("runtime_dir").get<std::string>());
@@ -245,6 +249,7 @@ struct LauncherBackend {
         uintmax_t size;
         Installation value;
     };
+    bool m_saveRootMissing = false;
     mutable std::mutex m_cacheMutex;
     mutable std::vector<CacheEntry> m_cache;
     // The game's original folder (installations/<game>): its first installed region.
@@ -303,6 +308,210 @@ struct LauncherBackend {
         }
         fs::remove(probe, ec);
         if (!ok) throw std::runtime_error(tr("SafeHouse cannot write to that folder. Choose another one."));
+    }
+    // ---- Where the saves are kept (Settings > Games "Keep saves in", launcher.json "user_dir"; 2026-11-25). The user
+    // folder (locations.user: Sly 1's Saves, Settings.ini and Mods, <game>/ for the later games, Debug Mode.ini, the
+    // Collection menu) is the profile's own by default; another one, e.g. on the phone storage, lets the player copy
+    // saves in and out with a file manager or a computer. Every game gets it through --user-dir (userDir()). The
+    // launcher's own files (launcher.json, logs) stay in locations.config. A chosen folder that is not there at start
+    // (a drive that is away) leaves the default in use for that session (saveRootMissing(); Settings says so).
+    static constexpr const char* saveFolderName = "SafeHouse Saves";
+    static constexpr const char* saveFolderMarker = ".safehouse-saves";
+    bool customSaveRoot() const { return config.contains("user_dir") && config.at("user_dir").is_string() && !config.at("user_dir").get<std::string>().empty(); }
+    fs::path chosenSaveRoot() const { return customSaveRoot() ? path(config.at("user_dir").get<std::string>()) : defaultUser; }
+    fs::path saveRoot() const { return locations.user; }
+    bool saveRootMissing() const { return m_saveRootMissing; }
+    // The folder a chosen folder keeps the saves in: <chosen>/SafeHouse Saves, unless the chosen folder is the default
+    // one, is itself called that or holds a SafeHouse save folder already (its marker file, written by a move).
+    fs::path saveRootFor(const fs::path& chosen) const {
+        const fs::path c = fs::absolute(chosen).lexically_normal();
+        const auto same = [](const fs::path& a, const fs::path& b) { return folders::detail::comparable(a) == folders::detail::comparable(b); };
+        std::error_code ec;
+        if (same(c, defaultUser) || same(c.filename(), path(saveFolderName)) || fs::is_regular_file(c / saveFolderMarker, ec)) return c;
+        return c / saveFolderName;
+    }
+    // locations.user from launcher.json "user_dir" (the constructor; after a move or a switch).
+    void applySaveRoot() {
+        m_saveRootMissing = false;
+        locations.user = defaultUser;
+        if (!customSaveRoot()) return;
+        std::error_code ec;
+        const fs::path chosen = chosenSaveRoot();
+        if (fs::is_directory(chosen, ec)) {
+            locations.user = chosen;
+            fs::create_directories(chosen / "Saves", ec);
+        } else
+            m_saveRootMissing = true;
+    }
+    // Something of the player's in a save folder (more than the marker, the launcher's own files and empty folders).
+    bool saveFolderHasFiles(const fs::path& root) const {
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+            if (it.depth() == 0 && launcherOwned(it->path().filename(), root)) {
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (it->is_regular_file(ec) && it->path().filename() != saveFolderMarker) return true;
+        }
+        return false;
+    }
+    // The launcher's own files in the default user folder (on Linux and Android it is also the configuration folder):
+    // they never move with the saves. Locks and unfinished copies neither.
+    bool launcherOwned(const fs::path& name, const fs::path& root) const {
+        const std::string n = utf8(name);
+        for (const char* suffix : {".lock", ".staging", ".previous", ".broken", ".safehouse-copy"})
+            if (n.size() >= std::strlen(suffix) && n.compare(n.size() - std::strlen(suffix), std::string::npos, suffix) == 0) return true;
+        if (n == ".safehouse-write-test") return true;
+        if (folders::detail::comparable(root) != folders::detail::comparable(locations.config)) return false;
+        for (const char* own : {"launcher.json", "logs", "folder-upgrade.json", "update-result.json"})
+            if (n == own) return true;
+        return false;
+    }
+    // Switches to another save folder (chosen: what saveRootFor() made; empty: the default). move: the current save
+    // folder's files are copied there first, each one read back and compared; a file of the same name already there
+    // with other contents is first put aside in "<target>/Replaced <date>/" (nothing of the player's is overwritten).
+    // Only when every file is copied and checked is launcher.json changed, and only then are the old copies removed
+    // (the launcher's own files stay). A failure or Cancel leaves the setting as it was and takes back what it did in
+    // the target. Without move: only the setting (the saves already in that folder are used; the current ones stay).
+    // Runs on a job thread: locations.user changes later, on the UI thread (applySaveRoot()), so the pages never read
+    // it while it changes. Returns the folder now in use.
+    fs::path setSaveRoot(const fs::path& chosen, bool move, const std::atomic<bool>& cancel, const LogFunction& log) {
+        const fs::path source = fs::absolute(saveRoot()).lexically_normal();
+        const fs::path target = chosen.empty() ? defaultUser : fs::absolute(chosen).lexically_normal();
+        const auto inside = [](const fs::path& a, const fs::path& b) {  // a inside (or equal to) b
+            const auto x = folders::detail::comparable(a), y = folders::detail::comparable(b);
+            return x == y || (x.size() > y.size() && x.compare(0, y.size(), y) == 0 && (x[y.size()] == '/' || y.back() == '/'));
+        };
+        if (inside(target, source) && inside(source, target)) {
+            // (the folder in use already: only the setting, e.g. a chosen folder on a drive that was away and is back)
+            if (move) throw std::runtime_error(tr("Your saves are already in that folder."));
+            const auto previous = config;
+            if (folders::detail::comparable(target) == folders::detail::comparable(defaultUser)) config.erase("user_dir");
+            else config["user_dir"] = utf8(target);
+            try {
+                saveConfig();
+            } catch (...) {
+                config = previous;
+                throw;
+            }
+            return target;
+        }
+        if (move && (inside(target, source) || inside(source, target)))
+            throw std::runtime_error(tr("Choose a folder outside the current save folder."));
+        checkWritableFolder(target);
+        std::error_code ec;
+        struct File { fs::path rel; uintmax_t size; };
+        std::vector<File> files;
+        std::vector<fs::path> dirs;
+        uintmax_t total = 0;
+        if (move) {
+            for (fs::recursive_directory_iterator it(source, ec), end; !ec && it != end; it.increment(ec)) {
+                if (it.depth() == 0 && launcherOwned(it->path().filename(), source)) {
+                    it.disable_recursion_pending();
+                    continue;
+                }
+                const fs::path rel = it->path().lexically_relative(source);
+                if (it->is_directory(ec)) dirs.push_back(rel);
+                else if (it->is_regular_file(ec) && rel != fs::path(saveFolderMarker)) {
+                    files.push_back({rel, it->file_size(ec)});
+                    total += files.back().size;
+                }
+            }
+            if (ec) throw std::runtime_error(trf("Copy failed: %s", utf8(source).c_str()));
+            fs::path probe = target;
+            while (!fs::exists(probe, ec) && probe.has_relative_path()) probe = probe.parent_path();
+            if (const auto space = fs::space(probe, ec); !ec && space.available < total + (16ull << 20))
+                throw std::runtime_error(trf("Not enough free space there: your saves need %s.", aboutGb(total).c_str()));
+        }
+        log("Save folder: " + utf8(source) + " -> " + utf8(target) + (move ? " (moving " + std::to_string(files.size()) + " files)" : ""));
+        fs::create_directories(target);
+        // (the marker names a chosen save folder; the profile's own folder needs none)
+        const bool hadMarker = fs::exists(target / saveFolderMarker, ec) ||
+                               folders::detail::comparable(target) == folders::detail::comparable(defaultUser);
+        // What to take back on a failure: the files made in the target, the ones put aside (from, to).
+        std::vector<fs::path> made;
+        std::vector<std::pair<fs::path, fs::path>> asideFiles;
+        fs::path aside;
+        const auto sameBytes = [](const fs::path& a, const fs::path& b) {
+            std::ifstream x(a, std::ios::binary), y(b, std::ios::binary);
+            if (!x || !y) return false;
+            char bx[1 << 16], by[1 << 16];
+            while (true) {
+                x.read(bx, sizeof(bx));
+                y.read(by, sizeof(by));
+                if (x.gcount() != y.gcount() || std::memcmp(bx, by, size_t(x.gcount())) != 0) return false;
+                if (!x || !y) return !x && !y;
+            }
+        };
+        try {
+            if (move) {
+                for (const auto& d : dirs) fs::create_directories(target / d);
+                uintmax_t done = 0;
+                for (const auto& f : files) {
+                    if (cancel) throw std::runtime_error("Cancelled");
+                    const fs::path from = source / f.rel, to = target / f.rel;
+                    if (fs::exists(to, ec)) {
+                        if (fs::is_regular_file(to, ec) && sameBytes(from, to)) {
+                            done += f.size;
+                            continue;
+                        }
+                        if (aside.empty()) {
+                            char stamp[32];
+                            const std::time_t t = std::time(nullptr);
+                            std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H%M%S", std::localtime(&t));
+                            aside = target / (std::string("Replaced ") + stamp);
+                        }
+                        fs::create_directories((aside / f.rel).parent_path());
+                        fs::rename(to, aside / f.rel);
+                        asideFiles.emplace_back(to, aside / f.rel);
+                    }
+                    fs::path temp = to;
+                    temp += ".safehouse-copy";
+                    fs::create_directories(to.parent_path());
+                    fs::copy_file(from, temp, fs::copy_options::overwrite_existing);
+                    made.push_back(temp);
+                    if (!sameBytes(from, temp)) throw std::runtime_error(trf("Copy failed: %s", utf8(from).c_str()));
+                    fs::last_write_time(temp, fs::last_write_time(from, ec), ec);   // (the saves keep their dates)
+                    fs::rename(temp, to);
+                    made.back() = to;
+                    done += f.size;
+                    log(json({{"stage", "saves"}, {"completed", done}, {"total", total}, {"item", utf8(f.rel)}}).dump());
+                }
+            }
+            if (!hadMarker) {
+                std::ofstream(target / saveFolderMarker) << "SafeHouse saves (Sly 1: Saves; Sly 2 / Sly 3: sly2/Saves, sly3/Saves)\n";
+                made.push_back(target / saveFolderMarker);
+            }
+            const auto previous = config;
+            if (folders::detail::comparable(target) == folders::detail::comparable(defaultUser)) config.erase("user_dir");
+            else config["user_dir"] = utf8(target);
+            try {
+                saveConfig();
+            } catch (...) {
+                config = previous;
+                throw;
+            }
+        } catch (...) {
+            for (auto it = made.rbegin(); it != made.rend(); ++it) fs::remove(*it, ec);
+            for (auto it = asideFiles.rbegin(); it != asideFiles.rend(); ++it) fs::rename(it->second, it->first, ec);
+            if (!aside.empty()) fs::remove_all(aside, ec);
+            for (auto it = dirs.rbegin(); it != dirs.rend(); ++it)
+                if (fs::is_empty(target / *it, ec)) fs::remove(target / *it, ec);
+            throw;
+        }
+        if (move) {
+            // (only now: every file is in the new folder, checked, and launcher.json points there)
+            size_t left = 0;
+            for (const auto& f : files)
+                if (!fs::remove(source / f.rel, ec) && ec) ++left;
+            for (auto it = dirs.rbegin(); it != dirs.rend(); ++it)
+                if (fs::is_empty(source / *it, ec)) fs::remove(source / *it, ec);
+            fs::remove(source / saveFolderMarker, ec);
+            if (folders::detail::comparable(source) != folders::detail::comparable(defaultUser) && fs::is_empty(source, ec)) fs::remove(source, ec);
+            if (left) log(std::to_string(left) + " old file(s) could not be removed from " + utf8(source));
+            log(json({{"stage", "saves-moved"}, {"completed", 1}, {"total", 1}}).dump());
+        }
+        return target;
     }
     std::vector<fs::path> rememberedInstallPaths(GameId game) const {
         std::vector<fs::path> out;

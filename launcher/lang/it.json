@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip richiede una GPU Adreno 6xx o più recente.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Non è ancora noto se Mesa Turnip funzioni su questa GPU Adreno.",
   "Rhythm minigame": "Minigioco del ritmo",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Solo nel minigioco del ritmo (lo scontro con Mz. Ruby): questo tasto suona lì quel pulsante. Altrove mantiene la sua azione abituale."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Solo nel minigioco del ritmo (lo scontro con Mz. Ruby): questo tasto suona lì quel pulsante. Altrove mantiene la sua azione abituale.",
+  "Your saves are already in that folder.": "I tuoi salvataggi sono già in quella cartella.",
+  "Choose a folder outside the current save folder.": "Scegli una cartella al di fuori della cartella dei salvataggi attuale.",
+  "Not enough free space there: your saves need %s.": "Lì non c'è abbastanza spazio libero: i tuoi salvataggi richiedono %s.",
+  "Moving your saves": "Spostamento dei salvataggi",
+  "Saves moved": "Salvataggi spostati",
+  "Save location": "Posizione dei salvataggi",
+  "Keep saves in": "Tieni i salvataggi in",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Dove SafeHouse tiene i tuoi salvataggi, le impostazioni dei giochi e le mod (Sly 1, 2 e 3). Una cartella nella memoria del telefono ti permette di copiare i salvataggi con un file manager o un computer.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Dove SafeHouse tiene i tuoi salvataggi, le impostazioni dei giochi e le mod (Sly 1, 2 e 3). Un'altra cartella, ad es. su un'altra unità, rende facile copiarli avanti e indietro.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Una cartella qualsiasi, con il selettore di cartelle del sistema. I tuoi salvataggi vanno in una cartella \"SafeHouse Saves\" al suo interno.",
+  "Saves go to: %s": "I salvataggi vanno in: %s",
+  "That folder already has saves.": "Quella cartella contiene già dei salvataggi.",
+  "Move my saves there": "Sposta lì i miei salvataggi",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Copia lì i tuoi salvataggi, le impostazioni dei giochi e le mod e controlla ogni file; solo dopo le vecchie copie vengono rimosse. Un file con lo stesso nome già presente viene conservato in una cartella \"Replaced\".",
+  "Use the saves there": "Usa i salvataggi presenti lì",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Passa ai salvataggi di quella cartella. I tuoi salvataggi attuali restano dove sono.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "La cartella dei salvataggi %s non è disponibile (un'unità non collegata?). Si usa la cartella predefinita finché non torna disponibile.",
+  "Choose where SafeHouse keeps your saves": "Scegli dove SafeHouse tiene i tuoi salvataggi"
  }
 }

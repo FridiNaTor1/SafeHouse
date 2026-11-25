@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip needs an Adreno 6xx GPU or newer.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Mesa Turnip is not known to work on this Adreno GPU yet.",
   "Rhythm minigame": "Rhythm minigame",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.",
+  "Your saves are already in that folder.": "Your saves are already in that folder.",
+  "Choose a folder outside the current save folder.": "Choose a folder outside the current save folder.",
+  "Not enough free space there: your saves need %s.": "Not enough free space there: your saves need %s.",
+  "Moving your saves": "Moving your saves",
+  "Saves moved": "Saves moved",
+  "Save location": "Save location",
+  "Keep saves in": "Keep saves in",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.",
+  "Saves go to: %s": "Saves go to: %s",
+  "That folder already has saves.": "That folder already has saves.",
+  "Move my saves there": "Move my saves there",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.",
+  "Use the saves there": "Use the saves there",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Switches to the saves in that folder. Your current saves stay where they are.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.",
+  "Choose where SafeHouse keeps your saves": "Choose where SafeHouse keeps your saves"
  }
 }

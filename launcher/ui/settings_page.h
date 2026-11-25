@@ -270,6 +270,16 @@ public:
             if (ImGuiFileDialog::Instance()->IsOk()) setInstallRoot(path(ImGuiFileDialog::Instance()->GetCurrentPath()));
             ImGuiFileDialog::Instance()->Close();
         }
+        if (auto r = m_saveDialog.poll()) {  // "Choose a folder…" (Games: where the saves are kept)
+            if (r->status == filedialog::Status::Chosen) chooseSaveRoot(path(r->path));
+            else if (r->status == filedialog::Status::Unavailable) openSavePicker();
+            else if (r->status == filedialog::Status::Failed) m_saveNote = r->error;
+        }
+        if (ImGuiFileDialog::Instance()->Display("savedir", ImGuiWindowFlags_NoCollapse, { px(650), px(400) }, { px(1100), px(760) })) {
+            if (ImGuiFileDialog::Instance()->IsOk()) chooseSaveRoot(path(ImGuiFileDialog::Instance()->GetCurrentPath()));
+            ImGuiFileDialog::Instance()->Close();
+        }
+        finishSaveMove();
         if (auto r = m_libraryDialog.poll()) {  // "Disc images folder" (Games)
             if (r->status == filedialog::Status::Chosen) setIsoLibrary(path(r->path));
             else if (r->status == filedialog::Status::Unavailable) openLibraryPicker();
@@ -1976,6 +1986,12 @@ private:
             if (!m_fixture) m_places = otherDrives();
             else m_installRoot = "/home/player/.local/share/SafeHouse/installations", m_rootFree = 212ull << 30;
             m_library = m_backend.isoLibrary();
+            m_saveRoot = m_backend.saveRoot();
+            m_saveChosen = m_backend.chosenSaveRoot();
+            m_customSave = m_backend.customSaveRoot();
+            m_saveMissing = m_backend.saveRootMissing();
+            m_saveFree = freeBytes(m_saveRoot);
+            if (m_fixture) m_saveRoot = m_saveChosen = "/home/player/.config/SafeHouse", m_saveFree = 212ull << 30, m_saveMissing = false;
             std::error_code ec;
             m_libraryAvailable = m_library.empty() || fs::is_directory(m_library, ec);
         }
@@ -1995,6 +2011,7 @@ private:
         storageAccessRows();
 #endif
 #if !defined(CANE_IOS)
+        saveLocationRows(gameRunning);
         discLibraryRows(gameRunning);
 #endif
         for (GameId g : { GameId::Sly1, GameId::Sly2, GameId::Sly3 }) {
@@ -2117,6 +2134,156 @@ private:
                     "any folder for installations and disc images, and they stay when the app is removed."));
     }
 #endif
+    // "Keep saves in" (backend.h setSaveRoot, 2026-11-25): the folder with the saves, the games' settings and mods. A
+    // choice is confirmed below the row: "Move my saves there" (a job: copied and checked, then the old copies removed),
+    // or, when that folder has saves already, "Use the saves there". Not on iOS (the Files app shows the app's folder).
+    void saveLocationRows(bool gameRunning) {
+        finishSaveMove();
+        section(tr("Save location"));
+        const auto same = [](const fs::path& a, const fs::path& b) { return folders::detail::comparable(a) == folders::detail::comparable(b); };
+        std::vector<std::string> labels{ tr("Default folder") };
+        std::vector<fs::path> choices{ fs::path{} };
+        // (the stepper shows the choice waiting below for "Move my saves there", else the folder chosen)
+        const bool pending = !m_savePending.empty();
+        const fs::path selected = pending ? m_savePending : m_customSave ? m_saveChosen : fs::path{};
+        int index = selected.empty() || same(selected, m_backend.defaultUser) ? 0 : -1;
+        for (const auto& place : m_places) {
+            labels.push_back(place.label);
+            choices.push_back(place.folder);
+            if (index < 0 && same(m_backend.saveRootFor(place.folder), selected)) index = static_cast<int>(labels.size()) - 1;
+        }
+        if (index < 0) {
+            // (<folder>/SafeHouse Saves: named after the folder chosen)
+            const fs::path shown = selected.filename() == LauncherBackend::saveFolderName ? selected.parent_path() : selected;
+            labels.push_back(utf8(shown.filename().empty() ? shown : shown.filename()));
+            choices.push_back(selected);
+            index = static_cast<int>(labels.size()) - 1;
+        }
+        const bool moving = m_job.busy && m_job.label == tr("Moving your saves");
+        ImGui::BeginDisabled(m_job.busy || gameRunning);
+        const std::string where = utf8(m_saveRoot) + " · " + freeText(m_saveFree);
+        if (stepperRow(tr("Keep saves in"), &index, labels, where.c_str(), nullptr, px(72)) && !m_fixture)
+            chooseSaveRoot(choices[static_cast<size_t>(index)]);
+#if defined(CANE_ANDROID)
+        describe(tr("Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage "
+                    "lets you copy saves in and out with a file manager or a computer."));
+#else
+        describe(tr("Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another "
+                    "drive, makes it easy to copy them in and out."));
+#endif
+        ImGui::PushID("saves");
+        if (linkRow(tr("Choose a folder…"), nullptr, nullptr, Icon::Folder) && !m_fixture) startSavePick();
+        describe(tr("Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it."));
+        folderEntryRow(FolderEntry::Saves);
+        if (m_customSave && linkRow(tr("Use the default folder"), nullptr, utf8(m_backend.defaultUser).c_str(), Icon::Refresh) && !m_fixture)
+            chooseSaveRoot({});
+        if (!m_savePending.empty()) {
+            ImGui::Indent(px(16));
+            caption(trf("Saves go to: %s", utf8(m_savePending).c_str()).c_str(), color::text2);
+            if (m_savePendingHasFiles) caption(tr("That folder already has saves."), color::warning);
+            ImGui::Unindent(px(16));
+            if (linkRow(tr("Move my saves there"), nullptr, nullptr, Icon::ChevronRight)) startSaveMove(true);
+            describe(tr("Copies your saves, the games' settings and mods there and checks every file; only then are the old copies "
+                        "removed. A file of the same name already there is kept in a \"Replaced\" folder."));
+            if (m_savePendingHasFiles) {
+                if (linkRow(tr("Use the saves there"), nullptr, nullptr, Icon::ChevronRight)) startSaveMove(false);
+                describe(tr("Switches to the saves in that folder. Your current saves stay where they are."));
+            }
+            if (linkRow(tr("Cancel"), nullptr, nullptr, Icon::Close)) m_savePending.clear();
+        }
+        ImGui::PopID();
+        ImGui::EndDisabled();
+        if (moving) {
+            float progress = 0;
+            {
+                std::lock_guard lock(m_job.mutex);
+                progress = m_job.progress;
+            }
+            ImGui::Indent(px(16));
+            char text[200];
+            std::snprintf(text, sizeof(text), "%s · %d %%", tr("Moving your saves"), int(progress * 100));
+            caption(text, color::text2);
+            ImGui::PushID("saves-cancel");
+            if (button(tr("Cancel move"), Tone::Secondary, { px(190), 0 }, Icon::Close)) m_job.cancel = true;
+            ImGui::PopID();
+            ImGui::Unindent(px(16));
+        }
+        const std::string note = !m_saveNote.empty() ? m_saveNote
+                                 : m_saveMissing ? trf("The save folder %s is not available (a drive that is not connected?). The default folder "
+                                                       "is used until it is back.", utf8(m_saveChosen).c_str())
+                                                 : std::string{};
+        if (!note.empty()) {
+            ImGui::Indent(px(16));
+            caption(note.c_str(), color::warning);
+            ImGui::Unindent(px(16));
+        }
+    }
+    // A folder chosen (empty: the default): asks what to do with the saves, unless it is the folder in use.
+    void chooseSaveRoot(const fs::path& folder) {
+        m_saveNote.clear();
+        const fs::path target = folder.empty() ? m_backend.defaultUser : m_backend.saveRootFor(folder);
+        if (folders::detail::comparable(target) == folders::detail::comparable(m_backend.saveRoot())) {
+            m_savePending.clear();
+            if (folder.empty() == m_backend.customSaveRoot() || m_backend.saveRootMissing()) {   // (only the setting differs)
+                m_savePending = folder.empty() ? fs::path{} : target;
+                startSaveMove(false);
+            }
+            return;
+        }
+        m_savePending = target;
+        m_savePendingHasFiles = m_backend.saveFolderHasFiles(target);
+    }
+    void startSaveMove(bool move) {
+        const fs::path target = m_savePending;
+        const bool toDefault = target.empty() || folders::detail::comparable(target) == folders::detail::comparable(m_backend.defaultUser);
+        m_savePending.clear();
+        m_saveNote.clear();
+        if (!move) {
+            try {
+                std::atomic<bool> never{false};
+                m_backend.setSaveRoot(toDefault ? fs::path{} : target, false, never, [](const std::string&) {});
+            } catch (const std::exception& e) {
+                m_saveNote = e.what();
+            }
+            applySaveRoot();
+            return;
+        }
+        m_saveMoving = true;
+        m_job.start(tr("Moving your saves"), [this, target, toDefault](const auto& log) {
+            m_backend.setSaveRoot(toDefault ? fs::path{} : target, true, m_job.cancel, log);
+        });
+    }
+    // The move job's end (any page): the backend takes the new folder on this thread (backend.h setSaveRoot).
+    void finishSaveMove() {
+        if (!m_saveMoving || m_job.busy) return;
+        m_saveMoving = false;
+        std::string message;
+        {
+            std::lock_guard lock(m_job.mutex);
+            message = m_job.message;
+        }
+        if (message != "Completed" && message != "Cancelled") m_saveNote = message;
+        applySaveRoot();
+    }
+    void applySaveRoot() {
+        const fs::path before = m_backend.saveRoot();
+        m_backend.applySaveRoot();
+        if (!collectionProfile.empty() && folders::detail::comparable(collectionProfile) == folders::detail::comparable(before))
+            collectionProfile = m_backend.saveRoot();
+        m_nextLocation = 0;
+        m_nextRegions = 0;
+    }
+    void startSavePick() {
+        if (padUser()) return openFolderEntry(FolderEntry::Saves);
+        if (m_saveDialog.running()) return;
+        const fs::path start = filedialog::startFolder({ utf8(m_saveChosen.parent_path()) });
+        if (!m_saveDialog.start(filedialog::Kind::PickFolder, tr("Choose where SafeHouse keeps your saves"), start)) openSavePicker();
+    }
+    void openSavePicker() {
+        ImGuiFileDialog::Instance()->OpenDialog("savedir", tr("Choose where SafeHouse keeps your saves"), nullptr,
+                                                utf8(filedialog::startFolder({ utf8(m_saveChosen.parent_path()) })), "", 1, nullptr,
+                                                ImGuiFileDialogFlags_Modal);
+    }
     void setInstallRoot(const fs::path& chosen) {
         try {
             m_backend.setInstallRoot(chosen);
@@ -2174,7 +2341,7 @@ private:
     }
     // Pads cannot drive the folder pickers (the system's dialog is a separate window, ImGuiFileDialog wants a mouse),
     // so "Choose a folder…" and "Disc images folder" open a path entry under the row instead (the on-screen keyboard).
-    enum class FolderEntry { None, Install, Library };
+    enum class FolderEntry { None, Install, Library, Saves };
     static bool padUser() {
 #if defined(CANE_ANDROID) || defined(CANE_IOS)
         return false;
@@ -2185,7 +2352,9 @@ private:
     void openFolderEntry(FolderEntry which) {
         m_folderEntry = which;
         m_folderEntryFocus = true;
-        const std::string current = which == FolderEntry::Install ? (m_customRoot ? utf8(m_installRoot) : std::string{}) : utf8(m_library);
+        const std::string current = which == FolderEntry::Install ? (m_customRoot ? utf8(m_installRoot) : std::string{})
+                                    : which == FolderEntry::Saves ? (m_customSave ? utf8(m_saveChosen) : std::string{})
+                                                                  : utf8(m_library);
         std::snprintf(m_folderBuf, sizeof(m_folderBuf), "%s", current.c_str());
     }
     void folderEntryRow(FolderEntry which) {
@@ -2226,6 +2395,9 @@ private:
         if (which == FolderEntry::Install) {
             setInstallRoot(chosen);
             if (m_locationNote.empty()) m_folderEntry = FolderEntry::None;
+        } else if (which == FolderEntry::Saves) {
+            chooseSaveRoot(chosen);
+            m_folderEntry = FolderEntry::None;
         } else {
             setIsoLibrary(chosen);
             if (m_libraryNote.empty()) m_folderEntry = FolderEntry::None;
@@ -2754,6 +2926,11 @@ private:
     double m_nextLocation = 0;
     std::vector<InstallPlace> m_places;
     std::string m_locationNote;
+    filedialog::Async m_saveDialog;   // (Save location)
+    fs::path m_saveRoot, m_saveChosen, m_savePending;
+    bool m_customSave = false, m_saveMissing = false, m_savePendingHasFiles = false, m_saveMoving = false;
+    uint64_t m_saveFree = 0;
+    std::string m_saveNote;
     filedialog::Async m_libraryDialog;
     fs::path m_library;
     bool m_libraryAvailable = true;

@@ -1075,6 +1075,24 @@
   "Mesa Turnip needs an Adreno 6xx GPU or newer.": "Mesa Turnip vaatii Adreno 6xx -näytönohjaimen tai uudemman.",
   "Mesa Turnip is not known to work on this Adreno GPU yet.": "Mesa Turnipin ei vielä tiedetä toimivan tällä Adreno-näytönohjaimella.",
   "Rhythm minigame": "Rytmiminipeli",
-  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Vain rytmiminipelissä (taistelu Mz. Rubya vastaan): tämä näppäin soittaa siellä tämän painikkeen. Muualla se säilyttää tavallisen toimintonsa."
+  "Only in the rhythm minigame (Mz. Ruby's fight): this key plays that button there. Everywhere else it keeps its usual action.": "Vain rytmiminipelissä (taistelu Mz. Rubya vastaan): tämä näppäin soittaa siellä tämän painikkeen. Muualla se säilyttää tavallisen toimintonsa.",
+  "Your saves are already in that folder.": "Tallennuksesi ovat jo siinä kansiossa.",
+  "Choose a folder outside the current save folder.": "Valitse kansio nykyisen tallennuskansion ulkopuolelta.",
+  "Not enough free space there: your saves need %s.": "Siellä ei ole tarpeeksi vapaata tilaa: tallennuksesi tarvitsevat %s.",
+  "Moving your saves": "Siirretään tallennuksiasi",
+  "Saves moved": "Tallennukset siirretty",
+  "Save location": "Tallennusten sijainti",
+  "Keep saves in": "Säilytä tallennukset kohteessa",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). A folder on the phone storage lets you copy saves in and out with a file manager or a computer.": "Missä SafeHouse säilyttää tallennuksesi, pelien asetukset ja modit (Sly 1, 2 ja 3). Puhelimen tallennustilassa olevan kansion avulla voit kopioida tallennuksia sisään ja ulos tiedostonhallinnalla tai tietokoneella.",
+  "Where SafeHouse keeps your saves, the games' settings and mods (Sly 1, 2 and 3). Another folder, e.g. on another drive, makes it easy to copy them in and out.": "Missä SafeHouse säilyttää tallennuksesi, pelien asetukset ja modit (Sly 1, 2 ja 3). Toinen kansio, esim. toisella asemalla, tekee niiden kopioimisesta sisään ja ulos helppoa.",
+  "Any folder, with the system's folder picker. Your saves go into a \"SafeHouse Saves\" folder inside it.": "Mikä tahansa kansio järjestelmän kansiovalitsimella. Tallennuksesi menevät sen sisällä olevaan kansioon \"SafeHouse Saves\".",
+  "Saves go to: %s": "Tallennukset menevät kohteeseen: %s",
+  "That folder already has saves.": "Siinä kansiossa on jo tallennuksia.",
+  "Move my saves there": "Siirrä tallennukseni sinne",
+  "Copies your saves, the games' settings and mods there and checks every file; only then are the old copies removed. A file of the same name already there is kept in a \"Replaced\" folder.": "Kopioi tallennuksesi, pelien asetukset ja modit sinne ja tarkistaa jokaisen tiedoston; vasta sitten vanhat kopiot poistetaan. Siellä jo oleva samanniminen tiedosto säilytetään kansiossa \"Replaced\".",
+  "Use the saves there": "Käytä siellä olevia tallennuksia",
+  "Switches to the saves in that folder. Your current saves stay where they are.": "Vaihtaa siinä kansiossa oleviin tallennuksiin. Nykyiset tallennuksesi jäävät paikalleen.",
+  "The save folder %s is not available (a drive that is not connected?). The default folder is used until it is back.": "Tallennuskansio %s ei ole käytettävissä (asema, jota ei ole liitetty?). Oletuskansiota käytetään, kunnes se on taas paikalla.",
+  "Choose where SafeHouse keeps your saves": "Valitse, missä SafeHouse säilyttää tallennuksesi"
  }
 }
