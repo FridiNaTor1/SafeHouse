@@ -869,7 +869,7 @@ int ConvertCommand(const std::string& out)
     const auto t0 = std::chrono::steady_clock::now();
     auto tNow = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
     std::string error;
-    const fs::path root = fs::absolute(cane::path(out));
+    const fs::path root = cane::absolutePath(cane::path(out));
     {
         std::string why;
         if (!cane::paths::createDirectories(root, &why)) { std::fprintf(stderr, "convert: %s\n", why.c_str()); return 1; }
